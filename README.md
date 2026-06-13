@@ -1,0 +1,123 @@
+# 信仰游戏天梯排行榜
+
+AstrBot 群聊双积分排名插件，集成职业信仰体系，支持天梯榜与觐见榜双榜展示、动态排名、定时推送、全局白名单权限管控。
+
+## 功能特性
+
+- **双积分体系** — 天梯积分 + 觐见之梯，双榜独立排名
+- **职业信仰** — 5 职业 x 6 信仰，角色定制体系
+- **全局白名单** — 白名单一次添加，所有群生效
+- **定时推送** — 每日定时推送排行榜到指定群
+- **自动备份** — 数据自动备份，可配置保留天数
+- **指令可配** — 所有指令名可通过 WebUI 配置修改
+- **查询冷却** — 防刷机制，可配置冷却时间
+- **直接回复** — 指令回复不经过 AI 处理，固定格式输出
+
+## 职业与信仰
+
+| 职业 | 信仰 |
+|------|------|
+| 战士 | 虚无 |
+| 牧师 | 存在 |
+| 猎人 | 文明 |
+| 法师 | 沉沦 |
+| 歌者 | 混沌 |
+|      | 生命 |
+
+## 指令列表
+
+| 指令 | 别名 | 功能 | 权限 |
+|------|------|------|------|
+| `天梯榜` | `ladder` `ranking` `排行榜` | 显示天梯排行榜（按天梯积分排序） | 所有人 |
+| `觐见榜` | `pilgrimage` `觐见` | 显示觐见之梯（按觐见积分排序） | 所有人 |
+| `查询 <玩家名>` | `query` `查看` | 查询指定玩家信息 | 所有人（有冷却） |
+| `录入玩家 <姓名> <信仰> <职业> <天梯分> <觐见分>` | `register` `添加玩家` | 录入新玩家 | 白名单/管理员 |
+| `设置职业 <玩家名> <职业> <信仰>` | `setclass` `改职业` | 修改玩家职业信仰 | 白名单/管理员 |
+| `录入积分 <玩家名> <天梯变化> <觐见变化>` | `addscore` `加分` | 录入积分变化 | 白名单/管理员 |
+| `白名单 <add/remove/list>` | `whitelist` `wl` | 管理全局白名单 | 管理员 |
+| `天梯榜管理 <操作>` | `ladderadmin` `榜管理` | 管理员操作（如 reset） | 管理员 |
+| `天梯榜帮助` | `ladderhelp` `帮助` | 显示帮助信息 | 所有人 |
+
+### 指令示例
+
+```
+录入玩家 张三 存在 战士 1000 100
+录入积分 张三 50 20
+设置职业 张三 法师 虚无
+查询 张三
+天梯榜
+觐见榜
+白名单 add user 123456789
+白名单 list
+天梯榜管理 reset 张三
+```
+
+## 权限说明
+
+| 级别 | 说明 |
+|------|------|
+| **所有人** | 任何群成员均可使用 |
+| **白名单/管理员** | 需在 WebUI 白名单配置或通过 `/白名单 add` 添加，管理员不受此限制 |
+| **管理员** | 需在 WebUI 的 `admin_ids` 中配置，或为 AstrBot 群管理员/群主 |
+
+## WebUI 配置项
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `cmd_ladder` | string | 天梯榜 | 天梯榜指令名 |
+| `cmd_pilgrimage` | string | 觐见榜 | 觐见榜指令名 |
+| `cmd_query` | string | 查询 | 查询指令名 |
+| `cmd_add_score` | string | 录入积分 | 录入积分指令名 |
+| `cmd_register_player` | string | 录入玩家 | 录入玩家指令名 |
+| `cmd_set_class` | string | 设置职业 | 设置职业指令名 |
+| `cmd_admin` | string | 天梯榜管理 | 管理指令名 |
+| `cmd_whitelist` | string | 白名单 | 白名单指令名 |
+| `cmd_help` | string | 天梯榜帮助 | 帮助指令名 |
+| `whitelist` | list | [] | 白名单列表（全局生效） |
+| `admin_ids` | list | [] | 管理员用户ID列表 |
+| `ladder_display_limit` | int | 10 | 排行榜显示人数上限 |
+| `daily_push_time` | string | 07:00 | 每日推送时间 |
+| `daily_push_enabled` | bool | true | 是否启用每日推送 |
+| `daily_push_groups` | list | [] | 推送目标群号（留空不推送） |
+| `query_cooldown_seconds` | int | 5 | 查询冷却时间（秒） |
+| `auto_backup_enabled` | bool | true | 是否启用自动备份 |
+| `backup_retention_days` | int | 7 | 备份保留天数 |
+| `player_name_max_length` | int | 20 | 玩家名最大长度 |
+| `allow_negative_scores` | bool | true | 是否允许录入负分 |
+
+### 白名单配置格式
+
+在 WebUI 的 `whitelist` 配置中添加：
+
+```json
+[
+  {"type": "user", "id": "123456789", "note": "积分管理员"},
+  {"type": "user", "id": "987654321", "note": "活动管理"}
+]
+```
+
+## 数据存储
+
+- **数据库** — SQLite，位于 `AstrBot/data/astrbot_plugin_faith_ladder/ladder.db`
+- **配置** — AstrBot 自动管理，位于 `AstrBot/data/config/`
+- **备份** — 位于 `AstrBot/data/astrbot_plugin_faith_ladder/backups/`
+
+### 数据库表
+
+| 表名 | 说明 |
+|------|------|
+| `players` | 玩家信息（ID、群号、名字、职业、信仰、双积分） |
+| `score_history` | 积分变更历史记录 |
+| `whitelist` | 全局白名单 |
+| `active_groups` | 活跃群记录 |
+
+## 安装
+
+1. 将 `astrbot_plugin_faith_ladder` 目录上传到 AstrBot 的 `data/plugins/` 目录
+2. 在 AstrBot WebUI 中启用插件
+3. 在 WebUI 配置中设置管理员 ID 和白名单
+
+## 版本
+
+- **v0.2.0** — 全局白名单 + 觐见榜
+- **v0.1.0** — 初始版本
