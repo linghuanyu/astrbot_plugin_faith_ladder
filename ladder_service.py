@@ -7,6 +7,7 @@ from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_FAIT
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.message_formatter import (
     format_leaderboard,
+    format_pilgrimage_leaderboard,
     format_player_card,
     format_score_result,
 )
@@ -19,9 +20,14 @@ class LadderService:
         self.db = db_manager
 
     async def get_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
-        """Get formatted leaderboard text."""
+        """Get formatted ladder leaderboard text."""
         players = await self.db.get_top_players(group_id, limit)
         return format_leaderboard(players, limit)
+
+    async def get_pilgrimage_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
+        """Get formatted pilgrimage leaderboard text."""
+        players = await self.db.get_top_players_by_pilgrimage(group_id, limit)
+        return format_pilgrimage_leaderboard(players, limit)
 
     async def get_player_card_text(self, group_id: str, player_id: str) -> Optional[str]:
         """Get formatted player card text. Returns None if player not found."""

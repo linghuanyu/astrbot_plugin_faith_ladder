@@ -143,6 +143,16 @@ class FaithLadderPlugin(Star):
         text = await self.ladder_service.get_leaderboard_text(group_id, limit)
         await self._reply(event, text)
 
+    # === 觐见榜 ===
+
+    @filter.command("觐见榜", alias={"pilgrimage", "觐见"})
+    async def cmd_pilgrimage(self, event: AstrMessageEvent):
+        """显示觐见之梯排行榜"""
+        group_id = self._get_group_id(event)
+        limit = self.config.get("ladder_display_limit", 10)
+        text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
+        await self._reply(event, text)
+
     # === 查询玩家 ===
 
     @filter.command("查询", alias={"query", "查看"})
@@ -184,7 +194,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(group_id, user_id)
+        has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
             await self._reply(event, "权限不足: 您不在白名单中，无法录入积分。")
@@ -237,7 +247,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(group_id, user_id)
+        has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
             await self._reply(event, "权限不足: 需要白名单权限才能录入玩家。")
@@ -284,7 +294,7 @@ class FaithLadderPlugin(Star):
         """修改玩家职业信仰。格式: 设置职业 <玩家名> <职业> <信仰>"""
         group_id = self._get_group_id(event)
 
-        has_permission = await self.permission_service.check_score_permission(group_id, str(event.get_sender_id()))
+        has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
             await self._reply(event, "权限不足: 需要白名单权限才能设置职业。")
@@ -377,13 +387,13 @@ class FaithLadderPlugin(Star):
 
         action = parts[0]
         if action == "list":
-            text = await self.permission_service.get_whitelist_text(group_id)
+            text = await self.permission_service.get_whitelist_text()
             await self._reply(event, text)
         elif action == "add" and len(parts) >= 3:
-            _, message = await self.permission_service.add_to_whitelist(group_id, parts[1], parts[2], user_id)
+            _, message = await self.permission_service.add_to_whitelist(parts[1], parts[2], user_id)
             await self._reply(event, message)
         elif action == "remove" and len(parts) >= 3:
-            _, message = await self.permission_service.remove_from_whitelist(group_id, parts[1], parts[2])
+            _, message = await self.permission_service.remove_from_whitelist(parts[1], parts[2])
             await self._reply(event, message)
         else:
             await self._reply(event, f"用法: 白名单 <add/remove/list> [类型] [ID]")

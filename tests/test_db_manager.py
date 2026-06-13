@@ -171,65 +171,54 @@ class TestDatabaseManager:
 
 @pytest.mark.asyncio
 class TestWhitelistOperations:
-    """Tests for whitelist CRUD operations."""
+    """Tests for global whitelist CRUD operations."""
 
     async def test_add_to_whitelist(self, db_manager):
-        """Test adding to whitelist."""
-        result = await db_manager.add_to_whitelist("g1", "user", "u123", "admin")
+        """Test adding to global whitelist."""
+        result = await db_manager.add_to_whitelist("user", "u123", "admin")
         assert result is True
 
     async def test_add_to_whitelist_duplicate(self, db_manager):
         """Test adding duplicate entry returns False."""
-        await db_manager.add_to_whitelist("g1", "user", "u123", "admin")
-        result = await db_manager.add_to_whitelist("g1", "user", "u123", "admin")
+        await db_manager.add_to_whitelist("user", "u123", "admin")
+        result = await db_manager.add_to_whitelist("user", "u123", "admin")
         assert result is False
 
     async def test_remove_from_whitelist(self, db_manager):
-        """Test removing from whitelist."""
-        await db_manager.add_to_whitelist("g1", "user", "u123", "admin")
-        result = await db_manager.remove_from_whitelist("g1", "user", "u123")
+        """Test removing from global whitelist."""
+        await db_manager.add_to_whitelist("user", "u123", "admin")
+        result = await db_manager.remove_from_whitelist("user", "u123")
         assert result is True
 
     async def test_remove_from_whitelist_not_found(self, db_manager):
         """Test removing non-existent entry returns False."""
-        result = await db_manager.remove_from_whitelist("g1", "user", "u999")
+        result = await db_manager.remove_from_whitelist("user", "u999")
         assert result is False
 
     async def test_is_whitelisted_user(self, db_manager):
-        """Test checking user whitelist status."""
-        await db_manager.add_to_whitelist("g1", "user", "u123", "admin")
-        assert await db_manager.is_whitelisted("g1", "u123") is True
-        assert await db_manager.is_whitelisted("g1", "u456") is False
+        """Test checking user whitelist status (global)."""
+        await db_manager.add_to_whitelist("user", "u123", "admin")
+        assert await db_manager.is_whitelisted("u123") is True
+        assert await db_manager.is_whitelisted("u456") is False
 
-    async def test_is_whitelisted_group(self, db_manager):
-        """Test checking group whitelist status."""
-        await db_manager.add_to_whitelist("g1", "group", "g1", "admin")
-        # Any user in group g1 should be whitelisted
-        assert await db_manager.is_whitelisted("g1", "any_user") is True
-
-    async def test_is_whitelisted_wrong_group(self, db_manager):
-        """Test that whitelist is group-scoped."""
-        await db_manager.add_to_whitelist("g1", "user", "u123", "admin")
-        assert await db_manager.is_whitelisted("g2", "u123") is False
+    async def test_is_whitelisted_global(self, db_manager):
+        """Test that whitelist is global - works regardless of which group user is in."""
+        await db_manager.add_to_whitelist("user", "u123", "admin")
+        # Same user should be whitelisted globally (no group concept)
+        assert await db_manager.is_whitelisted("u123") is True
 
     async def test_get_whitelist(self, db_manager):
-        """Test getting all whitelist entries."""
-        await db_manager.add_to_whitelist("g1", "user", "u1", "admin")
-        await db_manager.add_to_whitelist("g1", "user", "u2", "admin")
-        await db_manager.add_to_whitelist("g1", "group", "g1", "admin")
+        """Test getting all global whitelist entries."""
+        await db_manager.add_to_whitelist("user", "u1", "admin")
+        await db_manager.add_to_whitelist("user", "u2", "admin")
+        await db_manager.add_to_whitelist("group", "g1", "admin")
 
-        entries = await db_manager.get_whitelist("g1")
+        entries = await db_manager.get_whitelist()
         assert len(entries) == 3
 
     async def test_get_whitelist_empty(self, db_manager):
-        """Test getting whitelist for group with no entries."""
-        entries = await db_manager.get_whitelist("g1")
-        assert entries == []
-
-    async def test_get_whitelist_group_isolation(self, db_manager):
-        """Test whitelist is group-scoped."""
-        await db_manager.add_to_whitelist("g1", "user", "u1", "admin")
-        entries = await db_manager.get_whitelist("g2")
+        """Test getting whitelist when empty."""
+        entries = await db_manager.get_whitelist()
         assert entries == []
 
 

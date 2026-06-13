@@ -1,8 +1,13 @@
 {
   "cmd_ladder": {
-    "description": "排行榜指令名",
+    "description": "天梯榜指令名",
     "type": "string",
     "default": "天梯榜"
+  },
+  "cmd_pilgrimage": {
+    "description": "觐见榜指令名",
+    "type": "string",
+    "default": "觐见榜"
   },
   "cmd_query": {
     "description": "查询指令名",

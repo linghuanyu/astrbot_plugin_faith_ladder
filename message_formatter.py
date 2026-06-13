@@ -29,6 +29,29 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str:
+    """Format the pilgrimage leaderboard display."""
+    if not players:
+        return "暂无排名数据。"
+
+    lines = ["==觐见之梯==", ""]
+    displayed = min(len(players), limit)
+
+    for rank, player in enumerate(players[:limit], 1):
+        class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
+        faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
+        lines.append(
+            f"{rank}. {player.player_name} {class_str} {faith_str}"
+        )
+        lines.append(
+            f"   觐见之梯: {player.pilgrimage_score} | 天梯积分: {player.ladder_score}"
+        )
+
+    lines.append("")
+    lines.append(f"--- 显示前 {displayed} 名 ---")
+    return "\n".join(lines)
+
+
 def format_player_card(player: Player) -> str:
     """Format a player's info card."""
     class_str = player.class_ if player.class_ else "未设定"
@@ -48,6 +71,7 @@ def format_player_card(player: Player) -> str:
 def format_help(config: dict) -> str:
     """Format the help message using current command names from config."""
     cmd_sb = config.get("cmd_ladder", "天梯榜")
+    cmd_pilgrimage = config.get("cmd_pilgrimage", "觐见榜")
     cmd_query = config.get("cmd_query", "查询")
     cmd_add = config.get("cmd_add_score", "录入积分")
     cmd_register = config.get("cmd_register_player", "录入玩家")
@@ -63,7 +87,8 @@ def format_help(config: dict) -> str:
         f"=== 信仰游戏天梯排行榜 ===\n"
         f"\n"
         f"[排行榜与查询]\n"
-        f"{cmd_sb} - 显示天梯排行榜\n"
+        f"{cmd_sb} - 显示天梯排行榜（按天梯积分排序）\n"
+        f"{cmd_pilgrimage} - 显示觐见之梯（按觐见积分排序）\n"
         f"{cmd_query} <玩家名> - 查询指定玩家的天梯分与觐见分\n"
         f"\n"
         f"[玩家管理] (需要白名单权限，管理员不受限)\n"

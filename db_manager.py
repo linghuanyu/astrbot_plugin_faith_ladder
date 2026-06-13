@@ -62,21 +62,49 @@ class DatabaseManager:
 
                 CREATE TABLE IF NOT EXISTS whitelist (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    group_id TEXT NOT NULL,
                     entry_type TEXT NOT NULL,
                     entry_id TEXT NOT NULL,
                     added_by TEXT,
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(group_id, entry_type, entry_id)
+                    UNIQUE(entry_type, entry_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_whitelist_lookup
-                    ON whitelist(group_id, entry_type, entry_id);
+                    ON whitelist(entry_type, entry_id);
 
                 CREATE TABLE IF NOT EXISTS active_groups (
                     group_id TEXT PRIMARY KEY,
                     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            await db.commit()
+
+            # Migrate old whitelist table (had group_id column) to global whitelist
+            await self._migrate_whitelist(db)
+
+    async def _migrate_whitelist(self, db):
+        """Migrate whitelist table from per-group to global if needed."""
+        async with db.execute("PRAGMA table_info(whitelist)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if "group_id" in columns:
+            # Old schema detected: recreate without group_id, deduplicate
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS whitelist_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_type TEXT NOT NULL,
+                    entry_id TEXT NOT NULL,
+                    added_by TEXT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(entry_type, entry_id)
+                )
+            """)
+            await db.execute("""
+                INSERT OR IGNORE INTO whitelist_new (entry_type, entry_id, added_by, added_at)
+                SELECT DISTINCT entry_type, entry_id, added_by, added_at FROM whitelist
+            """)
+            await db.execute("DROP TABLE whitelist")
+            await db.execute("ALTER TABLE whitelist_new RENAME TO whitelist")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist(entry_type, entry_id)")
             await db.commit()
 
     async def upsert_player(
@@ -176,6 +204,23 @@ class DatabaseManager:
                     for r in rows
                 ]
 
+    async def get_top_players_by_pilgrimage(self, group_id: str, limit: int = 10) -> List[Player]:
+        """Get top players by pilgrimage score for a group."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at FROM players WHERE group_id = ? ORDER BY pilgrimage_score DESC LIMIT ?",
+                (group_id, limit)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    Player(
+                        player_id=r[0], group_id=r[1], player_name=r[2],
+                        class_=r[3], faith=r[4], ladder_score=r[5],
+                        pilgrimage_score=r[6], created_at=r[7], updated_at=r[8]
+                    )
+                    for r in rows
+                ]
+
     async def update_scores(
         self, group_id: str, player_id: str,
         ladder_delta: int, pilgrimage_delta: int,
@@ -229,18 +274,17 @@ class DatabaseManager:
             await db.commit()
             return await self.get_player(group_id, player_id)
 
-    # --- Whitelist operations ---
+    # --- Global whitelist operations ---
 
     async def add_to_whitelist(
-        self, group_id: str, entry_type: str,
-        entry_id: str, added_by: str
+        self, entry_type: str, entry_id: str, added_by: str
     ) -> bool:
-        """Add an entry to the whitelist. Returns True if added, False if already exists."""
+        """Add an entry to the global whitelist. Returns True if added, False if already exists."""
         async with aiosqlite.connect(self.db_path) as db:
             try:
                 await db.execute(
-                    "INSERT INTO whitelist (group_id, entry_type, entry_id, added_by) VALUES (?, ?, ?, ?)",
-                    (group_id, entry_type, entry_id, added_by)
+                    "INSERT INTO whitelist (entry_type, entry_id, added_by) VALUES (?, ?, ?)",
+                    (entry_type, entry_id, added_by)
                 )
                 await db.commit()
                 return True
@@ -248,32 +292,31 @@ class DatabaseManager:
                 return False
 
     async def remove_from_whitelist(
-        self, group_id: str, entry_type: str, entry_id: str
+        self, entry_type: str, entry_id: str
     ) -> bool:
-        """Remove an entry from the whitelist. Returns True if removed, False if not found."""
+        """Remove an entry from the global whitelist. Returns True if removed, False if not found."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "DELETE FROM whitelist WHERE group_id = ? AND entry_type = ? AND entry_id = ?",
-                (group_id, entry_type, entry_id)
+                "DELETE FROM whitelist WHERE entry_type = ? AND entry_id = ?",
+                (entry_type, entry_id)
             )
             await db.commit()
             return cursor.rowcount > 0
 
-    async def is_whitelisted(self, group_id: str, user_id: str) -> bool:
-        """Check if a user is whitelisted (directly or via group)."""
+    async def is_whitelisted(self, user_id: str) -> bool:
+        """Check if a user is in the global whitelist."""
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT 1 FROM whitelist WHERE group_id = ? AND ((entry_type = 'user' AND entry_id = ?) OR (entry_type = 'group' AND entry_id = ?))",
-                (group_id, user_id, group_id)
+                "SELECT 1 FROM whitelist WHERE entry_type = 'user' AND entry_id = ?",
+                (user_id,)
             ) as cursor:
                 return await cursor.fetchone() is not None
 
-    async def get_whitelist(self, group_id: str) -> List[dict]:
-        """Get all whitelist entries for a group."""
+    async def get_whitelist(self) -> List[dict]:
+        """Get all global whitelist entries."""
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT entry_type, entry_id, added_by, added_at FROM whitelist WHERE group_id = ?",
-                (group_id,)
+                "SELECT entry_type, entry_id, added_by, added_at FROM whitelist"
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [
