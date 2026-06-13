@@ -1,0 +1,123 @@
+{
+  "cmd_ladder": {
+    "description": "排行榜指令名",
+    "type": "string",
+    "default": "天梯榜"
+  },
+  "cmd_query": {
+    "description": "查询指令名",
+    "type": "string",
+    "default": "查询"
+  },
+  "cmd_add_score": {
+    "description": "录入积分指令名",
+    "type": "string",
+    "default": "录入积分"
+  },
+  "cmd_set_class": {
+    "description": "设置职业指令名",
+    "type": "string",
+    "default": "设置职业"
+  },
+  "cmd_register_player": {
+    "description": "录入玩家指令名",
+    "type": "string",
+    "default": "录入玩家"
+  },
+  "cmd_admin": {
+    "description": "管理指令名",
+    "type": "string",
+    "default": "天梯榜管理"
+  },
+  "cmd_whitelist": {
+    "description": "白名单指令名",
+    "type": "string",
+    "default": "白名单"
+  },
+  "cmd_help": {
+    "description": "帮助指令名",
+    "type": "string",
+    "default": "天梯榜帮助"
+  },
+  "whitelist": {
+    "description": "积分录入白名单（可在 WebUI 直接配置，无需指令操作）",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "object",
+      "items": {
+        "type": {
+          "description": "类型：user（用户ID）或 group（群号）",
+          "type": "string",
+          "default": "user"
+        },
+        "id": {
+          "description": "用户ID 或 群号",
+          "type": "string",
+          "default": ""
+        },
+        "note": {
+          "description": "备注说明",
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  },
+  "admin_ids": {
+    "description": "管理员用户ID列表（拥有全部管理权限，不受群管理员限制）",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    }
+  },
+  "ladder_display_limit": {
+    "description": "排行榜显示人数上限",
+    "type": "int",
+    "default": 10
+  },
+  "daily_push_time": {
+    "description": "每日推送时间（HH:MM，24小时制）",
+    "type": "string",
+    "default": "07:00"
+  },
+  "daily_push_enabled": {
+    "description": "是否启用每日推送",
+    "type": "bool",
+    "default": true
+  },
+  "daily_push_groups": {
+    "description": "每日推送目标群号列表（留空则不推送）",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    }
+  },
+  "query_cooldown_seconds": {
+    "description": "查询冷却时间（秒）",
+    "type": "int",
+    "default": 5
+  },
+  "auto_backup_enabled": {
+    "description": "启用自动备份",
+    "type": "bool",
+    "default": true
+  },
+  "backup_retention_days": {
+    "description": "备份保留天数",
+    "type": "int",
+    "default": 7
+  },
+  "player_name_max_length": {
+    "description": "玩家名最大长度（字符）",
+    "type": "int",
+    "default": 20
+  },
+  "allow_negative_scores": {
+    "description": "是否允许录入负分",
+    "type": "bool",
+    "default": true
+  }
+}
