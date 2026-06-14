@@ -68,8 +68,8 @@ def format_player_card(player: Player) -> str:
     )
 
 
-def format_help(config: dict) -> str:
-    """Format the help message using current command names from config."""
+def format_help(config: dict, is_privileged: bool = False) -> str:
+    """Format the help message. Non-privileged users see a limited version."""
     cmd_sb = config.get("cmd_ladder", "天梯榜")
     cmd_pilgrimage = config.get("cmd_pilgrimage", "觐见榜")
     cmd_query = config.get("cmd_query", "查询")
@@ -82,10 +82,27 @@ def format_help(config: dict) -> str:
 
     ladder_cd = config.get("ladder_cooldown_seconds", 600)
     query_cd = config.get("query_cooldown_seconds", 600)
+    push_time = config.get("daily_push_time", "07:00")
+    push_enabled = config.get("daily_push_enabled", True)
 
     classes_str = "/".join(VALID_CLASSES)
     faiths_str = "/".join(VALID_FAITHS)
 
+    # Basic version for non-whitelist users
+    if not is_privileged:
+        push_info = f"每日 {push_time} 自动推送排行榜" if push_enabled else "排行榜推送未开启"
+        return (
+            f"=== 信仰游戏天梯排行榜 ===\n"
+            f"\n"
+            f"{cmd_query} <玩家名> - 查询指定玩家的天梯分与觐见分（冷却 {query_cd}s）\n"
+            f"\n"
+            f"排行榜推送: {push_info}\n"
+            f"\n"
+            f"新玩家初始积分: 天梯 1000 | 觐见 100\n"
+            f"联系管理员获取白名单以解锁更多功能"
+        )
+
+    # Full version for whitelist/admin users
     return (
         f"=== 信仰游戏天梯排行榜 ===\n"
         f"\n"
@@ -112,6 +129,8 @@ def format_help(config: dict) -> str:
         f"{cmd_admin} delete <玩家名> - 删除单个玩家\n"
         f"{cmd_admin} clear - 清空本群所有数据\n"
         f"\n"
+        f"排行榜推送: 每日 {push_time}\n"
+        f"\n"
         f"{cmd_help} - 显示本帮助\n"
         f"\n"
         f"新玩家初始积分: 天梯 1000 | 觐见 100"
@@ -135,7 +154,7 @@ def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]
     if not config_entries and not db_entries:
         return "白名单为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
 
-    lines = ["=== 白名单 ===", ""]
+    lines = ["=== 白名单 ==", ""]
 
     if config_entries:
         lines.append("[WebUI 配置]")

@@ -102,12 +102,11 @@ class TestFormatHelp:
             "cmd_query": "查询",
             "cmd_add_score": "录入积分",
             "cmd_set_class": "设置职业",
-            "cmd_my_info": "我的信息",
             "cmd_admin": "天梯榜管理",
             "cmd_whitelist": "白名单",
             "cmd_help": "天梯榜帮助",
         }
-        result = format_help(config)
+        result = format_help(config, is_privileged=True)
         assert "天梯榜" in result
         assert "查询" in result
         assert "设置职业" in result
@@ -121,12 +120,11 @@ class TestFormatHelp:
             "cmd_query": "info",
             "cmd_set_class": "job",
             "cmd_add_score": "score",
-            "cmd_my_info": "me",
             "cmd_admin": "manage",
             "cmd_whitelist": "wl",
             "cmd_help": "h",
         }
-        result = format_help(config)
+        result = format_help(config, is_privileged=True)
         assert "rank" in result
         assert "info" in result
         assert "job" in result
@@ -134,7 +132,7 @@ class TestFormatHelp:
     def test_help_shows_all_classes(self):
         """Test that help lists all valid classes."""
         config = {}
-        result = format_help(config)
+        result = format_help(config, is_privileged=True)
         assert "战士" in result
         assert "牧师" in result
         assert "猎人" in result
@@ -144,7 +142,7 @@ class TestFormatHelp:
     def test_help_shows_all_faiths(self):
         """Test that help lists all valid faiths."""
         config = {}
-        result = format_help(config)
+        result = format_help(config, is_privileged=True)
         assert "虚无" in result
         assert "存在" in result
         assert "文明" in result

@@ -142,7 +142,7 @@ class FaithLadderPlugin(Star):
         # Permission check
         has_permission = await self.permission_service.check_score_permission(user_id)
         if not has_permission and not is_admin:
-            yield event.plain_result("权限不足: 查看排行榜需要白名单权限。")
+            yield event.plain_result("权限不足：区区凡人")
             return
 
         # Cooldown check
@@ -169,7 +169,7 @@ class FaithLadderPlugin(Star):
         # Permission check
         has_permission = await self.permission_service.check_score_permission(user_id)
         if not has_permission and not is_admin:
-            yield event.plain_result("权限不足: 查看排行榜需要白名单权限。")
+            yield event.plain_result("权限不足: 区区凡人")
             return
 
         # Cooldown check (shared with 天梯榜)
@@ -214,7 +214,7 @@ class FaithLadderPlugin(Star):
         target_name = args.strip()
         text = await self.ladder_service.get_player_card_by_name(group_id, target_name)
         if not text:
-            yield event.plain_result( f"未找到玩家: {target_name}")
+            yield event.plain_result( f" {target_name}不属于这个宇宙")
             return
         yield event.plain_result( text)
 
@@ -229,7 +229,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "权限不足: 您不在白名单中，无法录入积分。")
+            yield event.plain_result( "凡人也胆敢染指神明的权柄？")
             return
 
         args = self._get_args(event, "录入积分")
@@ -282,7 +282,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "权限不足: 需要白名单权限才能录入玩家。")
+            yield event.plain_result( "凡人也胆敢染指神明的权柄？")
             return
 
         args = self._get_args(event, "录入玩家")
@@ -293,7 +293,7 @@ class FaithLadderPlugin(Star):
         if len(parts) != 5:
             yield event.plain_result(
                 f"用法: 录入玩家 <姓名> <信仰> <职业> <天梯分> <觐见分>\n"
-                f"示例: 录入玩家 张三 存在 战士 1000 100\n"
+                f"示例: 录入玩家 张三 文明 战士 1000 100\n"
                 f"可选职业: {'/'.join(VALID_CLASSES)}\n"
                 f"可选信仰: {'/'.join(VALID_FAITHS)}"
             )
@@ -329,7 +329,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "权限不足: 需要白名单权限才能设置职业。")
+            yield event.plain_result( "凡人也胆敢染指神明的权柄？")
             return
 
         args = self._get_args(event, "设置职业")
@@ -348,7 +348,7 @@ class FaithLadderPlugin(Star):
         target_name, class_name, faith_name = parts
         target_player = await self.db_manager.get_player_by_name(group_id, target_name)
         if not target_player:
-            yield event.plain_result( f"未找到玩家: {target_name}")
+            yield event.plain_result( f" {target_name}不属于这个宇宙")
             return
 
         success, message = await self.ladder_service.set_class(
@@ -372,7 +372,7 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if not parts:
             yield event.plain_result(
-                f"=== 天梯榜管理 ===\n"
+                f"==天梯榜管理==\n"
                 f"\n"
                 f"reset <玩家名> — 重置单个玩家积分 (管理员)\n"
                 f"resetall — 重置本群所有玩家积分 (管理员)\n"
@@ -391,7 +391,7 @@ class FaithLadderPlugin(Star):
         if action == "delete":
             has_permission = await self.permission_service.check_score_permission(user_id)
             if not has_permission and not is_admin:
-                yield event.plain_result("权限不足: 删除玩家需要白名单权限。")
+                yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 2:
                 yield event.plain_result("用法: 天梯榜管理 delete <玩家名>")
@@ -473,6 +473,10 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜帮助", alias={"ladderhelp", "帮助"})
     async def cmd_help(self, event: AstrMessageEvent):
-        """显示帮助信息"""
-        text = format_help(dict(self.config))
-        yield event.plain_result( text)
+        """显示帮助信息（白名单/管理员看完整版，其他人看简版）"""
+        user_id = str(event.get_sender_id())
+        is_admin = self._is_plugin_admin(event)
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_privileged = has_permission or is_admin
+        text = format_help(dict(self.config), is_privileged=is_privileged)
+        yield event.plain_result(text)
