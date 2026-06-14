@@ -105,7 +105,8 @@ class TestPlayerModel:
         assert "猎人" in VALID_CLASSES
         assert "法师" in VALID_CLASSES
         assert "歌者" in VALID_CLASSES
-        assert len(VALID_CLASSES) == 5
+        assert "刺客" in VALID_CLASSES
+        assert len(VALID_CLASSES) == 6
 
     def test_valid_faiths_list(self):
         """Test that VALID_FAITHS contains expected values."""

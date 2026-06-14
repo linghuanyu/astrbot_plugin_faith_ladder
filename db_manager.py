@@ -274,6 +274,51 @@ class DatabaseManager:
             await db.commit()
             return await self.get_player(group_id, player_id)
 
+    # --- Player management operations ---
+
+    async def delete_player(self, group_id: str, player_id: str) -> bool:
+        """Delete a player and their score history. Returns True if deleted."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM players WHERE player_id = ? AND group_id = ?",
+                (player_id, group_id)
+            )
+            await db.execute(
+                "DELETE FROM score_history WHERE player_id = ? AND group_id = ?",
+                (player_id, group_id)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_player_by_name(self, group_id: str, player_name: str) -> bool:
+        """Delete a player by name. Returns True if deleted."""
+        player = await self.get_player_by_name(group_id, player_name)
+        if not player:
+            return False
+        return await self.delete_player(group_id, player.player_id)
+
+    async def reset_all_scores(self, group_id: str, initial_ladder: int = 1000, initial_pilgrimage: int = 100) -> int:
+        """Reset all players' scores to initial values. Returns number of players reset."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE players SET ladder_score = ?, pilgrimage_score = ?, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?",
+                (initial_ladder, initial_pilgrimage, group_id)
+            )
+            await db.commit()
+            return cursor.rowcount
+
+    async def delete_all_players(self, group_id: str) -> int:
+        """Delete all players and score history in a group. Returns number of players deleted."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM players WHERE group_id = ?", (group_id,)
+            )
+            await db.execute(
+                "DELETE FROM score_history WHERE group_id = ?", (group_id,)
+            )
+            await db.commit()
+            return cursor.rowcount
+
     # --- Global whitelist operations ---
 
     async def add_to_whitelist(

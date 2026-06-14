@@ -8,7 +8,7 @@ from datetime import datetime
 
 
 # Valid character classes and faiths
-VALID_CLASSES = ["战士", "牧师", "猎人", "法师", "歌者"]
+VALID_CLASSES = ["战士", "牧师", "猎人", "法师", "歌者", "刺客"]
 VALID_FAITHS = ["虚无", "存在", "文明", "沉沦", "混沌","生命"]
 
 

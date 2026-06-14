@@ -326,12 +326,13 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜管理", alias={"ladderadmin", "榜管理"})
     async def cmd_admin(self, event: AstrMessageEvent):
-        """管理员操作。格式: 天梯榜管理 reset <玩家名>"""
+        """管理员操作。格式: 天梯榜管理 <操作> [参数]"""
         if not self._is_plugin_admin(event):
             yield event.plain_result( "权限不足: 仅管理员可执行此操作。")
             return
 
         group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
         args = self._get_args(event, "天梯榜管理")
         if not args:
             args = self._get_args(event, "ladderadmin") or self._get_args(event, "榜管理")
@@ -339,26 +340,54 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if not parts:
             yield event.plain_result(
-                f"用法: 天梯榜管理 <操作>\n"
-                f"可用操作: reset <玩家名> - 重置玩家积分"
+                f"=== 天梯榜管理 ===\n"
+                f"\n"
+                f"reset <玩家名> — 重置单个玩家积分（天梯1000/觐见100）\n"
+                f"resetall — 重置本群所有玩家积分\n"
+                f"delete <玩家名> — 删除单个玩家（含历史记录）\n"
+                f"clear — 清空本群所有玩家和数据\n"
+                f"\n"
+                f"示例:\n"
+                f"天梯榜管理 reset 张三\n"
+                f"天梯榜管理 resetall\n"
+                f"天梯榜管理 delete 张三\n"
+                f"天梯榜管理 clear"
             )
             return
 
         action = parts[0]
+
         if action == "reset" and len(parts) >= 2:
             target_name = parts[1]
             target_player = await self.db_manager.get_player_by_name(group_id, target_name)
             if not target_player:
-                yield event.plain_result( f"未找到玩家: {target_name}")
+                yield event.plain_result(f"未找到玩家: {target_name}")
                 return
             await self.db_manager.update_scores(
                 group_id, target_player.player_id,
-                -target_player.ladder_score, -target_player.pilgrimage_score,
-                str(event.get_sender_id()), "管理员重置"
+                -target_player.ladder_score + 1000, -target_player.pilgrimage_score + 100,
+                user_id, "管理员重置"
             )
-            yield event.plain_result( f"已重置玩家 {target_name} 的积分。")
+            yield event.plain_result(f"已重置玩家 {target_name} 的积分（天梯: 1000, 觐见: 100）。")
+
+        elif action == "resetall":
+            count = await self.db_manager.reset_all_scores(group_id)
+            yield event.plain_result(f"已重置本群 {count} 名玩家的积分（天梯: 1000, 觐见: 100）。")
+
+        elif action == "delete" and len(parts) >= 2:
+            target_name = parts[1]
+            deleted = await self.db_manager.delete_player_by_name(group_id, target_name)
+            if deleted:
+                yield event.plain_result(f"已删除玩家 {target_name} 及其所有历史记录。")
+            else:
+                yield event.plain_result(f"未找到玩家: {target_name}")
+
+        elif action == "clear":
+            count = await self.db_manager.delete_all_players(group_id)
+            yield event.plain_result(f"已清空本群所有数据，共删除 {count} 名玩家。")
+
         else:
-            yield event.plain_result( f"未知操作: {action}")
+            yield event.plain_result(f"未知操作: {action}\n发送「天梯榜管理」查看所有可用操作。")
 
     # === 白名单 ===
 
