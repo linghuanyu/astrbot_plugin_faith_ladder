@@ -127,9 +127,11 @@ class FaithLadderPlugin(Star):
         return False
 
     async def _reply(self, event: AstrMessageEvent, text: str):
-        """Send a fixed text reply directly, bypassing AI/LLM pipeline."""
+        """Send a fixed text reply directly via context, bypassing AI/LLM pipeline."""
         try:
-            await event.send(event.plain_result(text))
+            from astrbot.api.message_components import Plain
+            umo = event.unified_msg_origin
+            await self.context.send_message(umo, [Plain(text=text)])
         except Exception as e:
             logger.error(f"Direct send failed: {e}")
 
@@ -141,7 +143,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_leaderboard_text(group_id, limit)
-        yield event.plain_result( text)
+        await self._reply(event, text)
 
     # === 觐见榜 ===
 
@@ -151,7 +153,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
-        yield event.plain_result( text)
+        await self._reply(event, text)
 
     # === 查询玩家 ===
 
@@ -169,22 +171,22 @@ class FaithLadderPlugin(Star):
                     break
 
         if not args.strip():
-            yield event.plain_result( f"用法: 查询 <玩家名>")
+            await self._reply(event, f"用法: 查询 <玩家名>")
             return
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
         if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
-            yield event.plain_result( f"查询冷却中，请 {remaining:.0f} 秒后再试。")
+            await self._reply(event, f"查询冷却中，请 {remaining:.0f} 秒后再试。")
             return
         self.cooldown_manager.set_cooldown(user_id)
 
         target_name = args.strip()
         text = await self.ladder_service.get_player_card_by_name(group_id, target_name)
         if not text:
-            yield event.plain_result( f"未找到玩家: {target_name}")
+            await self._reply(event, f"未找到玩家: {target_name}")
             return
-        yield event.plain_result( text)
+        await self._reply(event, text)
 
     # === 录入积分 ===
 
@@ -197,7 +199,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "权限不足: 您不在白名单中，无法录入积分。")
+            await self._reply(event, "权限不足: 您不在白名单中，无法录入积分。")
             return
 
         args = self._get_args(event, "录入积分")
@@ -206,7 +208,7 @@ class FaithLadderPlugin(Star):
 
         parts = args.split()
         if len(parts) != 3:
-            yield event.plain_result(
+            await self._reply(event,
                 f"用法: 录入积分 <玩家名> <天梯分变化> <觐见梯变化>\n"
                 f"示例: 录入积分 张三 100 50"
             )
@@ -216,19 +218,19 @@ class FaithLadderPlugin(Star):
 
         max_name_len = self.config.get("player_name_max_length", 20)
         if len(target_name) > max_name_len:
-            yield event.plain_result( f"玩家名过长，最长 {max_name_len} 个字符。")
+            await self._reply(event, f"玩家名过长，最长 {max_name_len} 个字符。")
             return
 
         try:
             ladder_delta = int(ladder_str)
             pilgrimage_delta = int(pilgrimage_str)
         except ValueError:
-            yield event.plain_result( "分数必须是整数。示例: 100 50 或 -20 10")
+            await self._reply(event, "分数必须是整数。示例: 100 50 或 -20 10")
             return
 
         allow_negative = self.config.get("allow_negative_scores", True)
         if not allow_negative and (ladder_delta < 0 or pilgrimage_delta < 0):
-            yield event.plain_result( "当前配置不允许录入负分。")
+            await self._reply(event, "当前配置不允许录入负分。")
             return
 
         target_player = await self.db_manager.get_player_by_name(group_id, target_name)
@@ -237,7 +239,7 @@ class FaithLadderPlugin(Star):
         success, message = await self.ladder_service.add_score(
             group_id, target_id, target_name, ladder_delta, pilgrimage_delta, user_id
         )
-        yield event.plain_result( message)
+        await self._reply(event, message)
 
     # === 录入玩家 ===
 
@@ -250,7 +252,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "权限不足: 需要白名单权限才能录入玩家。")
+            await self._reply(event, "权限不足: 需要白名单权限才能录入玩家。")
             return
 
         args = self._get_args(event, "录入玩家")
@@ -259,7 +261,7 @@ class FaithLadderPlugin(Star):
 
         parts = args.split()
         if len(parts) != 5:
-            yield event.plain_result(
+            await self._reply(event,
                 f"用法: 录入玩家 <姓名> <信仰> <职业> <天梯分> <觐见分>\n"
                 f"示例: 录入玩家 张三 存在 战士 1000 100\n"
                 f"可选职业: {'/'.join(VALID_CLASSES)}\n"
@@ -271,21 +273,21 @@ class FaithLadderPlugin(Star):
 
         max_name_len = self.config.get("player_name_max_length", 20)
         if len(player_name) > max_name_len:
-            yield event.plain_result( f"玩家名过长，最长 {max_name_len} 个字符。")
+            await self._reply(event, f"玩家名过长，最长 {max_name_len} 个字符。")
             return
 
         try:
             ladder_score = int(ladder_str)
             pilgrimage_score = int(pilgrimage_str)
         except ValueError:
-            yield event.plain_result( "分数必须是整数。")
+            await self._reply(event, "分数必须是整数。")
             return
 
         success, message = await self.ladder_service.register_player(
             group_id, player_name, faith_name, class_name,
             ladder_score, pilgrimage_score, user_id
         )
-        yield event.plain_result( message)
+        await self._reply(event, message)
 
     # === 设置职业 ===
 
@@ -297,7 +299,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "权限不足: 需要白名单权限才能设置职业。")
+            await self._reply(event, "权限不足: 需要白名单权限才能设置职业。")
             return
 
         args = self._get_args(event, "设置职业")
@@ -306,7 +308,7 @@ class FaithLadderPlugin(Star):
 
         parts = args.split()
         if len(parts) != 3:
-            yield event.plain_result(
+            await self._reply(event,
                 f"用法: 设置职业 <玩家名> <职业> <信仰>\n"
                 f"可选职业: {'/'.join(VALID_CLASSES)}\n"
                 f"可选信仰: {'/'.join(VALID_FAITHS)}"
@@ -316,13 +318,13 @@ class FaithLadderPlugin(Star):
         target_name, class_name, faith_name = parts
         target_player = await self.db_manager.get_player_by_name(group_id, target_name)
         if not target_player:
-            yield event.plain_result( f"未找到玩家: {target_name}")
+            await self._reply(event, f"未找到玩家: {target_name}")
             return
 
         success, message = await self.ladder_service.set_class(
             group_id, target_player.player_id, target_name, class_name, faith_name
         )
-        yield event.plain_result( message)
+        await self._reply(event, message)
 
     # === 天梯榜管理 ===
 
@@ -330,7 +332,7 @@ class FaithLadderPlugin(Star):
     async def cmd_admin(self, event: AstrMessageEvent, *args):
         """管理员操作。格式: 天梯榜管理 reset <玩家名>"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result( "权限不足: 仅管理员可执行此操作。")
+            await self._reply(event, "权限不足: 仅管理员可执行此操作。")
             return
 
         group_id = self._get_group_id(event)
@@ -340,7 +342,7 @@ class FaithLadderPlugin(Star):
 
         parts = args.split()
         if not parts:
-            yield event.plain_result(
+            await self._reply(event,
                 f"用法: 天梯榜管理 <操作>\n"
                 f"可用操作: reset <玩家名> - 重置玩家积分"
             )
@@ -351,16 +353,16 @@ class FaithLadderPlugin(Star):
             target_name = parts[1]
             target_player = await self.db_manager.get_player_by_name(group_id, target_name)
             if not target_player:
-                yield event.plain_result( f"未找到玩家: {target_name}")
+                await self._reply(event, f"未找到玩家: {target_name}")
                 return
             await self.db_manager.update_scores(
                 group_id, target_player.player_id,
                 -target_player.ladder_score, -target_player.pilgrimage_score,
                 str(event.get_sender_id()), "管理员重置"
             )
-            yield event.plain_result( f"已重置玩家 {target_name} 的积分。")
+            await self._reply(event, f"已重置玩家 {target_name} 的积分。")
         else:
-            yield event.plain_result( f"未知操作: {action}")
+            await self._reply(event, f"未知操作: {action}")
 
     # === 白名单 ===
 
@@ -368,7 +370,7 @@ class FaithLadderPlugin(Star):
     async def cmd_whitelist(self, event: AstrMessageEvent, *args):
         """白名单管理。格式: 白名单 <add/remove/list> [类型] [ID]"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result( "权限不足: 仅管理员可管理白名单。")
+            await self._reply(event, "权限不足: 仅管理员可管理白名单。")
             return
 
         group_id = self._get_group_id(event)
@@ -379,7 +381,7 @@ class FaithLadderPlugin(Star):
 
         parts = args.split()
         if not parts:
-            yield event.plain_result(
+            await self._reply(event,
                 f"用法: 白名单 <add/remove/list> [类型] [ID]\n"
                 f"类型: user (用户) 或 group (群)"
             )
@@ -388,15 +390,15 @@ class FaithLadderPlugin(Star):
         action = parts[0]
         if action == "list":
             text = await self.permission_service.get_whitelist_text()
-            yield event.plain_result( text)
+            await self._reply(event, text)
         elif action == "add" and len(parts) >= 3:
             _, message = await self.permission_service.add_to_whitelist(parts[1], parts[2], user_id)
-            yield event.plain_result( message)
+            await self._reply(event, message)
         elif action == "remove" and len(parts) >= 3:
             _, message = await self.permission_service.remove_from_whitelist(parts[1], parts[2])
-            yield event.plain_result( message)
+            await self._reply(event, message)
         else:
-            yield event.plain_result( f"用法: 白名单 <add/remove/list> [类型] [ID]")
+            await self._reply(event, f"用法: 白名单 <add/remove/list> [类型] [ID]")
 
     # === 帮助 ===
 
@@ -404,4 +406,4 @@ class FaithLadderPlugin(Star):
     async def cmd_help(self, event: AstrMessageEvent, *args):
         """显示帮助信息"""
         text = format_help(dict(self.config))
-        yield event.plain_result( text)
+        await self._reply(event, text)
