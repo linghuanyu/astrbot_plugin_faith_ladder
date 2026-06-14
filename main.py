@@ -136,7 +136,7 @@ class FaithLadderPlugin(Star):
     # === 排行榜 ===
 
     @filter.command("天梯榜", alias={"ladder", "ranking", "排行榜"})
-    async def cmd_ladder(self, event: AstrMessageEvent):
+    async def cmd_ladder(self, event: AstrMessageEvent, *args):
         """显示天梯排行榜"""
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
@@ -146,7 +146,7 @@ class FaithLadderPlugin(Star):
     # === 觐见榜 ===
 
     @filter.command("觐见榜", alias={"pilgrimage", "觐见"})
-    async def cmd_pilgrimage(self, event: AstrMessageEvent):
+    async def cmd_pilgrimage(self, event: AstrMessageEvent, *args):
         """显示觐见之梯排行榜"""
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
@@ -156,7 +156,7 @@ class FaithLadderPlugin(Star):
     # === 查询玩家 ===
 
     @filter.command("查询", alias={"query", "查看"})
-    async def cmd_query(self, event: AstrMessageEvent):
+    async def cmd_query(self, event: AstrMessageEvent, *args):
         """查询指定玩家的天梯分与觐见分。格式: 查询 <玩家名>"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
@@ -189,7 +189,7 @@ class FaithLadderPlugin(Star):
     # === 录入积分 ===
 
     @filter.command("录入积分", alias={"addscore", "加分"})
-    async def cmd_add_score(self, event: AstrMessageEvent):
+    async def cmd_add_score(self, event: AstrMessageEvent, *args):
         """录入积分变化。格式: 录入积分 <玩家名> <天梯分变化> <觐见梯变化>"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
@@ -242,7 +242,7 @@ class FaithLadderPlugin(Star):
     # === 录入玩家 ===
 
     @filter.command("录入玩家", alias={"register", "添加玩家"})
-    async def cmd_register_player(self, event: AstrMessageEvent):
+    async def cmd_register_player(self, event: AstrMessageEvent, *args):
         """录入新玩家。格式: 录入玩家 <姓名> <信仰> <职业> <天梯分> <觐见分>"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
@@ -290,7 +290,7 @@ class FaithLadderPlugin(Star):
     # === 设置职业 ===
 
     @filter.command("设置职业", alias={"setclass", "改职业"})
-    async def cmd_set_class(self, event: AstrMessageEvent):
+    async def cmd_set_class(self, event: AstrMessageEvent, *args):
         """修改玩家职业信仰。格式: 设置职业 <玩家名> <职业> <信仰>"""
         group_id = self._get_group_id(event)
 
@@ -327,7 +327,7 @@ class FaithLadderPlugin(Star):
     # === 天梯榜管理 ===
 
     @filter.command("天梯榜管理", alias={"ladderadmin", "榜管理"})
-    async def cmd_admin(self, event: AstrMessageEvent):
+    async def cmd_admin(self, event: AstrMessageEvent, *args):
         """管理员操作。格式: 天梯榜管理 reset <玩家名>"""
         if not self._is_plugin_admin(event):
             await self._reply(event, "权限不足: 仅管理员可执行此操作。")
@@ -365,7 +365,7 @@ class FaithLadderPlugin(Star):
     # === 白名单 ===
 
     @filter.command("白名单", alias={"whitelist", "wl"})
-    async def cmd_whitelist(self, event: AstrMessageEvent):
+    async def cmd_whitelist(self, event: AstrMessageEvent, *args):
         """白名单管理。格式: 白名单 <add/remove/list> [类型] [ID]"""
         if not self._is_plugin_admin(event):
             await self._reply(event, "权限不足: 仅管理员可管理白名单。")
@@ -401,7 +401,7 @@ class FaithLadderPlugin(Star):
     # === 帮助 ===
 
     @filter.command("天梯榜帮助", alias={"ladderhelp", "帮助"})
-    async def cmd_help(self, event: AstrMessageEvent):
+    async def cmd_help(self, event: AstrMessageEvent, *args):
         """显示帮助信息"""
         text = format_help(dict(self.config))
         await self._reply(event, text)
