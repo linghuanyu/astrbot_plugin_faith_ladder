@@ -326,13 +326,11 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜管理", alias={"ladderadmin", "榜管理"})
     async def cmd_admin(self, event: AstrMessageEvent):
-        """管理员操作。格式: 天梯榜管理 <操作> [参数]"""
-        if not self._is_plugin_admin(event):
-            yield event.plain_result( "权限不足: 仅管理员可执行此操作。")
-            return
-
+        """管理员/白名单操作。格式: 天梯榜管理 <操作> [参数]"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
+        is_admin = self._is_plugin_admin(event)
+
         args = self._get_args(event, "天梯榜管理")
         if not args:
             args = self._get_args(event, "ladderadmin") or self._get_args(event, "榜管理")
@@ -342,20 +340,40 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(
                 f"=== 天梯榜管理 ===\n"
                 f"\n"
-                f"reset <玩家名> — 重置单个玩家积分（天梯1000/觐见100）\n"
-                f"resetall — 重置本群所有玩家积分\n"
-                f"delete <玩家名> — 删除单个玩家（含历史记录）\n"
-                f"clear — 清空本群所有玩家和数据\n"
+                f"reset <玩家名> — 重置单个玩家积分 (管理员)\n"
+                f"resetall — 重置本群所有玩家积分 (管理员)\n"
+                f"delete <玩家名> — 删除单个玩家 (白名单/管理员)\n"
+                f"clear — 清空本群所有玩家和数据 (管理员)\n"
                 f"\n"
                 f"示例:\n"
                 f"天梯榜管理 reset 张三\n"
-                f"天梯榜管理 resetall\n"
-                f"天梯榜管理 delete 张三\n"
-                f"天梯榜管理 clear"
+                f"天梯榜管理 delete 张三"
             )
             return
 
         action = parts[0]
+
+        # delete: whitelist or admin
+        if action == "delete":
+            has_permission = await self.permission_service.check_score_permission(user_id)
+            if not has_permission and not is_admin:
+                yield event.plain_result("权限不足: 删除玩家需要白名单权限。")
+                return
+            if len(parts) < 2:
+                yield event.plain_result("用法: 天梯榜管理 delete <玩家名>")
+                return
+            target_name = parts[1]
+            deleted = await self.db_manager.delete_player_by_name(group_id, target_name)
+            if deleted:
+                yield event.plain_result(f"已删除玩家 {target_name} 及其所有历史记录。")
+            else:
+                yield event.plain_result(f"未找到玩家: {target_name}")
+            return
+
+        # Other actions: admin only
+        if not is_admin:
+            yield event.plain_result("权限不足: 仅管理员可执行此操作。")
+            return
 
         if action == "reset" and len(parts) >= 2:
             target_name = parts[1]
@@ -373,14 +391,6 @@ class FaithLadderPlugin(Star):
         elif action == "resetall":
             count = await self.db_manager.reset_all_scores(group_id)
             yield event.plain_result(f"已重置本群 {count} 名玩家的积分（天梯: 1000, 觐见: 100）。")
-
-        elif action == "delete" and len(parts) >= 2:
-            target_name = parts[1]
-            deleted = await self.db_manager.delete_player_by_name(group_id, target_name)
-            if deleted:
-                yield event.plain_result(f"已删除玩家 {target_name} 及其所有历史记录。")
-            else:
-                yield event.plain_result(f"未找到玩家: {target_name}")
 
         elif action == "clear":
             count = await self.db_manager.delete_all_players(group_id)
