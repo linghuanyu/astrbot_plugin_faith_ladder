@@ -297,6 +297,25 @@ class DatabaseManager:
             return False
         return await self.delete_player(group_id, player.player_id)
 
+    async def rename_player_by_name(self, group_id: str, old_name: str, new_name: str) -> tuple[bool, str]:
+        """Rename a player. Returns (success, message)."""
+        player = await self.get_player_by_name(group_id, old_name)
+        if not player:
+            return False, f"未找到玩家: {old_name}"
+
+        # Check if new name already exists
+        existing = await self.get_player_by_name(group_id, new_name)
+        if existing:
+            return False, f"玩家名 {new_name} 已存在。"
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE players SET player_name = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
+                (new_name, player.player_id, group_id)
+            )
+            await db.commit()
+        return True, f"已将玩家 {old_name} 改名为 {new_name}。"
+
     async def reset_all_scores(self, group_id: str, initial_ladder: int = 1000, initial_pilgrimage: int = 100) -> int:
         """Reset all players' scores to initial values. Returns number of players reset."""
         async with aiosqlite.connect(self.db_path) as db:
