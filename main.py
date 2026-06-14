@@ -135,21 +135,55 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜", alias={"ladder", "ranking", "排行榜"})
     async def cmd_ladder(self, event: AstrMessageEvent):
-        """显示天梯排行榜"""
+        """显示天梯排行榜（需要白名单权限）"""
+        user_id = str(event.get_sender_id())
+        is_admin = self._is_plugin_admin(event)
+
+        # Permission check
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足: 查看排行榜需要白名单权限。")
+            return
+
+        # Cooldown check
+        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+            yield event.plain_result(f"排行榜冷却中，请 {remaining:.0f} 秒后再试。")
+            return
+        self.cooldown_manager.set_cooldown(user_id)
+
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_leaderboard_text(group_id, limit)
-        yield event.plain_result( text)
+        yield event.plain_result(text)
 
     # === 觐见榜 ===
 
     @filter.command("觐见榜", alias={"pilgrimage", "觐见"})
     async def cmd_pilgrimage(self, event: AstrMessageEvent):
-        """显示觐见之梯排行榜"""
+        """显示觐见之梯排行榜（需要白名单权限）"""
+        user_id = str(event.get_sender_id())
+        is_admin = self._is_plugin_admin(event)
+
+        # Permission check
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足: 查看排行榜需要白名单权限。")
+            return
+
+        # Cooldown check (shared with 天梯榜)
+        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+            yield event.plain_result(f"排行榜冷却中，请 {remaining:.0f} 秒后再试。")
+            return
+        self.cooldown_manager.set_cooldown(user_id)
+
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
-        yield event.plain_result( text)
+        yield event.plain_result(text)
 
     # === 查询玩家 ===
 

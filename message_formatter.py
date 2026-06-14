@@ -80,16 +80,19 @@ def format_help(config: dict) -> str:
     cmd_wl = config.get("cmd_whitelist", "白名单")
     cmd_help = config.get("cmd_help", "天梯榜帮助")
 
+    ladder_cd = config.get("ladder_cooldown_seconds", 600)
+    query_cd = config.get("query_cooldown_seconds", 600)
+
     classes_str = "/".join(VALID_CLASSES)
     faiths_str = "/".join(VALID_FAITHS)
 
     return (
         f"=== 信仰游戏天梯排行榜 ===\n"
         f"\n"
-        f"[排行榜与查询]\n"
-        f"{cmd_sb} - 显示天梯排行榜（按天梯积分排序）\n"
-        f"{cmd_pilgrimage} - 显示觐见之梯（按觐见积分排序）\n"
-        f"{cmd_query} <玩家名> - 查询指定玩家的天梯分与觐见分\n"
+        f"[排行榜与查询] (需要白名单权限)\n"
+        f"{cmd_sb} - 显示天梯排行榜（冷却 {ladder_cd}s）\n"
+        f"{cmd_pilgrimage} - 显示觐见之梯（冷却 {ladder_cd}s）\n"
+        f"{cmd_query} <玩家名> - 查询玩家信息（冷却 {query_cd}s）\n"
         f"\n"
         f"[玩家管理] (需要白名单权限，管理员不受限)\n"
         f"{cmd_register} <姓名> <信仰> <职业> <天梯分> <觐见分> - 录入新玩家\n"
