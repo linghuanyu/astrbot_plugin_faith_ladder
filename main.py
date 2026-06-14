@@ -493,10 +493,6 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜帮助", alias={"ladderhelp", "帮助"})
     async def cmd_help(self, event: AstrMessageEvent):
-        """显示帮助信息（白名单/管理员看完整版，其他人看简版）"""
-        user_id = str(event.get_sender_id())
-        is_admin = self._is_plugin_admin(event)
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_privileged = has_permission or is_admin
-        text = format_help(dict(self.config), is_privileged=is_privileged)
+        """显示帮助信息"""
+        text = format_help(dict(self.config))
         yield event.plain_result(text)

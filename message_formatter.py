@@ -68,8 +68,8 @@ def format_player_card(player: Player) -> str:
     )
 
 
-def format_help(config: dict, is_privileged: bool = False) -> str:
-    """Format the help message. Non-privileged users see a limited version."""
+def format_help(config: dict) -> str:
+    """Format the help message."""
     cmd_sb = config.get("cmd_ladder", "天梯榜")
     cmd_pilgrimage = config.get("cmd_pilgrimage", "觐见榜")
     cmd_query = config.get("cmd_query", "查询")
@@ -84,56 +84,35 @@ def format_help(config: dict, is_privileged: bool = False) -> str:
     query_cd = config.get("query_cooldown_seconds", 600)
     push_time = config.get("daily_push_time", "07:00")
     push_enabled = config.get("daily_push_enabled", True)
+    push_info = f"每日 {push_time} 自动推送" if push_enabled else "未开启"
 
     classes_str = "/".join(VALID_CLASSES)
     faiths_str = "/".join(VALID_FAITHS)
 
-    # Basic version for non-whitelist users
-    if not is_privileged:
-        push_info = f"每日 {push_time} 自动推送排行榜" if push_enabled else "排行榜推送未开启"
-        return (
-            f"=== 信仰游戏天梯排行榜 ===\n"
-            f"\n"
-            f"{cmd_query} <玩家名> - 查询指定玩家的天梯分与觐见分（冷却 {query_cd}s）\n"
-            f"\n"
-            f"排行榜推送: {push_info}\n"
-            f"\n"
-            f"新玩家初始积分: 天梯 1000 | 觐见 100\n"
-            f"联系管理员获取白名单以解锁更多功能"
-        )
-
-    # Full version for whitelist/admin users
     return (
         f"=== 信仰游戏天梯排行榜 ===\n"
         f"\n"
-        f"[排行榜与查询] (需要白名单权限)\n"
-        f"{cmd_sb} - 显示天梯排行榜（冷却 {ladder_cd}s）\n"
-        f"{cmd_pilgrimage} - 显示觐见之梯（冷却 {ladder_cd}s）\n"
-        f"{cmd_query} <玩家名> - 查询玩家信息（冷却 {query_cd}s）\n"
+        f"[查询]\n"
+        f"{cmd_query} <玩家名> - 查询玩家天梯分与觐见分（冷却 {query_cd}s）\n"
         f"\n"
-        f"[玩家管理] (需要白名单权限，管理员不受限)\n"
+        f"[排行榜] (白名单权限)\n"
+        f"{cmd_sb} - 天梯排行榜（冷却 {ladder_cd}s）\n"
+        f"{cmd_pilgrimage} - 觐见之梯（冷却 {ladder_cd}s）\n"
+        f"\n"
+        f"[玩家管理] (白名单权限)\n"
         f"{cmd_register} <姓名> <信仰> <职业> <天梯分> <觐见分> - 录入新玩家\n"
-        f"{cmd_class} <玩家名> <职业> <信仰> - 修改玩家职业信仰\n"
-        f"  可选职业: {classes_str}\n"
-        f"  可选信仰: {faiths_str}\n"
+        f"{cmd_class} <玩家名> <职业> <信仰> - 修改职业信仰\n"
+        f"  职业: {classes_str} | 信仰: {faiths_str}\n"
         f"\n"
-        f"[积分管理] (需要白名单权限，管理员不受限)\n"
-        f"{cmd_add} <玩家名> <天梯分变化> <觐见梯变化> - 录入积分变化\n"
+        f"[积分管理] (白名单权限)\n"
+        f"{cmd_add} <玩家名> <天梯分变化> <觐见梯变化>\n"
         f"\n"
-        f"[管理] (需要管理员权限)\n"
-        f"{cmd_wl} add <user/group> <ID> - 添加白名单\n"
-        f"{cmd_wl} remove <user/group> <ID> - 移除白名单\n"
-        f"{cmd_wl} list - 查看白名单\n"
-        f"{cmd_admin} reset <玩家名> - 重置单个玩家积分\n"
-        f"{cmd_admin} resetall - 重置本群所有玩家积分\n"
-        f"{cmd_admin} delete <玩家名> - 删除单个玩家\n"
-        f"{cmd_admin} clear - 清空本群所有数据\n"
+        f"[管理] (管理员权限)\n"
+        f"{cmd_wl} add/remove/list\n"
+        f"{cmd_admin} reset/resetall/delete/rename/clear\n"
         f"\n"
-        f"排行榜推送: 每日 {push_time}\n"
-        f"\n"
-        f"{cmd_help} - 显示本帮助\n"
-        f"\n"
-        f"新玩家初始积分: 天梯 1000 | 觐见 100"
+        f"推送: {push_info} | 初始积分: 天梯1000 觐见100\n"
+        f"{cmd_help} - 显示本帮助"
     )
 
 

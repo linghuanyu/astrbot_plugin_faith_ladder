@@ -42,10 +42,11 @@ class PermissionService:
                 return True
         return False
 
-    async def check_score_permission(self, user_id: str) -> bool:
+    async def check_score_permission(self, user_id: str, group_id: str = None) -> bool:
         """
         Check if a user has permission to enter scores.
         Global check: config admin_ids → config whitelist → DB whitelist.
+        group_id is accepted but ignored (kept for backward compatibility).
         """
         if self.is_admin(user_id):
             return True
