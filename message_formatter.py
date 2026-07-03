@@ -63,8 +63,7 @@ def format_player_card(player: Player) -> str:
         f"职业: {class_str}\n"
         f"信仰: {faith_str}\n"
         f"天梯积分: {player.ladder_score}\n"
-        f"觐见之梯: {player.pilgrimage_score}\n"
-    
+        f"觐见之梯: {player.pilgrimage_score}"
     )
 
 
@@ -85,6 +84,7 @@ def format_help(config: dict) -> str:
     push_time = config.get("daily_push_time", "07:00")
     push_enabled = config.get("daily_push_enabled", True)
     push_info = f"每日 {push_time} 自动推送" if push_enabled else "未开启"
+    output_mode = config.get("output_mode", "text")
 
     classes_str = "/".join(VALID_CLASSES)
     faiths_str = "/".join(VALID_FAITHS)
@@ -110,6 +110,7 @@ def format_help(config: dict) -> str:
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"
         f"{cmd_admin} reset/resetall/delete/rename/clear\n"
+        f"输出模式 text/image - 切换输出模式（管理员，全局默认: {output_mode}）\n"
         f"\n"
         f"推送: {push_info} | 初始积分: 天梯1000 觐见100\n"
         f"{cmd_help} - 显示本帮助"

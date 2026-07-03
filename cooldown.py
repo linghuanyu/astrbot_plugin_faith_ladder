@@ -23,6 +23,7 @@ class CooldownManager:
 
     def set_cooldown(self, user_id: str):
         """Set the cooldown timer for a user to now."""
+        self._cleanup_if_needed()
         self._cooldowns[user_id] = time.time()
 
     def get_remaining(self, user_id: str, cooldown_seconds: int) -> float:
@@ -38,3 +39,12 @@ class CooldownManager:
     def clear_all(self):
         """Clear all cooldowns."""
         self._cooldowns.clear()
+
+    def _cleanup_if_needed(self):
+        """Periodically purge expired cooldown entries to prevent unbounded memory growth."""
+        if len(self._cooldowns) <= 100:
+            return
+        now = time.time()
+        expired = [k for k, v in self._cooldowns.items() if now - v > 7200]
+        for k in expired:
+            self._cooldowns.pop(k, None)

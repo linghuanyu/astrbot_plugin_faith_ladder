@@ -4,7 +4,7 @@ Checks both config-defined whitelist and database whitelist.
 Whitelist is GLOBAL — not scoped to any group.
 """
 
-from typing import Optional
+from typing import Optional, Callable
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 
 
@@ -17,13 +17,28 @@ class PermissionService:
     3. DB whitelist - runtime whitelist managed via commands (global)
     """
 
-    def __init__(self, db_manager: DatabaseManager, config: Optional[dict] = None):
+    def __init__(self, db_manager: DatabaseManager, config: Optional[dict] = None, config_getter: Optional[Callable[[], dict]] = None):
         self.db = db_manager
-        self._config = config or {}
+        self._config_getter = config_getter
+        self._config_static = config or {}
+
+    @property
+    def _config(self) -> dict:
+        """Get current config. Uses getter if available (for hot reload), else static copy."""
+        if self._config_getter:
+            try:
+                return self._config_getter()
+            except Exception:
+                pass
+        return self._config_static
 
     def set_config(self, config: dict):
-        """Update the config reference (called on config reload)."""
-        self._config = config
+        """Update the static config reference (called on config reload)."""
+        self._config_static = config
+
+    def set_config_getter(self, getter: Callable[[], dict]):
+        """Set a callable that returns the current config (preferred over static dict)."""
+        self._config_getter = getter
 
     def is_admin(self, user_id: str) -> bool:
         """Check if user is in the global admin list (from config)."""

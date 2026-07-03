@@ -1,0 +1,49 @@
+<div style="font-family: 'Microsoft YaHei', 'SimHei', 'Noto Sans SC', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); color: #eee; padding: 30px; width: 800px; margin: 0; box-sizing: border-box;">
+  <div style="text-align: center; color: #ce93d8; font-size: 32px; font-weight: bold; margin-bottom: 30px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); letter-spacing: 4px;">
+    &#128591; 觐见之梯 &#128591;
+  </div>
+
+  {% if players %}
+    {% for player in players %}
+    <div style="display: flex; align-items: center; padding: 15px 20px; margin: 10px 0; background: rgba(255,255,255,0.08); border-radius: 8px; border-left: 4px solid {% if loop.index == 1 %}#ffd700{% elif loop.index == 2 %}#c0c0c0{% elif loop.index == 3 %}#cd7f32{% else %}#4a6fa5{% endif %};">
+      <!-- Rank -->
+      <div style="font-size: 32px; font-weight: bold; width: 60px; text-align: center; color: {% if loop.index == 1 %}#ffd700{% elif loop.index == 2 %}#c0c0c0{% elif loop.index == 3 %}#cd7f32{% else %}#888{% endif %};">
+        {{ loop.index }}
+      </div>
+
+      <!-- Player Info -->
+      <div style="flex: 1; margin-left: 20px;">
+        <div style="font-size: 22px; font-weight: bold; margin-bottom: 8px; color: #fff;">
+          {{ player.player_name }}
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <span style="display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 14px; background: rgba(100,150,255,0.25); border: 1px solid rgba(100,150,255,0.4); color: #8ab4f8;">
+            {{ player.class_ or '未设定' }}
+          </span>
+          <span style="display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 14px; background: rgba(200,100,255,0.25); border: 1px solid rgba(200,100,255,0.4); color: #d4a5ff;">
+            {{ player.faith or '未设定' }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Scores -->
+      <div style="text-align: right; min-width: 200px;">
+        <div style="font-size: 14px; color: #aaa; margin-bottom: 4px;">
+          觐见之梯: <span style="font-weight: bold; font-size: 18px; color: #ce93d8;">{{ player.pilgrimage_score }}</span>
+        </div>
+        <div style="font-size: 14px; color: #aaa;">
+          天梯积分: <span style="font-weight: bold; font-size: 18px; color: #4fc3f7;">{{ player.ladder_score }}</span>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div style="text-align: center; padding: 60px 20px; color: #888; font-size: 20px;">
+      暂无排名数据
+    </div>
+  {% endif %}
+
+  <div style="text-align: center; margin-top: 30px; color: #666; font-size: 14px;">
+    --- 显示前 {{ displayed_count }} 名 ---
+  </div>
+</div>

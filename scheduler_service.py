@@ -5,7 +5,7 @@ Scheduler service for daily push and automatic backups.
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, Any
 
 from astrbot.api import logger
 
@@ -18,18 +18,31 @@ class SchedulerService:
         data_dir: Path,
         get_leaderboard_text: Callable[[str, int], Awaitable[str]],
         get_config: Callable[[], dict],
-        send_to_group: Callable[[str, str], Awaitable[None]],
+        send_to_group: Callable[[str, Any], Awaitable[None]],
         get_active_groups: Callable[[], Awaitable[list[str]]],
+        get_pilgrimage_text: Optional[Callable[[str, int], Awaitable[str]]] = None,
+        get_leaderboard_players: Optional[Callable[[str, int], Awaitable[list]]] = None,
+        get_pilgrimage_players: Optional[Callable[[str, int], Awaitable[list]]] = None,
+        image_renderer: Optional[Any] = None,
+        get_output_mode: Optional[Callable[[str], Awaitable[str]]] = None,
+        purge_score_history: Optional[Callable[[int], Awaitable[int]]] = None,
     ):
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
         self._get_leaderboard_text = get_leaderboard_text
+        self._get_pilgrimage_text = get_pilgrimage_text
+        self._get_leaderboard_players = get_leaderboard_players
+        self._get_pilgrimage_players = get_pilgrimage_players
+        self._image_renderer = image_renderer
+        self._get_output_mode = get_output_mode
+        self._purge_score_history = purge_score_history
         self._get_config = get_config
         self._send_to_group = send_to_group
         self._get_active_groups = get_active_groups
         self._daily_push_task: Optional[asyncio.Task] = None
         self._backup_task: Optional[asyncio.Task] = None
         self._running = False
+        self._last_push_date: Optional[datetime] = None  # Track last push date to prevent double-fire
 
     async def start(self):
         """Start the scheduler tasks."""
@@ -56,7 +69,8 @@ class SchedulerService:
         logger.info("SchedulerService: tasks stopped")
 
     async def _daily_push_loop(self):
-        """Loop that checks every minute if it's time for daily push."""
+        """Loop that checks every 30 seconds if it's time for daily push.
+        Uses date tracking to prevent double-fire or missed pushes."""
         while self._running:
             try:
                 config = self._get_config()
@@ -64,15 +78,23 @@ class SchedulerService:
                     await asyncio.sleep(60)
                     continue
 
-                push_time = config.get("daily_push_time", "07:00")
+                push_time_str = config.get("daily_push_time", "07:00")
                 now = datetime.now()
-                current_time = now.strftime("%H:%M")
 
-                if current_time == push_time:
-                    await self._do_daily_push(config)
-                    # Sleep 61 seconds to avoid triggering again same minute
-                    await asyncio.sleep(61)
+                # Parse scheduled time for today
+                try:
+                    scheduled_time = datetime.strptime(push_time_str, "%H:%M").replace(
+                        year=now.year, month=now.month, day=now.day
+                    )
+                except ValueError:
+                    logger.error(f"Invalid daily_push_time format: {push_time_str}")
+                    await asyncio.sleep(3600)
                     continue
+
+                # Push if: current time >= scheduled time AND we haven't pushed today
+                if now >= scheduled_time and self._last_push_date != now.date():
+                    self._last_push_date = now.date()
+                    await self._do_daily_push(config)
 
                 await asyncio.sleep(30)
 
@@ -83,12 +105,22 @@ class SchedulerService:
                 await asyncio.sleep(60)
 
     async def _backup_loop(self):
-        """Loop that runs backup check daily."""
+        """Loop that runs backup check and score history purge daily."""
         while self._running:
             try:
                 config = self._get_config()
                 if config.get("auto_backup_enabled", True):
                     await self._do_backup(config)
+
+                # Purge old score history
+                if self._purge_score_history:
+                    retention_days = config.get("score_history_retention_days", 90)
+                    try:
+                        deleted = await self._purge_score_history(retention_days)
+                        if deleted > 0:
+                            logger.info(f"Purged {deleted} old score history entries (>{retention_days} days)")
+                    except Exception as e:
+                        logger.error(f"Score history purge error: {e}")
 
                 # Run once per day (check every hour)
                 await asyncio.sleep(3600)
@@ -99,11 +131,21 @@ class SchedulerService:
                 logger.error(f"SchedulerService backup error: {e}")
                 await asyncio.sleep(3600)
 
+    async def _get_effective_output_mode(self, group_id: str, config: dict) -> str:
+        """Get effective output mode for a group (DB override or global default)."""
+        if self._get_output_mode:
+            try:
+                mode = await self._get_output_mode(group_id)
+                if mode in ("text", "image"):
+                    return mode
+            except Exception as e:
+                logger.error(f"Failed to get output mode for group {group_id}: {e}")
+        return config.get("output_mode", "text")
+
     async def _do_daily_push(self, config: dict):
-        """Push leaderboard to configured groups. If daily_push_groups is empty, skip push."""
+        """Push both ladder and pilgrimage leaderboards to configured groups."""
         push_groups = config.get("daily_push_groups", [])
 
-        # If no target groups configured, skip push entirely
         if not push_groups:
             logger.info("Daily push skipped: daily_push_groups is empty")
             return
@@ -112,23 +154,92 @@ class SchedulerService:
 
         for group_id in push_groups:
             try:
-                text = await self._get_leaderboard_text(group_id, limit)
-                header = "=== 每日排行榜推送 ===\n"
-                await self._send_to_group(group_id, header + text)
+                output_mode = await self._get_effective_output_mode(group_id, config)
+                header = "=== 每日排行榜推送 ==="
+
+                if output_mode == "image" and self._image_renderer:
+                    await self._push_image_mode(group_id, header, limit, config)
+                else:
+                    await self._push_text_mode(group_id, header, limit)
+
             except Exception as e:
                 logger.error(f"Failed to push to group {group_id}: {e}")
 
-    async def _do_backup(self, config: dict):
-        """Create backup and clean up old ones."""
-        from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
+    async def _push_text_mode(self, group_id: str, header: str, limit: int):
+        """Send text-mode leaderboards to a group."""
+        # Ladder leaderboard
+        ladder_text = await self._get_leaderboard_text(group_id, limit)
+        await self._send_to_group(group_id, f"{header}\n\n{_('⚔️ 天梯排行榜')}")
+        await self._send_to_group(group_id, ladder_text)
 
+        # Pilgrimage leaderboard (if available)
+        if self._get_pilgrimage_text:
+            pilgrimage_text = await self._get_pilgrimage_text(group_id, limit)
+            await self._send_to_group(group_id, pilgrimage_text)
+
+    async def _push_image_mode(self, group_id: str, header: str, limit: int, config: dict):
+        """Send image-mode leaderboards to a group, falling back to text on failure."""
+        rendered_any = False
+
+        # Ladder leaderboard image
+        if self._get_leaderboard_players:
+            try:
+                players = await self._get_leaderboard_players(group_id, limit)
+                if players:
+                    image_bytes = await self._image_renderer.render_leaderboard_image(
+                        players, limit
+                    )
+                    if image_bytes:
+                        await self._send_to_group(group_id, header)
+                        await self._send_to_group(group_id, ("image", image_bytes))
+                        rendered_any = True
+                    else:
+                        # Fallback to text
+                        text = await self._get_leaderboard_text(group_id, limit)
+                        await self._send_to_group(group_id, f"{header}\n\n{text}\n[图片渲染失败，已降级为文本]")
+                        rendered_any = True
+                else:
+                    await self._send_to_group(group_id, f"{header}\n暂无排名数据。")
+                    rendered_any = True
+            except Exception as e:
+                logger.error(f"Ladder image render failed for group {group_id}: {e}")
+
+        # Pilgrimage leaderboard image
+        if self._get_pilgrimage_players and self._get_pilgrimage_text:
+            try:
+                players = await self._get_pilgrimage_players(group_id, limit)
+                if players:
+                    image_bytes = await self._image_renderer.render_pilgrimage_image(
+                        players, limit
+                    )
+                    if image_bytes:
+                        await self._send_to_group(group_id, ("image", image_bytes))
+                    else:
+                        text = await self._get_pilgrimage_text(group_id, limit)
+                        await self._send_to_group(group_id, f"{text}\n[图片渲染失败，已降级为文本]")
+                else:
+                    if not rendered_any:
+                        await self._send_to_group(group_id, "暂无排名数据。")
+            except Exception as e:
+                logger.error(f"Pilgrimage image render failed for group {group_id}: {e}")
+                # Fallback to text
+                if self._get_pilgrimage_text:
+                    text = await self._get_pilgrimage_text(group_id, limit)
+                    await self._send_to_group(group_id, text)
+
+        if not rendered_any:
+            # No image support available, fall back to text
+            await self._push_text_mode(group_id, header, limit)
+
+    async def _do_backup(self, config: dict):
+        """Create backup and clean up old ones using non-blocking I/O."""
         retention_days = config.get("backup_retention_days", 7)
         db_path = self.data_dir / "ladder.db"
 
         if not db_path.exists():
             return
 
-        # Create backup
+        # Create backup (non-blocking)
         backup_dir = self.backup_dir
         backup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -136,17 +247,26 @@ class SchedulerService:
         backup_path = backup_dir / f"ladder_backup_{timestamp}.db"
 
         import shutil
-        shutil.copy2(db_path, backup_path)
+        await asyncio.to_thread(shutil.copy2, db_path, backup_path)
         logger.info(f"Backup created: {backup_path}")
 
-        # Clean old backups
+        # Clean old backups (non-blocking)
         cutoff = datetime.now().timestamp() - (retention_days * 86400)
-        for f in backup_dir.glob("ladder_backup_*.db"):
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
-                logger.info(f"Old backup removed: {f}")
+
+        def _remove_old():
+            for f in backup_dir.glob("ladder_backup_*.db"):
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    logger.info(f"Old backup removed: {f}")
+
+        await asyncio.to_thread(_remove_old)
 
     def should_trigger_now(self, push_time: str) -> bool:
         """Check if current time matches push_time. Useful for testing."""
         now = datetime.now()
         return now.strftime("%H:%M") == push_time
+
+
+def _(text: str) -> str:
+    """Placeholder for i18n — returns text as-is."""
+    return text

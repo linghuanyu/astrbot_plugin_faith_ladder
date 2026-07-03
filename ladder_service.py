@@ -2,7 +2,7 @@
 Ladder service - core business logic for score management.
 """
 
-from typing import Optional
+from typing import Optional, List
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_FAITHS
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.message_formatter import (
@@ -28,6 +28,21 @@ class LadderService:
         """Get formatted pilgrimage leaderboard text."""
         players = await self.db.get_top_players_by_pilgrimage(group_id, limit)
         return format_pilgrimage_leaderboard(players, limit)
+
+    async def get_leaderboard_players(self, group_id: str, limit: int = 10) -> List[Player]:
+        """Get top players for ladder leaderboard (for image rendering)."""
+        return await self.db.get_top_players(group_id, limit)
+
+    async def get_pilgrimage_leaderboard_players(self, group_id: str, limit: int = 10) -> List[Player]:
+        """Get top players for pilgrimage leaderboard (for image rendering)."""
+        return await self.db.get_top_players_by_pilgrimage(group_id, limit)
+
+    async def get_effective_output_mode(self, group_id: str, global_default: str = "text") -> str:
+        """Get effective output mode for a group.
+        Checks DB for per-group override, falls back to global default.
+        """
+        db_mode = await self.db.get_group_output_mode(group_id)
+        return db_mode if db_mode in ("text", "image") else global_default
 
     async def get_player_card_text(self, group_id: str, player_id: str) -> Optional[str]:
         """Get formatted player card text. Returns None if player not found."""
@@ -119,6 +134,7 @@ class LadderService:
         """
         Register a new player with class, faith, and initial scores.
         Returns (success, message).
+        All 3 DB operations are committed atomically.
         """
         # Validate class
         if not Player.validate_class(class_name):
@@ -133,7 +149,7 @@ class LadderService:
         if existing:
             return False, f"玩家 {player_name} 已存在，无法重复录入。"
 
-        # Create player with specified scores
+        # Create player with specified scores (atomic: 3 operations in one transaction)
         player_id = f"name:{player_name}"
         await self.db.upsert_player(
             group_id, player_id, player_name,
@@ -149,6 +165,9 @@ class LadderService:
             group_id, player_id, 0, 0,
             operator_id, f"录入玩家: {player_name}"
         )
+
+        # Commit all 3 operations atomically
+        await self.db._db.commit()
 
         return True, (
             f"玩家录入成功!\n"

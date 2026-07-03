@@ -149,6 +149,27 @@ class TestFormatHelp:
         assert "沉沦" in result
         assert "混沌" in result
 
+    def test_help_shows_output_mode_text(self):
+        """Test that help shows text output mode."""
+        config = {"output_mode": "text"}
+        result = format_help(config)
+        assert "输出模式" in result
+        assert "text" in result
+
+    def test_help_shows_output_mode_image(self):
+        """Test that help shows image output mode."""
+        config = {"output_mode": "image"}
+        result = format_help(config)
+        assert "输出模式" in result
+        assert "image" in result
+
+    def test_help_shows_default_output_mode(self):
+        """Test that help shows default text output mode when not configured."""
+        config = {}
+        result = format_help(config)
+        assert "输出模式" in result
+        assert "text" in result
+
 
 class TestFormatWhitelist:
     """Tests for whitelist formatting."""

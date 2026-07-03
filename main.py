@@ -24,6 +24,7 @@ from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS
+from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer
 
 
 @register(
@@ -42,12 +43,19 @@ class FaithLadderPlugin(Star):
         self.db_manager = DatabaseManager(self.data_dir)
         self.ladder_service = LadderService(self.db_manager)
         self.cooldown_manager = CooldownManager()
+        self.image_renderer = ImageRenderer(self)
 
         try:
-            self.permission_service = PermissionService(self.db_manager, dict(self.config))
+            self.permission_service = PermissionService(
+                self.db_manager,
+                config_getter=lambda: dict(self.config)
+            )
         except TypeError:
-            logger.warning("PermissionService does not accept config param, using fallback")
-            self.permission_service = PermissionService(self.db_manager)
+            logger.warning("PermissionService does not accept config_getter param, using fallback")
+            try:
+                self.permission_service = PermissionService(self.db_manager, dict(self.config))
+            except TypeError:
+                self.permission_service = PermissionService(self.db_manager)
 
         self._scheduler = None
 
@@ -75,20 +83,40 @@ class FaithLadderPlugin(Star):
         await self.db_manager.initialize()
         from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
 
-        async def send_to_group(group_id: str, text: str):
+        async def send_to_group(group_id: str, content):
+            """Send content to group. Content can be:
+            - str: plain text
+            - tuple ('image', bytes): image from bytes
+            """
             try:
                 umo = f"group:{group_id}"
-                from astrbot.api.message_components import Plain
-                await self.context.send_message(umo, [Plain(text=text)])
+                if isinstance(content, tuple) and len(content) == 2 and content[0] == "image":
+                    from astrbot.api.message_components import Image
+                    await self.context.send_message(umo, [Image.fromBytes(content[1])])
+                else:
+                    from astrbot.api.message_components import Plain
+                    text = content if isinstance(content, str) else str(content)
+                    await self.context.send_message(umo, [Plain(text=text)])
             except Exception as e:
                 logger.error(f"Failed to send to group {group_id}: {e}")
+
+        async def get_output_mode(group_id: str) -> str:
+            """Get effective output mode for a group from DB."""
+            mode = await self.db_manager.get_group_output_mode(group_id)
+            return mode if mode in ("text", "image") else self.config.get("output_mode", "text")
 
         self._scheduler = SchedulerService(
             data_dir=self.data_dir,
             get_leaderboard_text=self.ladder_service.get_leaderboard_text,
+            get_pilgrimage_text=self.ladder_service.get_pilgrimage_leaderboard_text,
+            get_leaderboard_players=self.ladder_service.get_leaderboard_players,
+            get_pilgrimage_players=self.ladder_service.get_pilgrimage_leaderboard_players,
+            image_renderer=self.image_renderer,
+            get_output_mode=get_output_mode,
             get_config=lambda: dict(self.config),
             send_to_group=send_to_group,
             get_active_groups=self.db_manager.get_active_groups,
+            purge_score_history=self.db_manager.purge_old_score_history,
         )
         await self._scheduler.start()
         logger.info("FaithLadder plugin initialized")
@@ -126,10 +154,33 @@ class FaithLadderPlugin(Star):
             pass
         return False
 
-    async def _reply(self, event: AstrMessageEvent, text: str):
-        """Send a fixed text reply via AstrBot event result."""
-        # This is a placeholder - handlers use yield event.plain_result() directly
-        pass
+    async def _render_and_send(
+        self,
+        event: AstrMessageEvent,
+        group_id: str,
+        render_func,
+        get_text_func,
+        limit: int
+    ):
+        """Render image and send, with fallback to text on failure."""
+        players = await render_func(group_id, limit)
+        if not players:
+            yield event.plain_result("暂无排名数据。")
+            return
+
+        # Try image rendering (returns bytes)
+        if render_func == self.ladder_service.get_leaderboard_players:
+            image_bytes = await self.image_renderer.render_leaderboard_image(players, limit)
+        else:
+            image_bytes = await self.image_renderer.render_pilgrimage_image(players, limit)
+
+        if image_bytes:
+            from astrbot.api.message_components import Image
+            yield event.chain_result([Image.fromBytes(image_bytes)])
+        else:
+            # Fallback to text
+            text = await get_text_func(group_id, limit)
+            yield event.plain_result(text + "\n[图片渲染失败，已降级为文本]")
 
     # === 排行榜 ===
 
@@ -155,8 +206,21 @@ class FaithLadderPlugin(Star):
 
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
-        text = await self.ladder_service.get_leaderboard_text(group_id, limit)
-        yield event.plain_result(text)
+        output_mode = await self.ladder_service.get_effective_output_mode(
+            group_id, self.config.get("output_mode", "text")
+        )
+
+        if output_mode == "image":
+            async for result in self._render_and_send(
+                event, group_id,
+                self.ladder_service.get_leaderboard_players,
+                self.ladder_service.get_leaderboard_text,
+                limit
+            ):
+                yield result
+        else:
+            text = await self.ladder_service.get_leaderboard_text(group_id, limit)
+            yield event.plain_result(text)
 
     # === 觐见榜 ===
 
@@ -182,8 +246,54 @@ class FaithLadderPlugin(Star):
 
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
-        text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
-        yield event.plain_result(text)
+        output_mode = await self.ladder_service.get_effective_output_mode(
+            group_id, self.config.get("output_mode", "text")
+        )
+
+        if output_mode == "image":
+            async for result in self._render_and_send(
+                event, group_id,
+                self.ladder_service.get_pilgrimage_leaderboard_players,
+                self.ladder_service.get_pilgrimage_leaderboard_text,
+                limit
+            ):
+                yield result
+        else:
+            text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
+            yield event.plain_result(text)
+
+    # === 输出模式切换 ===
+
+    @filter.command("输出模式", alias={"outputmode", "模式切换"})
+    async def cmd_output_mode(self, event: AstrMessageEvent):
+        """切换输出模式（仅管理员）。格式: 输出模式 <text|image>"""
+        if not self._is_plugin_admin(event):
+            yield event.plain_result("权限不足：仅管理员可切换输出模式。")
+            return
+
+        group_id = self._get_group_id(event)
+
+        # Get argument
+        args = self._get_args(event, "输出模式")
+        if not args:
+            args = self._get_args(event, "outputmode") or self._get_args(event, "模式切换")
+
+        if not args or args not in ("text", "image"):
+            current_mode = await self.ladder_service.get_effective_output_mode(
+                group_id, self.config.get("output_mode", "text")
+            )
+            yield event.plain_result(
+                f"当前群输出模式: {current_mode}\n"
+                f"全局默认模式: {self.config.get('output_mode', 'text')}\n\n"
+                f"用法: 输出模式 <text|image>\n"
+                f"  text  - 纯文本输出\n"
+                f"  image - 图片输出"
+            )
+            return
+
+        # Store per-group mode in DB
+        await self.db_manager.set_group_output_mode(group_id, args)
+        yield event.plain_result(f"本群输出模式已切换为: {args}")
 
     # === 查询玩家 ===
 
@@ -462,7 +572,6 @@ class FaithLadderPlugin(Star):
             yield event.plain_result( "权限不足: 仅管理员可管理白名单。")
             return
 
-        group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
         args = self._get_args(event, "白名单")
         if not args:
