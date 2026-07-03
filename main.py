@@ -381,6 +381,52 @@ class FaithLadderPlugin(Star):
         )
         yield event.plain_result( message)
 
+    # === 批量录入积分 ===
+
+    @filter.command("批量录入", alias={"batch", "bl"})
+    async def cmd_batch_add_score(self, event: AstrMessageEvent):
+        """批量录入积分。格式: 批量录入 后粘贴结算文本"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            return
+
+        # Extract text after command name
+        args = self._get_args(event, "批量录入")
+        if not args:
+            args = self._get_args(event, "batch") or self._get_args(event, "bl")
+
+        if not args or not args.strip():
+            yield event.plain_result(
+                "用法: 批量录入 后粘贴结算文本\n"
+                "示例: 批量录入 【玩家：XXX ...】【登神之路+16】【觐见之梯+2】..."
+            )
+            return
+
+        # Parse the text
+        parsed_list, parse_err = self.ladder_service.parse_batch_scores(args.strip())
+        if parse_err:
+            yield event.plain_result(f"解析失败: {parse_err}")
+            return
+
+        # Execute batch update
+        success_count, success_details, skipped = await self.ladder_service.batch_add_scores(
+            group_id, parsed_list, user_id
+        )
+
+        # Build reply
+        reply_parts = [f"批量录入完成: 成功 {success_count} 人"]
+        if success_details:
+            reply_parts.append("\n".join(success_details))
+        if skipped:
+            reply_parts.append(f"\n以下玩家不存在，已跳过: {', '.join(skipped)}")
+
+        yield event.plain_result("\n".join(reply_parts))
+
     # === 录入玩家 ===
 
     @filter.command("录入玩家", alias={"register", "添加玩家"})

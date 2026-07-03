@@ -106,6 +106,7 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[积分管理] (白名单权限)\n"
         f"{cmd_add} <玩家名> <天梯分变化> <觐见梯变化>\n"
+        f"批量录入 - 粘贴结算文本批量录入积分\n"
         f"\n"
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"
