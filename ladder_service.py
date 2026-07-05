@@ -195,21 +195,29 @@ class LadderService:
         parts = re.split(r'玩家[：:]', text)
 
         for part in parts[1:]:  # 跳过第一段（"玩家："之前的内容）
-            # 提取玩家名：从开头到第一个空白字符或 】
-            name_match = re.match(r'([^\s】]+)', part)
+            # 提取玩家名：从开头到第一个空白字符、】 或 ，
+            name_match = re.match(r'([^\s】，,：:]+)', part)
             if not name_match:
                 continue
             name = name_match.group(1)
 
-            # 提取天梯积分（兼容 "登神之路" / "登神指路"）
-            ladder_match = re.search(r'登神[之指]路\+\s*(\d+)', part)
-            ladder_delta = int(ladder_match.group(1)) if ladder_match else 0
+            # 提取天梯积分（兼容 "登神之路" / "登神指路"，支持 +/-）
+            ladder_match = re.search(r'登神[之指]路([+-])\s*(\d+)', part)
+            if ladder_match:
+                sign = 1 if ladder_match.group(1) == '+' else -1
+                ladder_delta = sign * int(ladder_match.group(2))
+            else:
+                ladder_delta = 0
 
-            # 提取觐见之梯分数
-            pilgrimage_match = re.search(r'觐见之梯\+\s*(\d+)', part)
-            pilgrimage_delta = int(pilgrimage_match.group(1)) if pilgrimage_match else 0
+            # 提取觐见之梯分数（支持 +/-）
+            pilgrimage_match = re.search(r'觐见之梯([+-])\s*(\d+)', part)
+            if pilgrimage_match:
+                sign = 1 if pilgrimage_match.group(1) == '+' else -1
+                pilgrimage_delta = sign * int(pilgrimage_match.group(2))
+            else:
+                pilgrimage_delta = 0
 
-            if ladder_delta > 0 or pilgrimage_delta > 0:
+            if ladder_delta != 0 or pilgrimage_delta != 0:
                 results.append({
                     "name": name,
                     "ladder_delta": ladder_delta,
@@ -254,8 +262,10 @@ class LadderService:
             )
             if updated:
                 success_count += 1
+                ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
+                pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
                 success_details.append(
-                    f"  {name}: 天梯积分+{ladder_delta}, 觐见之梯+{pilgrimage_delta}"
+                    f"  {name}: 天梯积分{ladder_str}, 觐见之梯{pilgrimage_str}"
                 )
 
         return success_count, success_details, skipped

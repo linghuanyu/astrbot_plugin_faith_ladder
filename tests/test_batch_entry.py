@@ -107,6 +107,41 @@ class TestBatchScoreParsing:
         assert results[0]["ladder_delta"] == 10
         assert results[0]["pilgrimage_delta"] == 3
 
+    def test_parse_negative_ladder_score(self, service):
+        """Test parsing negative ladder score (e.g., 登神之路-3)."""
+        text = (
+            "【玩家：幾點，表现评分：C】\n"
+            "【获得道具：无】\n"
+            "【登神之路-3】\n"
+            "【觐见之梯+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 1
+        assert results[0]["name"] == "幾點"
+        assert results[0]["ladder_delta"] == -3
+        assert results[0]["pilgrimage_delta"] == 1
+
+    def test_parse_negative_both_scores(self, service):
+        """Test parsing both negative scores."""
+        text = "【玩家：Test】【登神之路-10】【觐见之梯-5】"
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert results[0]["ladder_delta"] == -10
+        assert results[0]["pilgrimage_delta"] == -5
+
+    def test_parse_mixed_positive_negative(self, service):
+        """Test mixed positive and negative across players."""
+        text = (
+            "【玩家：Alice】【登神之路+16】【觐见之梯+2】\n"
+            "【玩家：Bob】【登神之路-3】【觐见之梯+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 2
+        assert results[0]["ladder_delta"] == 16
+        assert results[1]["ladder_delta"] == -3
+
 
 class TestBatchScoreDB:
     """Integration tests for batch_add_scores() with real DB."""
