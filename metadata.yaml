@@ -1,6 +1,6 @@
 name: astrbot_plugin_faith_ladder
 display_name: "信仰游戏天梯排行榜"
 desc: "一个支持双积分同时展示的群聊排名插件，集成职业信仰体系，支持图片输出、批量录入、群级设置，适用于社群活动积分管理。仅支持群聊使用。"
-version: v1.6.0
+version: v1.6.1
 author: custom
 repo: "https://github.com/linghuanyu/astrbot_plugin_faith_ladder"

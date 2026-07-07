@@ -82,7 +82,7 @@ class LadderService:
         # Check player exists (do NOT auto-create)
         existing = await self.db.get_player(group_id, target_player_id)
         if not existing:
-            return False, f"未找到玩家: {target_player_name}"
+            return False, f"{target_player_name}不存在这个宇宙"
 
         # Update scores
         updated = await self.db.update_scores(
