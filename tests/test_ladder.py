@@ -109,12 +109,10 @@ class TestLadderService:
 
     async def test_set_class_auto_creates_player(self, db_manager):
         """Test that set_class creates player if not exists."""
+    async def test_set_class_nonexistent_player(self, db_manager):
+        """Test setting class on non-existent player returns failure (no auto-create)."""
         service = LadderService(db_manager)
 
         success, msg = await service.set_class("g1", "u1", "NewPlayer", "战士", "虚无")
-        assert success is True
-
-        player = await db_manager.get_player("g1", "u1")
-        assert player is not None
-        assert player.class_ == "战士"
-        assert player.faith == "虚无"
+        assert success is False
+        assert "不存在" in msg

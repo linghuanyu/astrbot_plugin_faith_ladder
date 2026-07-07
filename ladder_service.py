@@ -120,8 +120,10 @@ class LadderService:
         if not Player.validate_faith(faith_name):
             return False, f"无效信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}"
 
-        # Ensure player exists
-        await self.db.upsert_player(group_id, player_id, player_name)
+        # Check player exists (do NOT auto-create)
+        existing = await self.db.get_player(group_id, player_id)
+        if not existing:
+            return False, f"{player_name}不存在这个宇宙"
 
         # Set class and faith
         updated = await self.db.set_player_class(group_id, player_id, class_name, faith_name)
