@@ -158,6 +158,7 @@ class FaithLadderPlugin(Star):
         self,
         event: AstrMessageEvent,
         group_id: str,
+        is_ladder: bool,
         render_func,
         get_text_func,
         limit: int
@@ -168,11 +169,18 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("暂无排名数据。")
             return
 
+        image_format = self.config.get("image_format", "PNG")
+        image_quality = self.config.get("image_quality", 90)
+
         # Try image rendering (returns bytes)
-        if render_func == self.ladder_service.get_leaderboard_players:
-            image_bytes = await self.image_renderer.render_leaderboard_image(players, limit)
+        if is_ladder:
+            image_bytes = await self.image_renderer.render_leaderboard_image(
+                players, limit, image_format=image_format, quality=image_quality
+            )
         else:
-            image_bytes = await self.image_renderer.render_pilgrimage_image(players, limit)
+            image_bytes = await self.image_renderer.render_pilgrimage_image(
+                players, limit, image_format=image_format, quality=image_quality
+            )
 
         if image_bytes:
             from astrbot.api.message_components import Image
@@ -213,9 +221,10 @@ class FaithLadderPlugin(Star):
         if output_mode == "image":
             async for result in self._render_and_send(
                 event, group_id,
-                self.ladder_service.get_leaderboard_players,
-                self.ladder_service.get_leaderboard_text,
-                limit
+                is_ladder=True,
+                render_func=self.ladder_service.get_leaderboard_players,
+                get_text_func=self.ladder_service.get_leaderboard_text,
+                limit=limit
             ):
                 yield result
         else:
@@ -253,9 +262,10 @@ class FaithLadderPlugin(Star):
         if output_mode == "image":
             async for result in self._render_and_send(
                 event, group_id,
-                self.ladder_service.get_pilgrimage_leaderboard_players,
-                self.ladder_service.get_pilgrimage_leaderboard_text,
-                limit
+                is_ladder=False,
+                render_func=self.ladder_service.get_pilgrimage_leaderboard_players,
+                get_text_func=self.ladder_service.get_pilgrimage_leaderboard_text,
+                limit=limit
             ):
                 yield result
         else:
@@ -311,20 +321,20 @@ class FaithLadderPlugin(Star):
                     break
 
         if not args.strip():
-            yield event.plain_result( f"用法: 查询 <玩家名>")
+            yield event.plain_result(f"用法: 查询 <玩家名>")
             return
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
         if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
-            yield event.plain_result( f"查询冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(f"查询冷却中，请 {remaining:.0f} 秒后再试。")
             return
         self.cooldown_manager.set_cooldown(user_id)
 
         target_name = args.strip()
         text = await self.ladder_service.get_player_card_by_name(group_id, target_name)
         if not text:
-            yield event.plain_result( f" {target_name}不属于这个宇宙")
+            yield event.plain_result(f" {target_name}不属于这个宇宙")
             return
         yield event.plain_result( text)
 
@@ -339,7 +349,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "凡人也胆敢染指神明的权柄？")
+            yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
         args = self._get_args(event, "录入积分")
@@ -358,14 +368,14 @@ class FaithLadderPlugin(Star):
 
         max_name_len = self.config.get("player_name_max_length", 20)
         if len(target_name) > max_name_len:
-            yield event.plain_result( f"玩家名过长，最长 {max_name_len} 个字符。")
+            yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
             return
 
         try:
             ladder_delta = int(ladder_str)
             pilgrimage_delta = int(pilgrimage_str)
         except ValueError:
-            yield event.plain_result( "分数必须是整数。示例: 100 50 或 -20 10")
+            yield event.plain_result("分数必须是整数。示例: 100 50 或 -20 10")
             return
 
         allow_negative = self.config.get("allow_negative_scores", True)
@@ -394,6 +404,14 @@ class FaithLadderPlugin(Star):
         if not has_permission and not is_admin:
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
+
+        # Cooldown check (shared with 天梯榜)
+        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+            yield event.plain_result(f"批量录入冷却中，请 {remaining:.0f} 秒后再试。")
+            return
+        self.cooldown_manager.set_cooldown(user_id)
 
         # Extract text after command name
         args = self._get_args(event, "批量录入")
@@ -438,7 +456,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "凡人也胆敢染指神明的权柄？")
+            yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
         args = self._get_args(event, "录入玩家")
@@ -459,7 +477,7 @@ class FaithLadderPlugin(Star):
 
         max_name_len = self.config.get("player_name_max_length", 20)
         if len(player_name) > max_name_len:
-            yield event.plain_result( f"玩家名过长，最长 {max_name_len} 个字符。")
+            yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
             return
 
         try:
@@ -485,7 +503,7 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result( "凡人也胆敢染指神明的权柄？")
+            yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
         args = self._get_args(event, "设置职业")
@@ -504,7 +522,7 @@ class FaithLadderPlugin(Star):
         target_name, class_name, faith_name = parts
         target_player = await self.db_manager.get_player_by_name(group_id, target_name)
         if not target_player:
-            yield event.plain_result( f" {target_name}不属于这个宇宙")
+            yield event.plain_result(f" {target_name}不属于这个宇宙")
             return
 
         success, message = await self.ladder_service.set_class(
@@ -642,7 +660,7 @@ class FaithLadderPlugin(Star):
             _, message = await self.permission_service.remove_from_whitelist(parts[1], parts[2])
             yield event.plain_result( message)
         else:
-            yield event.plain_result( f"用法: 白名单 <add/remove/list> [类型] [ID]")
+            yield event.plain_result(f"用法: 白名单 <add/remove/list> [类型] [ID]")
 
     # === 帮助 ===
 

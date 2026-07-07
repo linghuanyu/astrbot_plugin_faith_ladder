@@ -465,3 +465,8 @@ class DatabaseManager:
         if self._db:
             await self._db.close()
             self._db = None
+
+    async def commit(self):
+        """Commit the current transaction. Exposed for multi-step atomic operations."""
+        if self._db:
+            await self._db.commit()

@@ -44,6 +44,11 @@
     "type": "string",
     "default": "天梯榜帮助"
   },
+  "cmd_batch_add_score": {
+    "description": "批量录入指令名",
+    "type": "string",
+    "default": "批量录入"
+  },
   "whitelist": {
     "description": "积分录入白名单（可在 WebUI 直接配置，无需指令操作）",
     "type": "list",

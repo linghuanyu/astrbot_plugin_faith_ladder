@@ -168,7 +168,7 @@ class LadderService:
         )
 
         # Commit all 3 operations atomically
-        await self.db._db.commit()
+        await self.db.commit()
 
         return True, (
             f"玩家录入成功!\n"
@@ -195,11 +195,19 @@ class LadderService:
         parts = re.split(r'玩家[：:]', text)
 
         for part in parts[1:]:  # 跳过第一段（"玩家："之前的内容）
-            # 提取玩家名：从开头到第一个空白字符、】 或 ，
-            name_match = re.match(r'([^\s】，,：:]+)', part)
-            if not name_match:
+            # 提取玩家名：
+            # - 如果以 【 开头，提取到对应的 】 为止（支持带括号的名字如【吃鱼】）
+            # - 否则取第一个空白/分隔符之前的内容
+            stripped = part.lstrip()
+            if stripped.startswith('【'):
+                bracket_match = re.match(r'【(.+?)】', stripped)
+                name = bracket_match.group(1) if bracket_match else None
+            else:
+                name_match = re.match(r'([^\s】，,：:]+)', stripped)
+                name = name_match.group(1) if name_match else None
+
+            if not name:
                 continue
-            name = name_match.group(1)
 
             # 提取天梯积分（兼容 "登神之路" / "登神指路"，支持 +/-）
             ladder_match = re.search(r'登神[之指]路([+-])\s*(\d+)', part)

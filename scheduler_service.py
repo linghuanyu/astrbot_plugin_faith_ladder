@@ -158,7 +158,7 @@ class SchedulerService:
                 header = "=== 每日排行榜推送 ==="
 
                 if output_mode == "image" and self._image_renderer:
-                    await self._push_image_mode(group_id, header, limit, config)
+                    await self._push_image_mode(group_id, header, limit)
                 else:
                     await self._push_text_mode(group_id, header, limit)
 
@@ -169,7 +169,7 @@ class SchedulerService:
         """Send text-mode leaderboards to a group."""
         # Ladder leaderboard
         ladder_text = await self._get_leaderboard_text(group_id, limit)
-        await self._send_to_group(group_id, f"{header}\n\n{_('⚔️ 天梯排行榜')}")
+        await self._send_to_group(group_id, f"{header}\n\n⚔️ 天梯排行榜")
         await self._send_to_group(group_id, ladder_text)
 
         # Pilgrimage leaderboard (if available)
@@ -177,7 +177,7 @@ class SchedulerService:
             pilgrimage_text = await self._get_pilgrimage_text(group_id, limit)
             await self._send_to_group(group_id, pilgrimage_text)
 
-    async def _push_image_mode(self, group_id: str, header: str, limit: int, config: dict):
+    async def _push_image_mode(self, group_id: str, header: str, limit: int):
         """Send image-mode leaderboards to a group, falling back to text on failure."""
         rendered_any = False
 
@@ -265,8 +265,3 @@ class SchedulerService:
         """Check if current time matches push_time. Useful for testing."""
         now = datetime.now()
         return now.strftime("%H:%M") == push_time
-
-
-def _(text: str) -> str:
-    """Placeholder for i18n — returns text as-is."""
-    return text

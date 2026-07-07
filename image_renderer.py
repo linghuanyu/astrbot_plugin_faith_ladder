@@ -79,6 +79,17 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+# Font cache: size -> Font object
+_font_cache: dict = {}
+
+
+def _get_font(size: int) -> ImageFont.FreeTypeFont:
+    """Get a cached font instance for the given size."""
+    if size not in _font_cache:
+        _font_cache[size] = _load_font(size)
+    return _font_cache[size]
+
+
 # --- Color Palette ---
 
 class Colors:
@@ -126,11 +137,9 @@ BADGE_SPACING = 8
 class ImageRenderer:
     """Renders leaderboard data to images using PIL/Pillow (local, no remote service)."""
 
-    def __init__(self, plugin_instance=None, bg_image_path: str = None):
+    def __init__(self, plugin_instance=None):
         self.plugin = plugin_instance
-        self.template_dir = Path(__file__).parent / "templates"
-        self._bg_image_path = bg_image_path
-        self._bg_image_cache = None  # Cache loaded background image
+        self._font_cache: dict = {}
 
     def _draw_gradient_bg(self, draw: ImageDraw.Draw, width: int, height: int):
         """Draw a vertical gradient background."""
@@ -218,7 +227,7 @@ class ImageRenderer:
         draw.rectangle((x_start, y + 4, x_start + 4, y + ROW_HEIGHT - 4), fill=border_color)
 
         # Rank number
-        rank_font = _load_font(28)
+        rank_font = _get_font(28)
         rank_text = str(rank)
         rank_bbox = draw.textbbox((0, 0), rank_text, font=rank_font)
         rank_tw = rank_bbox[2] - rank_bbox[0]
@@ -228,8 +237,8 @@ class ImageRenderer:
 
         # Player info area
         info_x = x_start + RANK_WIDTH + 10
-        name_font = _load_font(20)
-        badge_font = _load_font(13)
+        name_font = _get_font(20)
+        badge_font = _get_font(13)
 
         # Player name
         draw.text((info_x, y + 10), player.get("player_name", "?"),
@@ -251,8 +260,8 @@ class ImageRenderer:
                          Colors.BADGE_TEXT_FAITH, badge_font)
 
         # Scores (right-aligned)
-        score_font = _load_font(14)
-        score_value_font = _load_font(17)
+        score_font = _get_font(14)
+        score_value_font = _get_font(17)
         score_x = x_start + row_w - 20
         score_y = y + 12
 
@@ -276,33 +285,37 @@ class ImageRenderer:
         self,
         players: List[Player],
         limit: int = 10,
-        image_format: str = "jpeg",
+        image_format: str = "PNG",
         quality: int = 90
     ) -> Optional[bytes]:
-        """Render ladder leaderboard as image bytes (PNG)."""
+        """Render ladder leaderboard as image bytes."""
         return await self._render(
-            players, limit, is_ladder=True
+            players, limit, is_ladder=True,
+            image_format=image_format, quality=quality
         )
 
     async def render_pilgrimage_image(
         self,
         players: List[Player],
         limit: int = 10,
-        image_format: str = "jpeg",
+        image_format: str = "PNG",
         quality: int = 90
     ) -> Optional[bytes]:
-        """Render pilgrimage leaderboard as image bytes (PNG)."""
+        """Render pilgrimage leaderboard as image bytes."""
         return await self._render(
-            players, limit, is_ladder=False
+            players, limit, is_ladder=False,
+            image_format=image_format, quality=quality
         )
 
     async def _render(
         self,
         players: List[Player],
         limit: int,
-        is_ladder: bool = True
+        is_ladder: bool = True,
+        image_format: str = "PNG",
+        quality: int = 90
     ) -> Optional[bytes]:
-        """Internal: render leaderboard to PNG bytes using PIL."""
+        """Internal: render leaderboard to image bytes using PIL."""
         try:
             from dataclasses import asdict
             displayed = min(len(players), limit)
@@ -325,7 +338,7 @@ class ImageRenderer:
             self._draw_gradient_bg(draw, IMG_WIDTH, total_height)
 
             # Header
-            header_font = _load_font(28)
+            header_font = _get_font(28)
             if is_ladder:
                 header_text = "⚔ 天梯排行榜 ⚔"
                 header_color = Colors.HEADER_LADDER
@@ -359,7 +372,7 @@ class ImageRenderer:
                     row_y += ROW_HEIGHT + ROW_SPACING
             else:
                 # Empty state
-                empty_font = _load_font(18)
+                empty_font = _get_font(18)
                 empty_text = "暂无排名数据"
                 empty_bbox = draw.textbbox((0, 0), empty_text, font=empty_font)
                 empty_x = (IMG_WIDTH - (empty_bbox[2] - empty_bbox[0])) // 2
@@ -367,7 +380,7 @@ class ImageRenderer:
                 draw.text((empty_x, empty_y), empty_text, font=empty_font, fill=Colors.TEXT_DIM)
 
             # Footer
-            footer_font = _load_font(13)
+            footer_font = _get_font(13)
             footer_text = f"--- 显示前 {displayed} 名 ---"
             footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
             footer_tw = footer_bbox[2] - footer_bbox[0]
@@ -375,9 +388,13 @@ class ImageRenderer:
             footer_y = total_height - FOOTER_HEIGHT + (FOOTER_HEIGHT - (footer_bbox[3] - footer_bbox[1])) // 2
             draw.text((footer_x, footer_y), footer_text, font=footer_font, fill=Colors.TEXT_FOOTER)
 
-            # Convert to PNG bytes
+            # Convert to image bytes
             output = io.BytesIO()
-            img.convert("RGB").save(output, format="PNG", optimize=True)
+            fmt = image_format.upper()
+            if fmt in ("JPEG", "JPG"):
+                img.convert("RGB").save(output, format="JPEG", quality=quality, optimize=True)
+            else:
+                img.convert("RGB").save(output, format="PNG", optimize=True)
             return output.getvalue()
 
         except Exception as e:

@@ -73,6 +73,7 @@ def format_help(config: dict) -> str:
     cmd_pilgrimage = config.get("cmd_pilgrimage", "觐见榜")
     cmd_query = config.get("cmd_query", "查询")
     cmd_add = config.get("cmd_add_score", "录入积分")
+    cmd_batch = config.get("cmd_batch_add_score", "批量录入")
     cmd_register = config.get("cmd_register_player", "录入玩家")
     cmd_class = config.get("cmd_set_class", "设置职业")
     cmd_admin = config.get("cmd_admin", "天梯榜管理")
@@ -106,7 +107,7 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[积分管理] (白名单权限)\n"
         f"{cmd_add} <玩家名> <天梯分变化> <觐见梯变化>\n"
-        f"批量录入 - 粘贴结算文本批量录入积分\n"
+        f"{cmd_batch} - 粘贴结算文本批量录入积分\n"
         f"\n"
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"

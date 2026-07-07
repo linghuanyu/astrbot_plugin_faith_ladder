@@ -1,5 +1,18 @@
 # 更新日志
 
+## [1.6.0] - 2026-07-03
+
+### 修复
+- 图片配置 `image_format`/`image_quality` 现在实际生效（之前被忽略，永远输出 PNG）
+- 批量录入增加冷却时间检查，防止无限制刷入
+- `_render_and_send` 改用 `is_ladder` 参数代替函数指针比较
+- `register_player` 不再直接访问 DB 私有属性 `_db`，新增公开 `commit()` 方法
+- 帮助文本中"批量录入"改为使用配置变量，与其他命令一致
+- 删除 `image_renderer.py` 中未使用的 `template_dir`/`_bg_image_path`/`_bg_image_cache`
+- 添加字体缓存，避免每次渲染重复创建字体对象
+- 删除 `scheduler_service.py` 中无意义的 `_()` i18n 占位函数
+- 删除 `_push_image_mode` 未使用的 `config` 参数
+
 ## [1.5.0] - 2026-07-03
 
 ### 新增

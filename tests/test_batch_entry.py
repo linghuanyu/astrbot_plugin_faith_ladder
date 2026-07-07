@@ -142,6 +142,30 @@ class TestBatchScoreParsing:
         assert results[0]["ladder_delta"] == 16
         assert results[1]["ladder_delta"] == -3
 
+    def test_parse_bracket_name(self, service):
+        """Test player name wrapped in brackets like 【吃鱼】."""
+        text = "【玩家：【吃鱼】表现评分：A+】【登神之路+16】【觐见之梯+2】"
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 1
+        assert results[0]["name"] == "吃鱼"
+        assert results[0]["ladder_delta"] == 16
+        assert results[0]["pilgrimage_delta"] == 2
+
+    def test_parse_mixed_bracket_and_plain_names(self, service):
+        """Test mix of bracket names and plain names."""
+        text = (
+            "【玩家：【吃鱼】表现评分：S】【登神之路+18】【觐见之梯+2】\n"
+            "【玩家：Alice 表现评分：A】【登神之路+10】【觐见之梯+1】\n"
+            "【玩家：幾點，表现评分：C】【登神之路-3】【觐见之梯+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 3
+        assert results[0]["name"] == "吃鱼"
+        assert results[1]["name"] == "Alice"
+        assert results[2]["name"] == "幾點"
+
 
 class TestBatchScoreDB:
     """Integration tests for batch_add_scores() with real DB."""
