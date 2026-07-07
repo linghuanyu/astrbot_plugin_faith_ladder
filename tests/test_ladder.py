@@ -60,12 +60,11 @@ class TestLadderService:
         assert "Alice" in text
 
     async def test_add_score_new_player(self, db_manager):
-        """Test adding score to a new player."""
+        """Test adding score to a non-existent player returns failure (no auto-create)."""
         service = LadderService(db_manager)
         success, msg = await service.add_score("g1", "u1", "Alice", 100, 50, "admin")
-        assert success is True
-        assert "Alice" in msg
-        assert "100" in msg or "+100" in msg
+        assert success is False
+        assert "未找到" in msg
 
     async def test_add_score_existing_player(self, db_manager):
         """Test adding score to an existing player."""

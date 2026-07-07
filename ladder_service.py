@@ -76,11 +76,13 @@ class LadderService:
         reason: str = "手动录入"
     ) -> tuple[bool, str]:
         """
-        Add scores to a player.
+        Add scores to a player. Player must already exist.
         Returns (success, message).
         """
-        # Ensure player exists
-        await self.db.upsert_player(group_id, target_player_id, target_player_name)
+        # Check player exists (do NOT auto-create)
+        existing = await self.db.get_player(group_id, target_player_id)
+        if not existing:
+            return False, f"未找到玩家: {target_player_name}"
 
         # Update scores
         updated = await self.db.update_scores(
