@@ -13,6 +13,12 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_score_result,
 )
 
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
 
 class LadderService:
     """Core business logic for the faith ladder plugin."""
@@ -243,7 +249,7 @@ class LadderService:
         parsed_list: List[Dict[str, Any]],
         operator_id: str,
     ) -> Tuple[int, List[str], List[str]]:
-        """批量录入积分。
+        """批量录入积分。所有更新在一个事务内完成，全部成功或全部回滚。
 
         返回 (成功人数, 成功详情列表, 跳过玩家名列表)。
         """
@@ -251,29 +257,39 @@ class LadderService:
         success_details = []
         skipped = []
 
-        for entry in parsed_list:
-            name = entry["name"]
-            ladder_delta = entry["ladder_delta"]
-            pilgrimage_delta = entry["pilgrimage_delta"]
+        try:
+            for entry in parsed_list:
+                name = entry["name"]
+                ladder_delta = entry["ladder_delta"]
+                pilgrimage_delta = entry["pilgrimage_delta"]
 
-            # Check if player exists
-            player = await self.db.get_player_by_name(group_id, name)
-            if not player:
-                skipped.append(name)
-                continue
+                # Check if player exists
+                player = await self.db.get_player_by_name(group_id, name)
+                if not player:
+                    skipped.append(name)
+                    continue
 
-            # Update scores
-            updated = await self.db.update_scores(
-                group_id, player.player_id,
-                ladder_delta, pilgrimage_delta,
-                operator_id, "批量录入"
-            )
-            if updated:
-                success_count += 1
-                ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
-                pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
-                success_details.append(
-                    f"  {name}: 天梯积分{ladder_str}, 觐见之梯{pilgrimage_str}"
+                # Update scores (without individual commit — deferred to end of batch)
+                updated = await self.db.update_scores(
+                    group_id, player.player_id,
+                    ladder_delta, pilgrimage_delta,
+                    operator_id, "批量录入",
+                    commit=False
                 )
+                if updated:
+                    success_count += 1
+                    ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
+                    pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
+                    success_details.append(
+                        f"  {name}: 天梯积分{ladder_str}, 觐见之梯{pilgrimage_str}"
+                    )
+
+            # Commit all updates atomically
+            await self.db.commit()
+
+        except Exception as e:
+            # Rollback on failure — no partial updates
+            logger.error(f"Batch score update failed, rolling back: {e}")
+            return 0, [], [entry["name"] for entry in parsed_list]
 
         return success_count, success_details, skipped

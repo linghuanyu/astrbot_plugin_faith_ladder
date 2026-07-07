@@ -207,9 +207,15 @@ class DatabaseManager:
     async def update_scores(
         self, group_id: str, player_id: str,
         ladder_delta: int, pilgrimage_delta: int,
-        operator_id: str, reason: str = ""
+        operator_id: str, reason: str = "",
+        commit: bool = True
     ) -> Optional[Player]:
-        """Update a player's scores and record history. Returns updated player or None if not found."""
+        """Update a player's scores and record history. Returns updated player or None if not found.
+
+        Args:
+            commit: If True (default), commits immediately. Set to False for batch operations
+                    that should be committed atomically by the caller.
+        """
         # Check player exists
         async with self._db.execute(
             "SELECT player_id FROM players WHERE player_id = ? AND group_id = ?",
@@ -230,7 +236,8 @@ class DatabaseManager:
             (player_id, group_id, ladder_delta, pilgrimage_delta, reason, operator_id)
         )
 
-        await self._db.commit()
+        if commit:
+            await self._db.commit()
 
         # Return updated player (same connection, no nested open)
         return await self.get_player(group_id, player_id)

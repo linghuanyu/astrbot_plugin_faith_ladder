@@ -108,7 +108,7 @@
   "query_cooldown_seconds": {
     "description": "查询指令冷却时间（秒）",
     "type": "int",
-    "default": 600
+    "default": 5
   },
   "ladder_cooldown_seconds": {
     "description": "天梯榜/觐见榜指令冷却时间（秒）",
