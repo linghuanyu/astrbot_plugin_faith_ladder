@@ -28,7 +28,7 @@ class TestLadderService:
         text = await service.get_leaderboard_text("g1", 10)
         assert "1. Bob" in text
         assert "2. Alice" in text
-        assert "天梯积分" in text
+        assert "登神之路" in text
         assert "觐见之梯" in text
 
     async def test_get_player_card(self, db_manager):
@@ -80,39 +80,27 @@ class TestLadderService:
         assert player.pilgrimage_score == 170  # 100 initial + 50 + 20
 
     async def test_set_class_valid(self, db_manager):
-        """Test setting valid class and faith."""
+        """Test setting valid class."""
         service = LadderService(db_manager)
         await db_manager.upsert_player("g1", "u1", "Alice")
 
-        success, msg = await service.set_class("g1", "u1", "Alice", "法师", "存在")
+        success, msg = await service.set_class("g1", "u1", "Alice", "法师")
         assert success is True
         assert "法师" in msg
-        assert "存在" in msg
 
     async def test_set_class_invalid_class(self, db_manager):
         """Test setting invalid class."""
         service = LadderService(db_manager)
         await db_manager.upsert_player("g1", "u1", "Alice")
 
-        success, msg = await service.set_class("g1", "u1", "Alice", "无效职业", "存在")
+        success, msg = await service.set_class("g1", "u1", "Alice", "无效职业")
         assert success is False
         assert "无效职业" in msg
 
-    async def test_set_class_invalid_faith(self, db_manager):
-        """Test setting invalid faith."""
-        service = LadderService(db_manager)
-        await db_manager.upsert_player("g1", "u1", "Alice")
-
-        success, msg = await service.set_class("g1", "u1", "Alice", "法师", "无效信仰")
-        assert success is False
-        assert "无效信仰" in msg
-
-    async def test_set_class_auto_creates_player(self, db_manager):
-        """Test that set_class creates player if not exists."""
     async def test_set_class_nonexistent_player(self, db_manager):
         """Test setting class on non-existent player returns failure (no auto-create)."""
         service = LadderService(db_manager)
 
-        success, msg = await service.set_class("g1", "u1", "NewPlayer", "战士", "虚无")
+        success, msg = await service.set_class("g1", "u1", "NewPlayer", "战士")
         assert success is False
         assert "不存在" in msg

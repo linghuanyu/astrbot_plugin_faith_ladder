@@ -6,22 +6,28 @@ from typing import List, Optional
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_FAITHS
 
 
+def _name_with_tag(player: Player) -> str:
+    """Return player name with (弃誓者) tag if applicable."""
+    tag = "(弃誓者)" if player.oathbreaker else ""
+    return f"{player.player_name}{tag}"
+
+
 def format_leaderboard(players: List[Player], limit: int = 10) -> str:
     """Format the leaderboard display."""
     if not players:
         return "暂无排名数据。"
 
-    lines = ["==天梯排行榜==", ""]
+    lines = ["==登神之路排行榜==", ""]
     displayed = min(len(players), limit)
 
     for rank, player in enumerate(players[:limit], 1):
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
         faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
         lines.append(
-            f"{rank}. {player.player_name} {class_str} {faith_str}"
+            f"{rank}. {_name_with_tag(player)} {class_str} {faith_str}"
         )
         lines.append(
-            f"   天梯积分: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}"
+            f"   登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}"
         )
 
     lines.append("")
@@ -41,10 +47,10 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
         faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
         lines.append(
-            f"{rank}. {player.player_name} {class_str} {faith_str}"
+            f"{rank}. {_name_with_tag(player)} {class_str} {faith_str}"
         )
         lines.append(
-            f"   觐见之梯: {player.pilgrimage_score} | 天梯积分: {player.ladder_score}"
+            f"   觐见之梯: {player.pilgrimage_score} | 登神之路: {player.ladder_score}"
         )
 
     lines.append("")
@@ -56,13 +62,14 @@ def format_player_card(player: Player) -> str:
     """Format a player's info card."""
     class_str = player.class_ if player.class_ else "未设定"
     faith_str = player.faith if player.faith else "未设定"
+    oathbreaker_str = "(弃誓者)" if player.oathbreaker else ""
 
     return (
         f"=== 玩家信息 ===\n"
-        f"姓名: {player.player_name}\n"
+        f"姓名: {player.player_name}{oathbreaker_str}\n"
         f"职业: {class_str}\n"
         f"信仰: {faith_str}\n"
-        f"天梯积分: {player.ladder_score}\n"
+        f"登神之路: {player.ladder_score}\n"
         f"觐见之梯: {player.pilgrimage_score}"
     )
 
@@ -91,30 +98,32 @@ def format_help(config: dict) -> str:
     faiths_str = "/".join(VALID_FAITHS)
 
     return (
-        f"=== 信仰游戏天梯排行榜 ===\n"
+        f"=== 信仰游戏排行榜 ===\n"
         f"\n"
         f"[查询]\n"
-        f"{cmd_query} <玩家名> - 查询玩家天梯分与觐见分（冷却 {query_cd}s）\n"
+        f"{cmd_query} <玩家名> - 查询玩家积分（冷却 {query_cd}s）\n"
         f"\n"
         f"[排行榜] (白名单权限)\n"
-        f"{cmd_sb} - 天梯排行榜（冷却 {ladder_cd}s）\n"
+        f"{cmd_sb} - 登神之路排行榜（冷却 {ladder_cd}s）\n"
         f"{cmd_pilgrimage} - 觐见之梯（冷却 {ladder_cd}s）\n"
         f"\n"
         f"[玩家管理] (白名单权限)\n"
-        f"{cmd_register} <姓名> <信仰> <职业> <天梯分> <觐见分> - 录入新玩家\n"
-        f"{cmd_class} <玩家名> <职业> <信仰> - 修改职业信仰\n"
+        f"{cmd_register} <姓名> <信仰> <职业> [登神之路分] [觐见分] - 录入新玩家\n"
+        f"{cmd_class} <玩家名> <职业> - 修改职业\n"
+        f"立誓 <玩家名> <信仰> - 设置信仰\n"
         f"  职业: {classes_str} | 信仰: {faiths_str}\n"
         f"\n"
         f"[积分管理] (白名单权限)\n"
-        f"{cmd_add} <玩家名> <天梯分变化> <觐见梯变化>\n"
+        f"{cmd_add} <玩家名> <登神之路分变化> <觐见梯变化>\n"
         f"{cmd_batch} - 粘贴结算文本批量录入积分\n"
+        f"弃誓 <玩家名> [新信仰] - 标记弃誓者\n"
         f"\n"
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"
-        f"{cmd_admin} reset/resetall/delete/rename/clear\n"
+        f"{cmd_admin} reset/resetall/delete/rename/clear/clearoath\n"
         f"输出模式 text/image - 切换输出模式（管理员，全局默认: {output_mode}）\n"
         f"\n"
-        f"推送: {push_info} | 初始积分: 天梯1000 觐见100\n"
+        f"推送: {push_info} | 初始积分: 登神之路1000 觐见100\n"
         f"{cmd_help} - 显示本帮助"
     )
 
@@ -171,6 +180,6 @@ def format_score_result(
     return (
         f"积分录入成功!\n"
         f"玩家: {player_name}\n"
-        f"天梯积分: {ladder_str} -> {new_ladder}\n"
+        f"登神之路: {ladder_str} -> {new_ladder}\n"
         f"觐见之梯: {pilgrimage_str} -> {new_pilgrimage}"
     )

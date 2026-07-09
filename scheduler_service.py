@@ -169,7 +169,7 @@ class SchedulerService:
         """Send text-mode leaderboards to a group."""
         # Ladder leaderboard
         ladder_text = await self._get_leaderboard_text(group_id, limit)
-        await self._send_to_group(group_id, f"{header}\n\n⚔️ 天梯排行榜")
+        await self._send_to_group(group_id, f"{header}\n\n⚔️ 登神之路")
         await self._send_to_group(group_id, ladder_text)
 
         # Pilgrimage leaderboard (if available)

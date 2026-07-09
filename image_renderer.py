@@ -241,7 +241,10 @@ class ImageRenderer:
         badge_font = _get_font(13)
 
         # Player name
-        draw.text((info_x, y + 10), player.get("player_name", "?"),
+        display_name = player.get("player_name", "?")
+        if player.get("oathbreaker"):
+            display_name += "(弃誓者)"
+        draw.text((info_x, y + 10), display_name,
                   font=name_font, fill=Colors.TEXT_WHITE)
 
         # Badges
@@ -340,7 +343,7 @@ class ImageRenderer:
             # Header
             header_font = _get_font(28)
             if is_ladder:
-                header_text = "⚔ 天梯排行榜 ⚔"
+                header_text = "⚔ 登神之路 ⚔"
                 header_color = Colors.HEADER_LADDER
             else:
                 header_text = "🙏 觐见之梯 🙏"
@@ -357,13 +360,13 @@ class ImageRenderer:
                 # Score labels depend on which leaderboard
                 if is_ladder:
                     score_labels = [
-                        ("天梯积分", "ladder_score", Colors.SCORE_LADDER),
+                        ("登神之路", "ladder_score", Colors.SCORE_LADDER),
                         ("觐见之梯", "pilgrimage_score", Colors.SCORE_PILGRIMAGE),
                     ]
                 else:
                     score_labels = [
                         ("觐见之梯", "pilgrimage_score", Colors.SCORE_PILGRIMAGE),
-                        ("天梯积分", "ladder_score", Colors.SCORE_LADDER),
+                        ("登神之路", "ladder_score", Colors.SCORE_LADDER),
                     ]
 
                 row_y = PADDING + HEADER_HEIGHT

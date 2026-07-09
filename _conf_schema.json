@@ -154,5 +154,55 @@
     "description": "积分历史记录保留天数（超过自动清理）",
     "type": "int",
     "default": 90
+  },
+  "init_ladder_score": {
+    "description": "录入玩家时默认登神之路分",
+    "type": "int",
+    "default": 1000
+  },
+  "init_pilgrimage_score": {
+    "description": "录入玩家时默认觐见分",
+    "type": "int",
+    "default": 100
+  },
+  "cmd_abandon_oath": {
+    "description": "弃誓指令名",
+    "type": "string",
+    "default": "弃誓"
+  },
+  "cmd_take_oath": {
+    "description": "立誓指令名",
+    "type": "string",
+    "default": "立誓"
+  },
+  "oath_text_虚无": {
+    "description": "虚无信仰弃誓文本",
+    "type": "string",
+    "default": "{name}背弃了虚无之道。万法归寂，誓约已碎。"
+  },
+  "oath_text_存在": {
+    "description": "存在信仰弃誓文本",
+    "type": "string",
+    "default": "{name}否认了存在之意。所信皆空，誓约已碎。"
+  },
+  "oath_text_文明": {
+    "description": "文明信仰弃誓文本",
+    "type": "string",
+    "default": "{name}舍弃了文明之光。秩序崩塌，誓约已碎。"
+  },
+  "oath_text_沉沦": {
+    "description": "沉沦信仰弃誓文本",
+    "type": "string",
+    "default": "{name}离开了沉沦之渊。深渊不再接纳，誓约已碎。"
+  },
+  "oath_text_混沌": {
+    "description": "混沌信仰弃誓文本",
+    "type": "string",
+    "default": "{name}背离了混沌之源。混乱不再眷顾，誓约已碎。"
+  },
+  "oath_text_生命": {
+    "description": "生命信仰弃誓文本",
+    "type": "string",
+    "default": "{name}抛弃了生命之根。生机断绝，誓约已碎。"
   }
 }

@@ -464,16 +464,22 @@ class FaithLadderPlugin(Star):
             args = self._get_args(event, "register") or self._get_args(event, "添加玩家")
 
         parts = args.split()
-        if len(parts) != 5:
+        if len(parts) not in (3, 5):
             yield event.plain_result(
-                f"用法: 录入玩家 <姓名> <信仰> <职业> <天梯分> <觐见分>\n"
+                f"用法: 录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]\n"
                 f"示例: 录入玩家 张三 文明 战士 1000 100\n"
+                f"      录入玩家 张三 文明 战士（使用默认分数）\n"
                 f"可选职业: {'/'.join(VALID_CLASSES)}\n"
                 f"可选信仰: {'/'.join(VALID_FAITHS)}"
             )
             return
 
-        player_name, faith_name, class_name, ladder_str, pilgrimage_str = parts
+        player_name, faith_name, class_name = parts[0], parts[1], parts[2]
+        if len(parts) == 5:
+            ladder_str, pilgrimage_str = parts[3], parts[4]
+        else:
+            ladder_str = str(self.config.get("init_ladder_score", 1000))
+            pilgrimage_str = str(self.config.get("init_pilgrimage_score", 100))
 
         max_name_len = self.config.get("player_name_max_length", 20)
         if len(player_name) > max_name_len:
@@ -493,11 +499,11 @@ class FaithLadderPlugin(Star):
         )
         yield event.plain_result( message)
 
-    # === 设置职业 ===
+    # === 设置职业（仅职业） ===
 
     @filter.command("设置职业", alias={"setclass", "改职业"})
     async def cmd_set_class(self, event: AstrMessageEvent):
-        """修改玩家职业信仰。格式: 设置职业 <玩家名> <职业> <信仰>"""
+        """修改玩家职业。格式: 设置职业 <玩家名> <职业>"""
         group_id = self._get_group_id(event)
 
         has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
@@ -511,24 +517,103 @@ class FaithLadderPlugin(Star):
             args = self._get_args(event, "setclass") or self._get_args(event, "改职业")
 
         parts = args.split()
-        if len(parts) != 3:
+        if len(parts) != 2:
             yield event.plain_result(
-                f"用法: 设置职业 <玩家名> <职业> <信仰>\n"
-                f"可选职业: {'/'.join(VALID_CLASSES)}\n"
+                f"用法: 设置职业 <玩家名> <职业>\n"
+                f"可选职业: {'/'.join(VALID_CLASSES)}"
+            )
+            return
+
+        target_name, class_name = parts
+        target_player = await self.db_manager.get_player_by_name(group_id, target_name)
+        if not target_player:
+            yield event.plain_result(f"{target_name}不属于这个宇宙")
+            return
+
+        success, message = await self.ladder_service.set_class(
+            group_id, target_player.player_id, target_name, class_name
+        )
+        yield event.plain_result(message)
+
+    # === 立誓（设置信仰） ===
+
+    @filter.command("立誓", alias={"takeoath", "立约"})
+    async def cmd_take_oath(self, event: AstrMessageEvent):
+        """设置信仰。格式: 立誓 <玩家名> <信仰>"""
+        group_id = self._get_group_id(event)
+
+        has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            return
+
+        # Cooldown
+        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        user_id = str(event.get_sender_id())
+        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+            yield event.plain_result(f"冷却中，请 {remaining:.0f} 秒后再试。")
+            return
+        self.cooldown_manager.set_cooldown(user_id)
+
+        args = self._get_args(event, "立誓")
+        if not args:
+            args = self._get_args(event, "takeoath") or self._get_args(event, "立约")
+
+        parts = args.split()
+        if len(parts) != 2:
+            yield event.plain_result(
+                f"用法: 立誓 <玩家名> <信仰>\n"
                 f"可选信仰: {'/'.join(VALID_FAITHS)}"
             )
             return
 
-        target_name, class_name, faith_name = parts
-        target_player = await self.db_manager.get_player_by_name(group_id, target_name)
-        if not target_player:
-            yield event.plain_result(f" {target_name}不属于这个宇宙")
+        target_name, faith_name = parts
+        success, message = await self.ladder_service.set_faith(group_id, target_name, faith_name)
+        yield event.plain_result(message)
+
+    # === 弃誓 ===
+
+    @filter.command("弃誓", alias={"abandoath"})
+    async def cmd_abandon_oath(self, event: AstrMessageEvent):
+        """标记弃誓者。格式: 弃誓 <玩家名> [新信仰]"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
-        success, message = await self.ladder_service.set_class(
-            group_id, target_player.player_id, target_name, class_name, faith_name
+        # Cooldown
+        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+            yield event.plain_result(f"冷却中，请 {remaining:.0f} 秒后再试。")
+            return
+        self.cooldown_manager.set_cooldown(user_id)
+
+        args = self._get_args(event, "弃誓")
+        if not args:
+            args = self._get_args(event, "abandoath")
+
+        parts = args.split()
+        if not parts or len(parts) > 2:
+            yield event.plain_result(
+                f"用法: 弃誓 <玩家名> [新信仰]\n"
+                f"示例: 弃誓 张三\n"
+                f"      弃誓 张三 文明"
+            )
+            return
+
+        target_name = parts[0]
+        new_faith = parts[1] if len(parts) > 1 else None
+        success, message = await self.ladder_service.abandon_oath(
+            group_id, target_name, new_faith, dict(self.config)
         )
-        yield event.plain_result( message)
+        yield event.plain_result(message)
 
     # === 天梯榜管理 ===
 
@@ -553,11 +638,13 @@ class FaithLadderPlugin(Star):
                 f"delete <玩家名> — 删除单个玩家 (白名单/管理员)\n"
                 f"rename <旧名> <新名> — 改名 (白名单/管理员)\n"
                 f"clear — 清空本群所有玩家和数据 (管理员)\n"
+                f"clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
                 f"\n"
                 f"示例:\n"
                 f"天梯榜管理 reset 张三\n"
                 f"天梯榜管理 delete 张三\n"
-                f"天梯榜管理 rename 张三 李四"
+                f"天梯榜管理 rename 张三 李四\n"
+                f"天梯榜管理 clearoath 张三"
             )
             return
 
@@ -601,6 +688,16 @@ class FaithLadderPlugin(Star):
         # Other actions: admin only
         if not is_admin:
             yield event.plain_result("权限不足: 仅管理员可执行此操作。")
+            return
+
+        if action == "clearoath" and len(parts) >= 2:
+            target_name = parts[1]
+            target_player = await self.db_manager.get_player_by_name(group_id, target_name)
+            if not target_player:
+                yield event.plain_result(f"未找到玩家: {target_name}")
+                return
+            await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
+            yield event.plain_result(f"已清除 {target_name} 的弃誓者标记。")
             return
 
         if action == "reset" and len(parts) >= 2:

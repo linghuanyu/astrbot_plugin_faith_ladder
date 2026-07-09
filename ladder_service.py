@@ -106,31 +106,93 @@ class LadderService:
         player_id: str,
         player_name: str,
         class_name: str,
-        faith_name: str
     ) -> tuple[bool, str]:
         """
-        Set a player's class and faith.
+        Set a player's class only (faith is managed by 立誓 command).
         Returns (success, message).
         """
         # Validate class
         if not Player.validate_class(class_name):
             return False, f"无效职业: {class_name}。可选: {'/'.join(VALID_CLASSES)}"
 
-        # Validate faith
-        if not Player.validate_faith(faith_name):
-            return False, f"无效信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}"
-
         # Check player exists (do NOT auto-create)
         existing = await self.db.get_player(group_id, player_id)
         if not existing:
             return False, f"{player_name}不存在这个宇宙"
 
-        # Set class and faith
-        updated = await self.db.set_player_class(group_id, player_id, class_name, faith_name)
+        # Set class only
+        updated = await self.db.set_player_class(group_id, player_id, class_name, existing.faith)
         if not updated:
             return False, "设置失败，请重试。"
 
-        return True, f"职业设置成功! 职业: {class_name}, 信仰: {faith_name}"
+        return True, f"职业设置成功! 职业: {class_name}"
+
+    async def set_faith(
+        self,
+        group_id: str,
+        player_name: str,
+        faith_name: str,
+    ) -> tuple[bool, str]:
+        """
+        Set a player's faith. Does not clear oathbreaker status.
+        Returns (success, message).
+        """
+        # Validate faith
+        if not Player.validate_faith(faith_name):
+            return False, f"无效信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}"
+
+        # Check player exists
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"{player_name}不存在这个宇宙"
+
+        updated = await self.db.set_player_faith(group_id, player.player_id, faith_name)
+        if not updated:
+            return False, "设置失败，请重试。"
+
+        oathbreaker_tag = "（弃誓者）" if updated.oathbreaker else ""
+        return True, f"立誓成功! {player_name}{oathbreaker_tag} 的信仰: {faith_name}"
+
+    async def abandon_oath(
+        self,
+        group_id: str,
+        player_name: str,
+        new_faith: Optional[str],
+        config: dict,
+    ) -> tuple[bool, str]:
+        """
+        Mark a player as oathbreaker. Optionally set new faith.
+        Returns (success, message).
+        """
+        # Check player exists
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"{player_name}不存在这个宇宙"
+
+        # Check player has a faith to abandon
+        if not player.faith:
+            return False, f"{player_name}尚无信仰，无誓可弃。"
+
+        # Get oath text based on CURRENT faith
+        current_faith = player.faith
+        oath_text_key = f"oath_text_{current_faith}"
+        oath_text = config.get(oath_text_key, f"{player_name}背弃了{current_faith}之道。誓约已碎。")
+        oath_text = oath_text.replace("{name}", player_name)
+
+        # Validate new faith if provided
+        if new_faith and not Player.validate_faith(new_faith):
+            return False, f"无效信仰: {new_faith}。可选: {'/'.join(VALID_FAITHS)}"
+
+        # Set oathbreaker + optional faith change
+        await self.db.set_oathbreaker(group_id, player.player_id, new_faith)
+
+        result_parts = [oath_text]
+        if new_faith:
+            result_parts.append(f"\n{player_name} 的信仰已改为：{new_faith}（弃誓者）")
+        else:
+            result_parts.append(f"\n{player_name} 已被标记为弃誓者。")
+
+        return True, "\n".join(result_parts)
 
     async def register_player(
         self,
@@ -184,7 +246,7 @@ class LadderService:
             f"玩家录入成功!\n"
             f"姓名: {player_name}\n"
             f"职业: {class_name} | 信仰: {faith_name}\n"
-            f"天梯积分: {ladder_score} | 觐见之梯: {pilgrimage_score}"
+            f"登神之路: {ladder_score} | 觐见之梯: {pilgrimage_score}"
         )
 
     # === 批量录入 ===
@@ -220,7 +282,7 @@ class LadderService:
                 continue
 
             # 提取天梯积分（兼容 "登神之路" / "登神指路"，支持 +/-）
-            ladder_match = re.search(r'登神[之指]路([+-])\s*(\d+)', part)
+            ladder_match = re.search(r'登神之路([+-])\s*(\d+)', part)
             if ladder_match:
                 sign = 1 if ladder_match.group(1) == '+' else -1
                 ladder_delta = sign * int(ladder_match.group(2))
@@ -285,7 +347,7 @@ class LadderService:
                     ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
                     pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
                     success_details.append(
-                        f"  {name}: 天梯积分{ladder_str}, 觐见之梯{pilgrimage_str}"
+                        f"  {name}: 登神之路{ladder_str}, 觐见之梯{pilgrimage_str}"
                     )
 
             # Commit all updates atomically

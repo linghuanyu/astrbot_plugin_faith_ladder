@@ -54,14 +54,6 @@ class TestBatchScoreParsing:
         assert results[2]["ladder_delta"] == 14
         assert results[2]["pilgrimage_delta"] == 2
 
-    def test_parse_alternative_ladder_name(self, service):
-        """Test '登神指路' variant (typo in original format)."""
-        text = "【玩家：Test 登神指路+10】【觐见之梯+1】"
-        results, err = service.parse_batch_scores(text)
-        assert err is None
-        assert len(results) == 1
-        assert results[0]["ladder_delta"] == 10
-
     def test_parse_ladder_only(self, service):
         """Test text with only ladder score."""
         text = "【玩家：Alice】【登神之路+20】"

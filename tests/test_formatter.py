@@ -32,7 +32,7 @@ class TestFormatLeaderboard:
         assert "1. Alice" in result
         assert "[法师]" in result
         assert "<存在>" in result
-        assert "天梯积分: 100" in result
+        assert "登神之路: 100" in result
         assert "觐见之梯: 50" in result
 
     def test_multiple_players_sorted(self):
@@ -75,7 +75,7 @@ class TestFormatPlayerCard:
         assert "姓名: TestPlayer" in result
         assert "职业: 未设定" in result
         assert "信仰: 未设定" in result
-        assert "天梯积分: 0" in result
+        assert "登神之路: 0" in result
         assert "觐见之梯: 0" in result
 
     def test_full_card(self):
@@ -88,7 +88,7 @@ class TestFormatPlayerCard:
         result = format_player_card(player)
         assert "职业: 战士" in result
         assert "信仰: 虚无" in result
-        assert "天梯积分: 500" in result
+        assert "登神之路: 500" in result
         assert "觐见之梯: 200" in result
 
 
