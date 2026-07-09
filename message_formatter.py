@@ -24,13 +24,16 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
         faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
         lines.append(
-            f"{rank}. {_name_with_tag(player)} {class_str} {faith_str}"
+            f"{rank}. {_name_with_tag(player)}"
+        )
+        lines.append(
+            f"   {class_str} {faith_str}"
         )
         lines.append(
             f"   登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}"
         )
+        lines.append("")
 
-    lines.append("")
     lines.append(f"--- 显示前 {displayed} 名 ---")
     return "\n".join(lines)
 
@@ -47,13 +50,16 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
         faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
         lines.append(
-            f"{rank}. {_name_with_tag(player)} {class_str} {faith_str}"
+            f"{rank}. {_name_with_tag(player)}"
+        )
+        lines.append(
+            f"   {class_str} {faith_str}"
         )
         lines.append(
             f"   觐见之梯: {player.pilgrimage_score} | 登神之路: {player.ladder_score}"
         )
+        lines.append("")
 
-    lines.append("")
     lines.append(f"--- 显示前 {displayed} 名 ---")
     return "\n".join(lines)
 
