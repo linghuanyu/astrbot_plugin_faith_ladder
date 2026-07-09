@@ -49,7 +49,7 @@ class TestAbandonOath:
 
     @pytest.mark.asyncio
     async def test_abandon_oath_without_new_faith(self, service):
-        """Test abandoning oath without changing faith."""
+        """Test abandoning oath clears faith."""
         await service.db.upsert_player("g1", "u1", "Alice")
         await service.db.set_player_class("g1", "u1", "法师", "存在")
 
@@ -59,7 +59,7 @@ class TestAbandonOath:
 
         player = await service.db.get_player("g1", "u1")
         assert player.oathbreaker is True
-        assert player.faith == "存在"  # unchanged
+        assert player.faith is None  # faith cleared
 
     @pytest.mark.asyncio
     async def test_abandon_oath_no_faith(self, service):

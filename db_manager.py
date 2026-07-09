@@ -313,7 +313,7 @@ class DatabaseManager:
             )
         else:
             await self._db.execute(
-                "UPDATE players SET oathbreaker = 1, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
+                "UPDATE players SET oathbreaker = 1, faith = NULL, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
                 (player_id, group_id)
             )
         await self._db.commit()
