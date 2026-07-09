@@ -30,7 +30,10 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
             f"   {class_str} {faith_str}"
         )
         lines.append(
-            f"   登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}"
+            f"   登神之路: {player.ladder_score}"
+        )
+        lines.append(
+            f"   觐见之梯: {player.pilgrimage_score}"
         )
         lines.append("")
 
@@ -56,7 +59,10 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
             f"   {class_str} {faith_str}"
         )
         lines.append(
-            f"   觐见之梯: {player.pilgrimage_score} | 登神之路: {player.ladder_score}"
+            f"   觐见之梯: {player.pilgrimage_score}"
+        )
+        lines.append(
+            f"   登神之路: {player.ladder_score}"
         )
         lines.append("")
 
