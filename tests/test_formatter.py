@@ -69,14 +69,14 @@ class TestFormatPlayerCard:
     """Tests for player card formatting."""
 
     def test_default_card(self):
-        """Test card with default values."""
+        """Test card with default values (initial scores = not ranked)."""
         player = Player(player_id="u1", group_id="g1", player_name="TestPlayer")
         result = format_player_card(player)
         assert "姓名: TestPlayer" in result
         assert "职业: 未设定" in result
         assert "信仰: 未设定" in result
-        assert "登 神 之 路 : 0" in result
-        assert "觐 见 之 梯 : 0" in result
+        assert "登神之路: 0" in result
+        assert "觐见之梯: 0" in result
         assert "登神之路排名: 未上榜" in result
         assert "觐见之梯排名: 未上榜" in result
 
@@ -90,10 +90,20 @@ class TestFormatPlayerCard:
         result = format_player_card(player, ladder_rank=3, pilgrimage_rank=1)
         assert "职业: 战士" in result
         assert "信仰: 虚无" in result
-        assert "登 神 之 路 : 500" in result
-        assert "觐 见 之 梯 : 200" in result
+        assert "登神之路: 500" in result
+        assert "觐见之梯: 200" in result
         assert "登神之路排名: 第3名" in result
         assert "觐见之梯排名: 第1名" in result
+
+    def test_initial_scores_not_ranked(self):
+        """Test that initial scores (1000/100) show as not ranked."""
+        player = Player(
+            player_id="u1", group_id="g1", player_name="TestPlayer",
+            ladder_score=1000, pilgrimage_score=100
+        )
+        result = format_player_card(player, ladder_rank=5, pilgrimage_rank=3)
+        assert "登神之路排名: 未上榜" in result
+        assert "觐见之梯排名: 未上榜" in result
 
 
 class TestFormatHelp:
