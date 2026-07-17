@@ -1,248 +1,267 @@
 """
 QQ 群管理命令逻辑。
-由 main.py 中的 @filter.command 壳调用。
+照搬 astrbot_plugin_qqadmin 的实现，仅添加白名单权限控制。
 需要 aiocqhttp (OneBot11) 协议支持。
 """
 
-import re
-from astrbot.api.event import AstrMessageEvent
+import asyncio
+from astrbot.core.message.components import At, Reply, Plain
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+    AiocqhttpMessageEvent,
+)
 from astrbot.api import logger
 
 
+def get_ats(event: AiocqhttpMessageEvent) -> list:
+    """获取被 at 的用户 ID 列表（排除机器人自身）"""
+    return [
+        str(seg.qq)
+        for seg in event.get_messages()
+        if isinstance(seg, At) and str(seg.qq) != event.get_self_id()
+    ]
+
+
+async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
+    """获取群成员昵称（群名片 > QQ昵称 > UID）"""
+    user_id = int(user_id)
+    group_id = event.get_group_id()
+    info = {}
+    try:
+        info = await event.bot.get_group_member_info(
+            group_id=int(group_id), user_id=user_id
+        ) or {}
+    except Exception:
+        pass
+    if not info:
+        try:
+            info = await event.bot.get_stranger_info(user_id=user_id) or {}
+        except Exception:
+            pass
+    return info.get("card") or info.get("nickname") or info.get("nick") or str(user_id)
+
+
 class QQAdminHandler:
-    """QQ 群管命令实现。"""
+    """QQ 群管命令实现。照搬 qqadmin 逻辑，添加白名单权限检查。"""
 
     def __init__(self, plugin):
         self.plugin = plugin
 
-    @property
-    def permission_service(self):
-        return self.plugin.permission_service
-
-    def _is_plugin_admin(self, event: AstrMessageEvent) -> bool:
-        return self.plugin._is_plugin_admin(event)
-
-    # === 辅助方法 ===
-
-    def _get_at_targets(self, event: AstrMessageEvent) -> list:
-        """提取消息中所有 @ 的 QQ 号列表。"""
-        targets = []
-        try:
-            for seg in event.message_obj.message:
-                if seg.type == "at":
-                    qq = str(seg.data.get("qq", ""))
-                    if qq and qq != "all":
-                        targets.append(qq)
-        except (AttributeError, TypeError):
-            pass
-        return targets
-
-    def _parse_seconds(self, event: AstrMessageEvent, default: int = 60) -> int:
-        """从消息文本中提取秒数（第一个数字）。"""
-        text = event.message_str.strip()
-        match = re.search(r'(\d+)', text)
-        if match:
-            return int(match.group(1))
-        return default
-
-    async def _check_permission(self, event: AstrMessageEvent) -> bool:
-        """检查用户是否有群管权限（复用白名单系统）。"""
+    async def _check_permission(self, event: AiocqhttpMessageEvent) -> bool:
+        """检查用户是否有群管权限（复用白名单系统）"""
         user_id = str(event.get_sender_id())
-        has_perm = await self.permission_service.check_score_permission(user_id)
+        has_perm = await self.plugin.permission_service.check_score_permission(user_id)
         if has_perm:
             return True
-        return self._is_plugin_admin(event)
+        return self.plugin._is_plugin_admin(event)
 
-    def _is_group_message(self, event: AstrMessageEvent) -> bool:
+    async def _check_target_safe(self, event: AiocqhttpMessageEvent, target_id: str) -> str:
+        """检查目标是否可操作（保护群主/管理员）"""
         try:
-            return bool(event.message_obj.group_id)
-        except AttributeError:
-            return False
-
-    async def _get_member_info(self, event: AstrMessageEvent, user_id: str) -> dict:
-        try:
-            group_id = int(event.message_obj.group_id)
-            return await event.bot.get_group_member_info(
-                group_id=group_id, user_id=int(user_id)
+            info = await event.bot.get_group_member_info(
+                group_id=int(event.get_group_id()), user_id=int(target_id)
             )
+            role = info.get("role", "member")
+            if role == "owner":
+                return "群主不可操作"
+            if role == "admin":
+                return "管理员不可操作"
         except Exception:
-            return {}
-
-    async def _get_nickname(self, event: AstrMessageEvent, user_id: str) -> str:
-        member = await self._get_member_info(event, user_id)
-        card = member.get("card", "")
-        if card:
-            return card
-        return member.get("nickname", str(user_id))
-
-    async def _get_member_role(self, event: AstrMessageEvent, user_id: str) -> str:
-        member = await self._get_member_info(event, user_id)
-        return member.get("role", "member")
-
-    async def _get_reply_message_id(self, event: AstrMessageEvent) -> str:
-        try:
-            for seg in event.message_obj.message:
-                if seg.type == "reply":
-                    return str(seg.data.get("id", ""))
-        except (AttributeError, TypeError):
             pass
         return ""
 
-    async def _check_target_safe(self, event: AstrMessageEvent, target_id: str) -> str:
-        """检查目标是否可操作。返回空=安全，否则返回拒绝原因。"""
-        role = await self._get_member_role(event, target_id)
-        if role == "owner":
-            return "群主不可操作"
-        if role == "admin":
-            return "管理员不可操作"
-        return ""
+    # === 禁言 ===
 
-    # === 命令实现 ===
-
-    async def handle_ban(self, event: AstrMessageEvent):
+    async def handle_ban(self, event: AiocqhttpMessageEvent, ban_time: int = None):
         """禁言 <秒数> @用户"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
-            return
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
+            event.stop_event()
             return
 
-        targets = self._get_at_targets(event)
+        targets = get_ats(event)
         if not targets:
             yield event.plain_result("请 @ 要禁言的用户。")
+            event.stop_event()
             return
 
-        duration = self._parse_seconds(event, default=60)
-        group_id = int(event.message_obj.group_id)
+        # 从消息文本提取秒数
+        text = event.message_str.strip()
+        duration = 60
+        for part in text.split():
+            if part.isdigit():
+                duration = int(part)
+                break
 
         results = []
         for uid in targets:
             block = await self._check_target_safe(event, uid)
             if block:
-                nickname = await self._get_nickname(event, uid)
+                nickname = await get_nickname(event, uid)
                 results.append(f"{nickname} — {block}，已跳过")
                 continue
             try:
                 await event.bot.set_group_ban(
-                    group_id=group_id, user_id=int(uid), duration=duration
+                    group_id=int(event.get_group_id()),
+                    user_id=int(uid),
+                    duration=duration,
                 )
-                nickname = await self._get_nickname(event, uid)
+                nickname = await get_nickname(event, uid)
                 results.append(f"已禁言 {nickname} {duration}秒")
             except Exception as e:
-                results.append(f"禁言 {uid} 失败: {e}")
+                results.append(f"禁言失败: {e}")
 
         yield event.plain_result("\n".join(results))
+        event.stop_event()
 
-    async def handle_unban(self, event: AstrMessageEvent):
+    # === 解禁 ===
+
+    async def handle_unban(self, event: AiocqhttpMessageEvent):
         """解禁 @用户"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
-            return
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
+            event.stop_event()
             return
 
-        targets = self._get_at_targets(event)
-        if not targets:
-            yield event.plain_result("请 @ 要解禁的用户。")
-            return
-
-        group_id = int(event.message_obj.group_id)
-        results = []
-        for uid in targets:
+        for uid in get_ats(event):
             try:
                 await event.bot.set_group_ban(
-                    group_id=group_id, user_id=int(uid), duration=0
+                    group_id=int(event.get_group_id()),
+                    user_id=int(uid),
+                    duration=0,
                 )
-                nickname = await self._get_nickname(event, uid)
-                results.append(f"已解禁 {nickname}")
-            except Exception as e:
-                results.append(f"解禁 {uid} 失败: {e}")
+            except Exception:
+                pass
+        yield event.plain_result("已解禁")
+        event.stop_event()
 
-        yield event.plain_result("\n".join(results))
+    # === 踢人 ===
 
-    async def handle_kick(self, event: AstrMessageEvent):
-        """踢人 @用户"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
-            return
+    async def handle_kick(self, event: AiocqhttpMessageEvent):
+        """踢出 @用户"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
+            event.stop_event()
             return
 
-        targets = self._get_at_targets(event)
-        if not targets:
-            yield event.plain_result("请 @ 要踢出的用户。")
-            return
-
-        group_id = int(event.message_obj.group_id)
-        results = []
-        for uid in targets:
+        for uid in get_ats(event):
             block = await self._check_target_safe(event, uid)
             if block:
-                nickname = await self._get_nickname(event, uid)
-                results.append(f"{nickname} — {block}，已跳过")
+                nickname = await get_nickname(event, uid)
+                yield event.plain_result(f"{nickname} — {block}，已跳过")
                 continue
             try:
+                target_name = await get_nickname(event, uid)
                 await event.bot.set_group_kick(
-                    group_id=group_id, user_id=int(uid), reject_add_request=False
+                    group_id=int(event.get_group_id()),
+                    user_id=int(uid),
+                    reject_add_request=False,
                 )
-                nickname = await self._get_nickname(event, uid)
-                results.append(f"已踢出 {nickname}")
+                yield event.plain_result(f"已将【{uid}-{target_name}】踢出群聊")
             except Exception as e:
-                results.append(f"踢出 {uid} 失败: {e}")
+                yield event.plain_result(f"踢出失败: {e}")
+        event.stop_event()
 
-        yield event.plain_result("\n".join(results))
+    # === 撤回 ===
 
-    async def handle_recall(self, event: AstrMessageEvent):
-        """撤回（引用消息）"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
-            return
+    async def handle_recall(self, event: AiocqhttpMessageEvent):
+        """撤回消息（引用消息 或 @用户批量撤回）"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
+            event.stop_event()
             return
 
-        reply_id = await self._get_reply_message_id(event)
-        if not reply_id:
-            yield event.plain_result("请引用要撤回的消息。")
+        client = event.bot
+        chain = event.get_messages()
+        first_seg = chain[0]
+
+        # 方式1: 撤回引用的消息
+        if isinstance(first_seg, Reply):
+            try:
+                await client.delete_msg(message_id=int(first_seg.id))
+                yield event.plain_result("已撤回该消息。")
+            except Exception:
+                yield event.plain_result("消息已过期或不存在")
+            event.stop_event()
             return
 
-        try:
-            await event.bot.delete_msg(message_id=int(reply_id))
-            yield event.plain_result("已撤回该消息。")
-        except Exception as e:
-            yield event.plain_result(f"撤回失败: {e}")
+        # 方式2: 撤回 @ 用户的最近消息
+        if any(isinstance(seg, At) for seg in chain):
+            target_ids = get_ats(event) or [event.get_self_id()]
+            target_ids = {str(uid) for uid in target_ids}
 
-    async def handle_mute_all(self, event: AstrMessageEvent):
-        """全员禁"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
+            text = event.message_str.strip()
+            count = 10
+            for part in text.split():
+                if part.isdigit():
+                    count = min(int(part), 50)
+                    break
+
+            try:
+                result = await client.api.call_action(
+                    "get_group_msg_history",
+                    group_id=int(event.get_group_id()),
+                    message_seq=0,
+                    count=count,
+                    reverseOrder=True,
+                )
+                messages = list(reversed(result.get("messages", [])))
+            except Exception:
+                messages = []
+
+            delete_count = 0
+            sem = asyncio.Semaphore(10)
+
+            async def try_delete(message):
+                nonlocal delete_count
+                if str(message["sender"]["user_id"]) not in target_ids:
+                    return
+                async with sem:
+                    try:
+                        await client.delete_msg(message_id=message["message_id"])
+                        delete_count += 1
+                    except Exception:
+                        pass
+
+            tasks = [try_delete(msg) for msg in messages]
+            await asyncio.gather(*tasks)
+
+            yield event.plain_result(f"已检索{count}条消息，成功撤回{delete_count}条")
+            event.stop_event()
             return
+
+        yield event.plain_result("请引用消息或 @ 用户。")
+        event.stop_event()
+
+    # === 全员禁 ===
+
+    async def handle_mute_all(self, event: AiocqhttpMessageEvent):
+        """全员禁言"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
+            event.stop_event()
             return
-
-        group_id = int(event.message_obj.group_id)
         try:
-            await event.bot.set_group_whole_ban(group_id=group_id, enable=True)
+            await event.bot.set_group_whole_ban(
+                group_id=int(event.get_group_id()), enable=True
+            )
             yield event.plain_result("已开启全员禁言。")
         except Exception as e:
             yield event.plain_result(f"操作失败: {e}")
+        event.stop_event()
 
-    async def handle_unmute_all(self, event: AstrMessageEvent):
-        """全员解"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
-            return
+    # === 全员解 ===
+
+    async def handle_unmute_all(self, event: AiocqhttpMessageEvent):
+        """关闭全员禁言"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
+            event.stop_event()
             return
-
-        group_id = int(event.message_obj.group_id)
         try:
-            await event.bot.set_group_whole_ban(group_id=group_id, enable=False)
+            await event.bot.set_group_whole_ban(
+                group_id=int(event.get_group_id()), enable=False
+            )
             yield event.plain_result("已关闭全员禁言。")
         except Exception as e:
             yield event.plain_result(f"操作失败: {e}")
+        event.stop_event()
