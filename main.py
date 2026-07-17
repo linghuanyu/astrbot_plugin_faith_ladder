@@ -367,7 +367,11 @@ class FaithLadderPlugin(Star):
             return
         self.cooldown_manager.set_cooldown(user_id)
 
-        text = await self.ladder_service.get_player_card_by_name(group_id, target_name)
+        text = await self.ladder_service.get_player_card_by_name(
+            group_id, target_name,
+            init_ladder=self.config.get("init_ladder_score", 1000),
+            init_pilgrimage=self.config.get("init_pilgrimage_score", 100)
+        )
         if not text:
             yield event.plain_result(f" {target_name}不属于这个宇宙")
             return

@@ -58,14 +58,17 @@ class LadderService:
             return None
         return format_player_card(player)
 
-    async def get_player_card_by_name(self, group_id: str, player_name: str) -> Optional[str]:
+    async def get_player_card_by_name(
+        self, group_id: str, player_name: str,
+        init_ladder: int = 1000, init_pilgrimage: int = 100
+    ) -> Optional[str]:
         """Get formatted player card by name. Returns None if not found."""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return None
         ladder_rank = await self.db.get_player_ladder_rank(group_id, player.ladder_score)
         pilgrimage_rank = await self.db.get_player_pilgrimage_rank(group_id, player.pilgrimage_score)
-        return format_player_card(player, ladder_rank, pilgrimage_rank)
+        return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage)
 
     async def add_score(
         self,

@@ -70,21 +70,27 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
     return "\n".join(lines)
 
 
-def format_player_card(player: Player, ladder_rank: int = 0, pilgrimage_rank: int = 0) -> str:
+def format_player_card(
+    player: Player,
+    ladder_rank: int = 0,
+    pilgrimage_rank: int = 0,
+    init_ladder: int = 1000,
+    init_pilgrimage: int = 100
+) -> str:
     """Format a player's info card with rankings."""
     class_str = player.class_ if player.class_ else "未设定"
     faith_str = player.faith if player.faith else "未设定"
     oathbreaker_str = "(弃誓者)" if player.oathbreaker else ""
 
-    # 初始积分（1000/100）视为未上榜
-    if player.ladder_score == 1000:
+    # 初始积分视为未上榜
+    if player.ladder_score == init_ladder:
         ladder_rank_str = "未上榜"
     elif ladder_rank > 0:
         ladder_rank_str = f"第{ladder_rank}名"
     else:
         ladder_rank_str = "未上榜"
 
-    if player.pilgrimage_score == 100:
+    if player.pilgrimage_score == init_pilgrimage:
         pilgrimage_rank_str = "未上榜"
     elif pilgrimage_rank > 0:
         pilgrimage_rank_str = f"第{pilgrimage_rank}名"

@@ -96,12 +96,25 @@ class TestFormatPlayerCard:
         assert "觐见之梯排名: 第1名" in result
 
     def test_initial_scores_not_ranked(self):
-        """Test that initial scores (1000/100) show as not ranked."""
+        """Test that initial scores (configurable) show as not ranked."""
         player = Player(
             player_id="u1", group_id="g1", player_name="TestPlayer",
             ladder_score=1000, pilgrimage_score=100
         )
         result = format_player_card(player, ladder_rank=5, pilgrimage_rank=3)
+        assert "登神之路排名: 未上榜" in result
+        assert "觐见之梯排名: 未上榜" in result
+
+    def test_custom_initial_scores(self):
+        """Test with custom initial score thresholds."""
+        player = Player(
+            player_id="u1", group_id="g1", player_name="TestPlayer",
+            ladder_score=500, pilgrimage_score=50
+        )
+        result = format_player_card(
+            player, ladder_rank=5, pilgrimage_rank=3,
+            init_ladder=500, init_pilgrimage=50
+        )
         assert "登神之路排名: 未上榜" in result
         assert "觐见之梯排名: 未上榜" in result
 
