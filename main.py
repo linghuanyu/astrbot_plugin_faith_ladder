@@ -25,7 +25,7 @@ from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS
 from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer
-from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandle
+from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 
 
 @register(
@@ -34,7 +34,7 @@ from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandle
     "信仰游戏天梯排行榜，双积分排名，集成职业信仰体系，支持群聊积分管理。",
     "1.0.0"
 )
-class FaithLadderPlugin(QQAdminHandle, Star):
+class FaithLadderPlugin(Star):
     """信仰游戏天梯排行榜插件。"""
 
     def __init__(self, context: Context, config=None):
@@ -59,6 +59,7 @@ class FaithLadderPlugin(QQAdminHandle, Star):
                 self.permission_service = PermissionService(self.db_manager)
 
         self._scheduler = None
+        self._qq_admin = QQAdminHandler(self)
 
     def _get_data_dir(self) -> Path:
         data_path = None
@@ -767,3 +768,35 @@ class FaithLadderPlugin(QQAdminHandle, Star):
         """显示帮助信息"""
         text = format_help(dict(self.config))
         yield event.plain_result(text)
+
+    # === QQ 群管命令（委托到 QQAdminHandler） ===
+
+    @filter.command("禁言")
+    async def cmd_w_ban(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_ban(event):
+            yield result
+
+    @filter.command("解禁")
+    async def cmd_w_unban(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_unban(event):
+            yield result
+
+    @filter.command("踢人")
+    async def cmd_w_kick(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_kick(event):
+            yield result
+
+    @filter.command("撤回")
+    async def cmd_w_recall(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_recall(event):
+            yield result
+
+    @filter.command("全员禁")
+    async def cmd_w_mute_all(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_mute_all(event):
+            yield result
+
+    @filter.command("全员解")
+    async def cmd_w_unmute_all(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_unmute_all(event):
+            yield result
