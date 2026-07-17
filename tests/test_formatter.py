@@ -75,8 +75,10 @@ class TestFormatPlayerCard:
         assert "姓名: TestPlayer" in result
         assert "职业: 未设定" in result
         assert "信仰: 未设定" in result
-        assert "登神之路: 0" in result
-        assert "觐见之梯: 0" in result
+        assert "登 神 之 路 : 0" in result
+        assert "觐 见 之 梯 : 0" in result
+        assert "登神之路排名: 未上榜" in result
+        assert "觐见之梯排名: 未上榜" in result
 
     def test_full_card(self):
         """Test card with all values set."""
@@ -85,11 +87,13 @@ class TestFormatPlayerCard:
             class_="战士", faith="虚无",
             ladder_score=500, pilgrimage_score=200
         )
-        result = format_player_card(player)
+        result = format_player_card(player, ladder_rank=3, pilgrimage_rank=1)
         assert "职业: 战士" in result
         assert "信仰: 虚无" in result
-        assert "登神之路: 500" in result
-        assert "觐见之梯: 200" in result
+        assert "登 神 之 路 : 500" in result
+        assert "觐 见 之 梯 : 200" in result
+        assert "登神之路排名: 第3名" in result
+        assert "觐见之梯排名: 第1名" in result
 
 
 class TestFormatHelp:

@@ -219,6 +219,24 @@ class DatabaseManager:
             rows = await cursor.fetchall()
             return [self._row_to_player(r) for r in rows]
 
+    async def get_player_ladder_rank(self, group_id: str, ladder_score: int) -> int:
+        """Get a player's rank in the ladder (1-based)."""
+        async with self._db.execute(
+            "SELECT COUNT(*) + 1 FROM players WHERE group_id = ? AND ladder_score > ?",
+            (group_id, ladder_score)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 1
+
+    async def get_player_pilgrimage_rank(self, group_id: str, pilgrimage_score: int) -> int:
+        """Get a player's rank in the pilgrimage ladder (1-based)."""
+        async with self._db.execute(
+            "SELECT COUNT(*) + 1 FROM players WHERE group_id = ? AND pilgrimage_score > ?",
+            (group_id, pilgrimage_score)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 1
+
     async def update_scores(
         self, group_id: str, player_id: str,
         ladder_delta: int, pilgrimage_delta: int,

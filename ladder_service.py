@@ -63,7 +63,9 @@ class LadderService:
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return None
-        return format_player_card(player)
+        ladder_rank = await self.db.get_player_ladder_rank(group_id, player.ladder_score)
+        pilgrimage_rank = await self.db.get_player_pilgrimage_rank(group_id, player.pilgrimage_score)
+        return format_player_card(player, ladder_rank, pilgrimage_rank)
 
     async def add_score(
         self,

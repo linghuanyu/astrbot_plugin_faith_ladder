@@ -309,21 +309,55 @@ class FaithLadderPlugin(Star):
 
     # === 查询玩家 ===
 
+    def _extract_name_from_card(self, card: str) -> str:
+        """从群名片格式中提取玩家名。
+        格式: 【XX】 蓬莱 守墓人100 100 → 蓬莱
+        """
+        parts = card.strip().split()
+        if len(parts) >= 2:
+            # 第二段是名字（跳过第一段的【XX】标签）
+            return parts[1]
+        return card.strip()
+
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
-        """查询指定玩家的天梯分与觐见分。格式: 查询 <玩家名>"""
+        """查询指定玩家信息。格式: 查询 <玩家名> 或 查询 @用户"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
-        args = self._get_args(event, "查询")
-        if not args:
-            # Also try alias
-            for alias in ("query", "查看"):
-                args = self._get_args(event, alias)
-                if args:
-                    break
 
-        if not args.strip():
-            yield event.plain_result(f"用法: 查询 <玩家名>")
+        # 检查是否有 @ 目标
+        target_name = None
+        try:
+            from astrbot.core.message.components import At
+            for seg in event.get_messages():
+                if isinstance(seg, At):
+                    target_uid = str(seg.qq)
+                    # 获取群名片
+                    try:
+                        info = await event.bot.get_group_member_info(
+                            group_id=int(group_id), user_id=int(target_uid)
+                        )
+                        card = info.get("card", "") or info.get("nickname", "")
+                        if card:
+                            target_name = self._extract_name_from_card(card)
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
+
+        # 如果没有 @ 目标，从文本参数获取
+        if not target_name:
+            args = self._get_args(event, "查询")
+            if not args:
+                for alias in ("query", "查看"):
+                    args = self._get_args(event, alias)
+                    if args:
+                        break
+            target_name = args.strip() if args else ""
+
+        if not target_name:
+            yield event.plain_result("用法: 查询 <玩家名> 或 查询 @用户")
             return
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
@@ -333,12 +367,11 @@ class FaithLadderPlugin(Star):
             return
         self.cooldown_manager.set_cooldown(user_id)
 
-        target_name = args.strip()
         text = await self.ladder_service.get_player_card_by_name(group_id, target_name)
         if not text:
             yield event.plain_result(f" {target_name}不属于这个宇宙")
             return
-        yield event.plain_result( text)
+        yield event.plain_result(text)
 
     # === 录入积分 ===
 
