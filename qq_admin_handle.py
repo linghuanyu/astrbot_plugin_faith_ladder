@@ -50,19 +50,28 @@ class QQAdminHandle:
         except AttributeError:
             return False
 
-    async def _get_group_member_nickname(self, event: AstrMessageEvent, user_id: str) -> str:
-        """获取群成员的昵称（名片优先，fallback 到 QQ 昵称）。"""
+    async def _get_member_info(self, event: AstrMessageEvent, user_id: str) -> dict:
+        """获取群成员信息。"""
         try:
             group_id = int(event.message_obj.group_id)
-            member = await event.bot.get_group_member_info(
+            return await event.bot.get_group_member_info(
                 group_id=group_id, user_id=int(user_id)
             )
-            card = member.get("card", "")
-            if card:
-                return card
-            return member.get("nickname", str(user_id))
         except Exception:
-            return str(user_id)
+            return {}
+
+    async def _get_group_member_nickname(self, event: AstrMessageEvent, user_id: str) -> str:
+        """获取群成员的昵称（名片优先，fallback 到 QQ 昵称）。"""
+        member = await self._get_member_info(event, user_id)
+        card = member.get("card", "")
+        if card:
+            return card
+        return member.get("nickname", str(user_id))
+
+    async def _get_member_role(self, event: AstrMessageEvent, user_id: str) -> str:
+        """获取群成员角色: owner / admin / member。"""
+        member = await self._get_member_info(event, user_id)
+        return member.get("role", "member")
 
     async def _get_reply_message_id(self, event: AstrMessageEvent) -> str:
         """获取引用消息的 message_id（如果有引用）。"""
@@ -72,6 +81,15 @@ class QQAdminHandle:
                     return str(seg.data.get("id", ""))
         except (AttributeError, TypeError):
             pass
+        return ""
+
+    async def _check_target_safe(self, event: AstrMessageEvent, target_id: str) -> str:
+        """检查目标是否可操作。返回空字符串表示安全，否则返回拒绝原因。"""
+        role = await self._get_member_role(event, target_id)
+        if role == "owner":
+            return "群主不可操作"
+        if role == "admin":
+            return "管理员不可操作"
         return ""
 
     # === w禁言 ===
@@ -97,6 +115,12 @@ class QQAdminHandle:
 
         results = []
         for uid in targets:
+            # 保护检查：不能操作群主/管理员
+            block = await self._check_target_safe(event, uid)
+            if block:
+                nickname = await self._get_group_member_nickname(event, uid)
+                results.append(f"{nickname} — {block}，已跳过")
+                continue
             try:
                 await event.bot.set_group_ban(
                     group_id=group_id, user_id=int(uid), duration=duration
@@ -163,6 +187,12 @@ class QQAdminHandle:
 
         results = []
         for uid in targets:
+            # 保护检查：不能踢群主/管理员
+            block = await self._check_target_safe(event, uid)
+            if block:
+                nickname = await self._get_group_member_nickname(event, uid)
+                results.append(f"{nickname} — {block}，已跳过")
+                continue
             try:
                 await event.bot.set_group_kick(
                     group_id=group_id, user_id=int(uid), reject_add_request=False
@@ -174,81 +204,11 @@ class QQAdminHandle:
 
         yield event.plain_result("\n".join(results))
 
-    # === w改名 ===
-
-    @filter.command("w改名")
-    async def cmd_w_card(self, event: AstrMessageEvent):
-        """修改群名片。格式: w改名 <新昵称> @用户（无@则改自己）"""
-        if not self._is_group_message(event):
-            yield event.plain_result("此命令仅限群聊使用。")
-            return
-
-        if not await self._check_qq_permission(event):
-            yield event.plain_result("你没有群管权限。")
-            return
-
-        group_id = int(event.message_obj.group_id)
-        targets = self._get_at_targets(event)
-
-        # 提取新昵称：消息文本中去掉命令名和 @ 后的部分
-        text = event.message_str.strip()
-        # 去掉命令名
-        for cmd in ("w改名",):
-            if text.startswith(cmd):
-                text = text[len(cmd):].strip()
-                break
-
-        # 去掉 @ 部分（保留非 @ 的文本作为昵称）
-        # 从 message segments 中提取纯文本
-        text_parts = []
-        try:
-            for seg in event.message_obj.message:
-                if seg.type == "text":
-                    t = seg.data.get("text", "").strip()
-                    # 去掉命令名
-                    for cmd in ("w改名",):
-                        if t.startswith(cmd):
-                            t = t[len(cmd):].strip()
-                    if t:
-                        text_parts.append(t)
-        except (AttributeError, TypeError):
-            pass
-
-        new_card = " ".join(text_parts).strip()
-
-        if targets:
-            # 改目标用户名片
-            if not new_card:
-                yield event.plain_result("用法: w改名 <新昵称> @用户")
-                return
-            uid = targets[0]
-            try:
-                await event.bot.set_group_card(
-                    group_id=group_id, user_id=int(uid), card=new_card
-                )
-                nickname = await self._get_group_member_nickname(event, uid)
-                yield event.plain_result(f"已修改 {nickname} 的群名片为: {new_card}")
-            except Exception as e:
-                yield event.plain_result(f"修改名片失败: {e}")
-        else:
-            # 改自己的名片
-            if not new_card:
-                yield event.plain_result("用法: w改名 <新昵称> 或 w改名 <新昵称> @用户")
-                return
-            sender_id = str(event.get_sender_id())
-            try:
-                await event.bot.set_group_card(
-                    group_id=group_id, user_id=int(sender_id), card=new_card
-                )
-                yield event.plain_result(f"已修改你的群名片为: {new_card}")
-            except Exception as e:
-                yield event.plain_result(f"修改名片失败: {e}")
-
     # === w撤回 ===
 
     @filter.command("w撤回")
     async def cmd_w_recall(self, event: AstrMessageEvent):
-        """撤回消息。格式: w撤回（引用消息）或 w撤回 @用户 [数量]"""
+        """撤回引用的消息。格式: 引用消息后发送 w撤回"""
         if not self._is_group_message(event):
             yield event.plain_result("此命令仅限群聊使用。")
             return
@@ -257,65 +217,16 @@ class QQAdminHandle:
             yield event.plain_result("你没有群管权限。")
             return
 
-        group_id = int(event.message_obj.group_id)
-
-        # 方式1: 撤回引用的消息
         reply_id = await self._get_reply_message_id(event)
-        if reply_id:
-            try:
-                await event.bot.delete_msg(message_id=int(reply_id))
-                yield event.plain_result("已撤回该消息。")
-            except Exception as e:
-                yield event.plain_result(f"撤回失败: {e}")
+        if not reply_id:
+            yield event.plain_result("请引用要撤回的消息。")
             return
 
-        # 方式2: 撤回 @ 用户的最近消息
-        targets = self._get_at_targets(event)
-        if targets:
-            # 解析数量
-            text = event.message_str.strip()
-            count = 5  # 默认
-            match = re.search(r'(\d+)', text)
-            if match:
-                count = min(int(match.group(1)), 10)  # 最多10条
-
-            uid = targets[0]
-            nickname = await self._get_group_member_nickname(event, uid)
-
-            try:
-                # 获取群消息历史
-                history = await event.bot.call_action(
-                    "get_group_msg_history",
-                    group_id=group_id,
-                    count=50
-                )
-                messages = history.get("messages", []) if isinstance(history, dict) else []
-
-                # 过滤目标用户的消息
-                target_msgs = [
-                    m for m in messages
-                    if str(m.get("sender", {}).get("user_id", "")) == uid
-                ][:count]
-
-                if not target_msgs:
-                    yield event.plain_result(f"未找到 {nickname} 的最近消息。")
-                    return
-
-                recalled = 0
-                for msg in target_msgs:
-                    try:
-                        await event.bot.delete_msg(message_id=int(msg.get("message_id", 0)))
-                        recalled += 1
-                    except Exception:
-                        continue
-
-                yield event.plain_result(f"已撤回 {nickname} 的 {recalled} 条消息。")
-            except Exception as e:
-                yield event.plain_result(f"撤回失败: {e}")
-            return
-
-        # 无引用也无 @
-        yield event.plain_result("用法: w撤回（引用消息）或 w撤回 @用户 [数量]")
+        try:
+            await event.bot.delete_msg(message_id=int(reply_id))
+            yield event.plain_result("已撤回该消息。")
+        except Exception as e:
+            yield event.plain_result(f"撤回失败: {e}")
 
     # === w全员禁 ===
 
