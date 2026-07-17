@@ -25,6 +25,7 @@ from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS
 from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer
+from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandle
 
 
 @register(
@@ -33,7 +34,7 @@ from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer
     "信仰游戏天梯排行榜，双积分排名，集成职业信仰体系，支持群聊积分管理。",
     "1.0.0"
 )
-class FaithLadderPlugin(Star):
+class FaithLadderPlugin(QQAdminHandle, Star):
     """信仰游戏天梯排行榜插件。"""
 
     def __init__(self, context: Context, config=None):

@@ -1,6 +1,6 @@
 name: astrbot_plugin_faith_ladder
 display_name: "信仰游戏排行榜"
-desc: "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、图片输出、群级设置，适用于社群活动积分管理。仅支持群聊使用。"
-version: v1.7.0
+desc: "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、图片输出、群级设置、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。"
+version: v1.8.0
 author: custom
 repo: "https://github.com/linghuanyu/astrbot_plugin_faith_ladder"
