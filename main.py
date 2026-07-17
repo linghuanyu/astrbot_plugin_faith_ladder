@@ -311,13 +311,24 @@ class FaithLadderPlugin(Star):
 
     def _extract_name_from_card(self, card: str) -> str:
         """从群名片格式中提取玩家名。
-        格式: 【XX】 蓬莱 守墓人100 100 → 蓬莱
+        支持格式:
+          【XX】 蓬莱 守墓人100 100  → 蓬莱
+          【欺诈】name 1 1            → name
         """
-        parts = card.strip().split()
-        if len(parts) >= 2:
-            # 第二段是名字（跳过第一段的【XX】标签）
-            return parts[1]
-        return card.strip()
+        import re
+        card = card.strip()
+        # 先尝试去掉开头的【...】标签（可能有也可能没有后续空格）
+        match = re.match(r'^【[^】]*】\s*(.*)', card)
+        if match:
+            remaining = match.group(1).strip()
+            if remaining:
+                # 标签后的第一段就是名字
+                return remaining.split()[0]
+        # 没有【】标签，取第一段
+        parts = card.split()
+        if len(parts) >= 1:
+            return parts[0]
+        return card
 
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
