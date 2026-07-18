@@ -128,6 +128,34 @@ class TestBatchParseWithItems:
         assert results[0]["pilgrimage_delta"] == 3
         assert results[0]["items"] == ["铁剑", "生命药水"]
 
+    def test_parse_no_item(self, service):
+        """Test that '无' is filtered out."""
+        text = (
+            "【玩家：张三】\n"
+            "【获得道具：无】\n"
+            "【登神之路+5】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 1
+        assert results[0]["items"] == []
+
+    def test_parse_space_separated_items(self, service):
+        """Test space-separated items on one line."""
+        text = (
+            "【玩家：繁荣，表现评分：B】\n"
+            "【获得道具：望远镜（C） 生锈的钥匙（B）】\n"
+            "【登神之路+13】\n"
+            "【觐见之梯+3】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 1
+        assert results[0]["name"] == "繁荣"
+        assert results[0]["items"] == ["望远镜（C）", "生锈的钥匙（B）"]
+        assert results[0]["ladder_delta"] == 13
+        assert results[0]["pilgrimage_delta"] == 3
+
     def test_parse_with_graded_items(self, service):
         text = (
             "【玩家：半秒失忆 旧日追猎者 1030.107表现评分：A】\n"
@@ -171,7 +199,7 @@ class TestBatchParseWithItems:
             "【觐见之梯+1】\n"
             "\n"
             "【玩家：拥抱，表现评分：B】\n"
-            "【获得道具：望远镜（C），生锈的钥匙（B）】\n"
+            "【获得道具：望远镜（C） 生锈的钥匙（B）】\n"
             "【登神之路+13】\n"
             "【觐见之梯+3】\n"
             "\n"
@@ -190,7 +218,7 @@ class TestBatchParseWithItems:
         assert results[0]["ladder_delta"] == 0
         assert results[0]["pilgrimage_delta"] == 1
 
-        # 拥抱: two items separated by comma
+        # 拥抱: two items separated by space
         assert results[1]["name"] == "拥抱"
         assert results[1]["items"] == ["望远镜（C）", "生锈的钥匙（B）"]
         assert results[1]["ladder_delta"] == 13
