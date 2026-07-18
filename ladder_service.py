@@ -248,10 +248,12 @@ class LadderService:
         await self.db.commit()
 
         return True, (
-            f"玩家录入成功!\n"
+            f"=== 玩家信息 ===\n"
             f"姓名: {player_name}\n"
-            f"职业: {class_name} | 信仰: {faith_name}\n"
-            f"登神之路: {ladder_score} | 觐见之梯: {pilgrimage_score}"
+            f"职业: {class_name}\n"
+            f"信仰: {faith_name}\n"
+            f"登神之路: {ladder_score}\n"
+            f"觐见之梯: {pilgrimage_score}"
         )
 
     # === 批量录入 ===
