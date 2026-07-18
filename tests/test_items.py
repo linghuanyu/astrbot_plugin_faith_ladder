@@ -99,6 +99,33 @@ class TestDatabaseItems:
         items = await db.get_player_items("g1", "u1")
         assert len(items) == 0
 
+    @pytest.mark.asyncio
+    async def test_delete_player_cleans_items(self, db):
+        """Deleting a player should also delete their items."""
+        await db.upsert_player("g1", "u1", "Alice")
+        await db.add_item("g1", "u1", "铁剑", 2)
+        await db.add_item("g1", "u1", "生命药水", 5)
+
+        await db.delete_player("g1", "u1")
+
+        items = await db.get_player_items("g1", "u1")
+        assert len(items) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_all_players_cleans_items(self, db):
+        """Deleting all players should also delete all items in the group."""
+        await db.upsert_player("g1", "u1", "Alice")
+        await db.upsert_player("g1", "u2", "Bob")
+        await db.add_item("g1", "u1", "铁剑", 2)
+        await db.add_item("g1", "u2", "生命药水", 5)
+
+        await db.delete_all_players("g1")
+
+        items_alice = await db.get_player_items("g1", "u1")
+        items_bob = await db.get_player_items("g1", "u2")
+        assert len(items_alice) == 0
+        assert len(items_bob) == 0
+
 
 class TestBatchParseWithItems:
     """Tests for batch parsing with items."""

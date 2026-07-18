@@ -380,6 +380,11 @@ class DatabaseManager:
             "DELETE FROM score_history WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         )
+        # Clean up player items
+        await self._db.execute(
+            "DELETE FROM player_items WHERE player_id = ? AND group_id = ?",
+            (player_id, group_id)
+        )
         await self._db.commit()
         return cursor.rowcount > 0
 
@@ -433,12 +438,16 @@ class DatabaseManager:
         return cursor.rowcount
 
     async def delete_all_players(self, group_id: str) -> int:
-        """Delete all players and score history in a group. Returns number of players deleted."""
+        """Delete all players, score history, and items in a group. Returns number of players deleted."""
         cursor = await self._db.execute(
             "DELETE FROM players WHERE group_id = ?", (group_id,)
         )
         await self._db.execute(
             "DELETE FROM score_history WHERE group_id = ?", (group_id,)
+        )
+        # Clean up all items in the group
+        await self._db.execute(
+            "DELETE FROM player_items WHERE group_id = ?", (group_id,)
         )
         await self._db.commit()
         return cursor.rowcount
