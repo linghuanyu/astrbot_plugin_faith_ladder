@@ -683,22 +683,33 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(
                 f"==天梯榜管理==\n"
                 f"\n"
-                f"reset <玩家名> — 重置单个玩家积分 (管理员)\n"
-                f"resetall — 重置本群所有玩家积分 (管理员)\n"
-                f"delete <玩家名> — 删除单个玩家 (白名单/管理员)\n"
-                f"rename <旧名> <新名> — 改名 (白名单/管理员)\n"
-                f"clear — 清空本群所有玩家和数据 (管理员)\n"
-                f"clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
+                f"重置/ reset <玩家名> — 重置单个玩家积分 (管理员)\n"
+                f"全部重置/ resetall — 重置本群所有玩家积分 (管理员)\n"
+                f"删除/ delete <玩家名> — 删除单个玩家 (白名单/管理员)\n"
+                f"改名/ rename <旧名> <新名> — 改名 (白名单/管理员)\n"
+                f"清空/ clear — 清空本群所有玩家和数据 (管理员)\n"
+                f"清除弃誓/ clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
                 f"\n"
                 f"示例:\n"
-                f"天梯榜管理 reset 张三\n"
-                f"天梯榜管理 delete 张三\n"
-                f"天梯榜管理 rename 张三 李四\n"
-                f"天梯榜管理 clearoath 张三"
+                f"天梯榜管理 重置 张三\n"
+                f"天梯榜管理 删除 张三\n"
+                f"天梯榜管理 改名 张三 李四\n"
+                f"天梯榜管理 清除弃誓 张三"
             )
             return
 
         action = parts[0]
+
+        # 中英文操作名映射
+        ACTION_MAP = {
+            "delete": "delete", "删除": "delete",
+            "rename": "rename", "改名": "rename",
+            "reset": "reset", "重置": "reset",
+            "resetall": "resetall", "全部重置": "resetall", "重置全部": "resetall",
+            "clear": "clear", "清空": "clear",
+            "clearoath": "clearoath", "清除弃誓": "clearoath",
+        }
+        action = ACTION_MAP.get(action, action)
 
         # delete: whitelist or admin
         if action == "delete":
@@ -707,14 +718,14 @@ class FaithLadderPlugin(Star):
                 yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 2:
-                yield event.plain_result("用法: 天梯榜管理 delete <玩家名>")
+                yield event.plain_result("用法: 天梯榜管理 删除 <玩家名>")
                 return
             target_name = parts[1]
             deleted = await self.db_manager.delete_player_by_name(group_id, target_name)
             if deleted:
-                yield event.plain_result(f"已删除玩家 {target_name} 及其所有历史记录。")
+                yield event.plain_result(f"已将玩家 {target_name} 数据在本宇宙删除。")
             else:
-                yield event.plain_result(f"未找到玩家: {target_name}")
+                yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
             return
 
         # rename: whitelist or admin
@@ -724,7 +735,7 @@ class FaithLadderPlugin(Star):
                 yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 3:
-                yield event.plain_result("用法: 天梯榜管理 rename <旧名> <新名>")
+                yield event.plain_result("用法: 天梯榜管理 改名 <旧名> <新名>")
                 return
             old_name, new_name = parts[1], parts[2]
             max_name_len = self.config.get("player_name_max_length", 20)
@@ -737,14 +748,14 @@ class FaithLadderPlugin(Star):
 
         # Other actions: admin only
         if not is_admin:
-            yield event.plain_result("权限不足: 仅管理员可执行此操作。")
+            yield event.plain_result("仅供诸神使用")
             return
 
         if action == "clearoath" and len(parts) >= 2:
             target_name = parts[1]
             target_player = await self.db_manager.get_player_by_name(group_id, target_name)
             if not target_player:
-                yield event.plain_result(f"未找到玩家: {target_name}")
+                yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
                 return
             await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
             yield event.plain_result(f"已清除 {target_name} 的弃誓者标记。")
@@ -754,7 +765,7 @@ class FaithLadderPlugin(Star):
             target_name = parts[1]
             target_player = await self.db_manager.get_player_by_name(group_id, target_name)
             if not target_player:
-                yield event.plain_result(f"未找到玩家: {target_name}")
+                yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
                 return
             await self.db_manager.update_scores(
                 group_id, target_player.player_id,
