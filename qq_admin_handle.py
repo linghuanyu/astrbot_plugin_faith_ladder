@@ -94,10 +94,14 @@ class QQAdminHandler:
 
         results = []
         for uid in targets:
-            block = await self._check_target_safe(event, uid)
-            if block:
-                nickname = await get_nickname(event, uid)
-                results.append(f"{nickname} — {block}，已跳过")
+            # 一次 API 调用同时获取昵称和角色
+            info = await self._get_member_info(event, uid)
+            role = info.get("role", "member")
+            nickname = info.get("card") or info.get("nickname") or str(uid)
+
+            if role in ("owner", "admin"):
+                label = "群主" if role == "owner" else "管理员"
+                results.append(f"{nickname} — {label}不可操作，已跳过")
                 continue
             try:
                 await event.bot.set_group_ban(
@@ -105,7 +109,6 @@ class QQAdminHandler:
                     user_id=int(uid),
                     duration=duration,
                 )
-                nickname = await get_nickname(event, uid)
                 results.append(f"已禁言 {nickname} {duration}秒")
             except Exception as e:
                 results.append(f"禁言失败: {e}")
@@ -144,19 +147,22 @@ class QQAdminHandler:
             return
 
         for uid in get_ats(event):
-            block = await self._check_target_safe(event, uid)
-            if block:
-                nickname = await get_nickname(event, uid)
-                yield event.plain_result(f"{nickname} — {block}，已跳过")
+            # 一次 API 调用同时获取昵称和角色
+            info = await self._get_member_info(event, uid)
+            role = info.get("role", "member")
+            nickname = info.get("card") or info.get("nickname") or str(uid)
+
+            if role in ("owner", "admin"):
+                label = "群主" if role == "owner" else "管理员"
+                yield event.plain_result(f"{nickname} — {label}不可操作，已跳过")
                 continue
             try:
-                target_name = await get_nickname(event, uid)
                 await event.bot.set_group_kick(
                     group_id=int(event.get_group_id()),
                     user_id=int(uid),
                     reject_add_request=False,
                 )
-                yield event.plain_result(f"已将【{uid}-{target_name}】踢出群聊")
+                yield event.plain_result(f"已将【{uid}-{nickname}】踢出群聊")
             except Exception as e:
                 yield event.plain_result(f"踢出失败: {e}")
         event.stop_event()

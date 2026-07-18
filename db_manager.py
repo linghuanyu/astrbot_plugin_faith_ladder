@@ -219,20 +219,26 @@ class DatabaseManager:
             rows = await cursor.fetchall()
             return [self._row_to_player(r) for r in rows]
 
-    async def get_player_ladder_rank(self, group_id: str, ladder_score: int) -> int:
-        """Get a player's rank in the ladder (1-based)."""
+    async def get_player_ladder_rank(self, group_id: str, ladder_score: int, pilgrimage_score: int = 0) -> int:
+        """Get a player's rank in the ladder (1-based).
+        Tiebreaker: same ladder_score → higher pilgrimage_score ranks higher.
+        """
         async with self._db.execute(
-            "SELECT COUNT(*) + 1 FROM players WHERE group_id = ? AND ladder_score > ?",
-            (group_id, ladder_score)
+            "SELECT COUNT(*) + 1 FROM players WHERE group_id = ? "
+            "AND (ladder_score > ? OR (ladder_score = ? AND pilgrimage_score > ?))",
+            (group_id, ladder_score, ladder_score, pilgrimage_score)
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 1
 
-    async def get_player_pilgrimage_rank(self, group_id: str, pilgrimage_score: int) -> int:
-        """Get a player's rank in the pilgrimage ladder (1-based)."""
+    async def get_player_pilgrimage_rank(self, group_id: str, pilgrimage_score: int, ladder_score: int = 0) -> int:
+        """Get a player's rank in the pilgrimage ladder (1-based).
+        Tiebreaker: same pilgrimage_score → higher ladder_score ranks higher.
+        """
         async with self._db.execute(
-            "SELECT COUNT(*) + 1 FROM players WHERE group_id = ? AND pilgrimage_score > ?",
-            (group_id, pilgrimage_score)
+            "SELECT COUNT(*) + 1 FROM players WHERE group_id = ? "
+            "AND (pilgrimage_score > ? OR (pilgrimage_score = ? AND ladder_score > ?))",
+            (group_id, pilgrimage_score, pilgrimage_score, ladder_score)
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 1
