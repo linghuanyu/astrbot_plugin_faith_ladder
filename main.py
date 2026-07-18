@@ -767,16 +767,21 @@ class FaithLadderPlugin(Star):
             if not target_player:
                 yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
                 return
+            init_ladder = self.config.get("init_ladder_score", 1000)
+            init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
             await self.db_manager.update_scores(
                 group_id, target_player.player_id,
-                -target_player.ladder_score + 1000, -target_player.pilgrimage_score + 100,
+                -target_player.ladder_score + init_ladder,
+                -target_player.pilgrimage_score + init_pilgrimage,
                 user_id, "管理员重置"
             )
-            yield event.plain_result(f"已重置玩家 {target_name} 的积分（天梯: 1000, 觐见: 100）。")
+            yield event.plain_result(f"已重置玩家 {target_name} 的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")
 
         elif action == "resetall":
+            init_ladder = self.config.get("init_ladder_score", 1000)
+            init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
             count = await self.db_manager.reset_all_scores(group_id)
-            yield event.plain_result(f"已重置本群 {count} 名玩家的积分（天梯: 1000, 觐见: 100）。")
+            yield event.plain_result(f"已重置本群 {count} 名玩家的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")
 
         elif action == "clear":
             count = await self.db_manager.delete_all_players(group_id)

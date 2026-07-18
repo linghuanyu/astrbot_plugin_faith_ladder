@@ -54,20 +54,14 @@ class QQAdminHandler:
             return True
         return self.plugin._is_plugin_admin(event)
 
-    async def _check_target_safe(self, event: AiocqhttpMessageEvent, target_id: str) -> str:
-        """检查目标是否可操作（保护群主/管理员）"""
+    async def _get_member_info(self, event: AiocqhttpMessageEvent, user_id: str) -> dict:
+        """获取群成员信息（一次 API 调用获取角色、名片、昵称）。"""
         try:
-            info = await event.bot.get_group_member_info(
-                group_id=int(event.get_group_id()), user_id=int(target_id)
-            )
-            role = info.get("role", "member")
-            if role == "owner":
-                return "群主不可操作"
-            if role == "admin":
-                return "管理员不可操作"
+            return await event.bot.get_group_member_info(
+                group_id=int(event.get_group_id()), user_id=int(user_id)
+            ) or {}
         except Exception:
-            pass
-        return ""
+            return {}
 
     # === 禁言 ===
 
