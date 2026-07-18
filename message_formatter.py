@@ -150,8 +150,13 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[积分管理] (白名单权限)\n"
         f"{cmd_add} <玩家名> <登神之路分变化> <觐见梯变化>\n"
-        f"{cmd_batch} - 粘贴结算文本批量录入积分\n"
+        f"{cmd_batch} - 粘贴结算文本批量录入积分和道具\n"
         f"弃誓 <玩家名> [新信仰] - 标记弃誓者\n"
+        f"\n"
+        f"[储物空间] (白名单权限)\n"
+        f"查询储物空间 <玩家名> - 查看玩家道具\n"
+        f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）\n"
+        f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）\n"
         f"\n"
         f"[群管] (白名单权限)\n"
         f"禁言 <秒数> @用户 - 禁言（默认60秒）\n"
@@ -226,3 +231,18 @@ def format_score_result(
         f"登神之路: {ladder_str} -> {new_ladder}\n"
         f"觐见之梯: {pilgrimage_str} -> {new_pilgrimage}"
     )
+
+
+def format_inventory(player_name: str, items: list) -> str:
+    """Format player inventory display.
+    items: [{"item_name": str, "quantity": int}, ...]
+    """
+    if not items:
+        return f"=== 储物空间 ===\n玩家: {player_name}\n\n储物空间为空。"
+
+    lines = [f"=== 储物空间 ===", f"玩家: {player_name}", ""]
+    for item in items:
+        name = item["item_name"]
+        qty = item["quantity"]
+        lines.append(f"{name} * {qty}")
+    return "\n".join(lines)

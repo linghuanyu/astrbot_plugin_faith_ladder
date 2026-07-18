@@ -864,3 +864,137 @@ class FaithLadderPlugin(Star):
     async def cmd_w_unmute_all(self, event: AstrMessageEvent):
         async for result in self._qq_admin.handle_unmute_all(event):
             yield result
+
+    # === 储物空间 ===
+
+    @filter.command("查询储物空间")
+    async def cmd_query_inventory(self, event: AstrMessageEvent):
+        """查看玩家储物空间。格式: 查询储物空间 <玩家名>"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "查询储物空间")
+        if not args or not args.strip():
+            yield event.plain_result("用法: 查询储物空间 <玩家名>")
+            return
+
+        target_name = args.strip()
+        text = await self.ladder_service.get_inventory_text(group_id, target_name)
+        if text is None:
+            yield event.plain_result(f"{target_name} 不存在。")
+            return
+        yield event.plain_result(text)
+
+    def _parse_item_args(self, text: str) -> list:
+        """解析道具参数。格式: 道具名*数量，空格分隔多个。
+        返回: [(道具名, 数量), ...]
+        道具名可包含（）括号，数量可选（默认1）。
+        """
+        items = []
+        # 按空格分割，但需要保留括号内的内容
+        # 策略: 先按空格分割，再检查每段是否有 *
+        parts = text.strip().split()
+        for part in parts:
+            if '*' in part:
+                # 以最后一个 * 分隔（道具名可能不包含 *，数量在最后）
+                idx = part.rfind('*')
+                name = part[:idx].strip()
+                qty_str = part[idx+1:].strip()
+                try:
+                    qty = int(qty_str)
+                except ValueError:
+                    # 如果 * 后面不是数字，整段作为道具名
+                    name = part
+                    qty = 1
+                if name:
+                    items.append((name, qty))
+            else:
+                if part:
+                    items.append((part, 1))
+        return items
+
+    @filter.command("赐予道具")
+    async def cmd_give_item(self, event: AstrMessageEvent):
+        """赐予道具。格式: 赐予道具 <玩家名> <道具1*数量> [道具2*数量] ..."""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "赐予道具")
+        if not args:
+            yield event.plain_result("用法: 赐予道具 <玩家名> <道具*数量> ...\n示例: 赐予道具 张三 铁剑*2 生命药水*3")
+            return
+
+        parts = args.split(None, 1)  # 分割为玩家名 + 剩余
+        if len(parts) < 2:
+            yield event.plain_result("用法: 赐予道具 <玩家名> <道具*数量> ...")
+            return
+
+        player_name = parts[0]
+        items = self._parse_item_args(parts[1])
+        if not items:
+            yield event.plain_result("未指定有效道具。格式: 道具名*数量")
+            return
+
+        success, message = await self.ladder_service.give_items(group_id, player_name, items)
+        yield event.plain_result(message)
+
+    @filter.command("收回道具")
+    async def cmd_remove_item(self, event: AstrMessageEvent):
+        """收回道具。格式: 收回道具 <玩家名> <道具1*数量> [道具2*数量] ..."""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "收回道具")
+        if not args:
+            yield event.plain_result("用法: 收回道具 <玩家名> <道具*数量> ...\n示例: 收回道具 张三 铁剑*2 生命药水")
+            return
+
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            yield event.plain_result("用法: 收回道具 <玩家名> <道具*数量> ...")
+            return
+
+        player_name = parts[0]
+        raw_items = self._parse_item_args(parts[1])
+        if not raw_items:
+            yield event.plain_result("未指定有效道具。")
+            return
+
+        # 对于收回，需要区分"有数量"和"无数量（全部收回）"
+        # _parse_item_args 默认给1，但用户可能没指定数量
+        # 重新解析: 没有 * 的道具 → quantity=None (全部收回)
+        items = []
+        for part in parts[1].strip().split():
+            if '*' in part:
+                idx = part.rfind('*')
+                name = part[:idx].strip()
+                qty_str = part[idx+1:].strip()
+                try:
+                    qty = int(qty_str)
+                    items.append((name, qty))
+                except ValueError:
+                    items.append((part, None))
+            else:
+                if part:
+                    items.append((part, None))  # None = 全部收回
+
+        success, message = await self.ladder_service.take_items(group_id, player_name, items)
+        yield event.plain_result(message)

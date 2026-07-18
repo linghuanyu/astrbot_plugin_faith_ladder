@@ -11,6 +11,7 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_pilgrimage_leaderboard,
     format_player_card,
     format_score_result,
+    format_inventory,
 )
 
 try:
@@ -264,15 +265,17 @@ class LadderService:
     # === 批量录入 ===
 
     def parse_batch_scores(self, text: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """解析批量录入文本，提取玩家名和分数。
+        """解析批量录入文本，提取玩家名、分数和道具。
 
         支持格式示例：
             【玩家：XXX 表现评分：A+】
             【登神之路+16】
             【觐见之梯+2】
+            【获得道具：共生噬刃（C级）】
+            【获得道具：生命药水】
 
         返回 (解析结果列表, 错误信息)。
-        每个结果项: {"name": str, "ladder_delta": int, "pilgrimage_delta": int}
+        每个结果项: {"name": str, "ladder_delta": int, "pilgrimage_delta": int, "items": [str, ...]}
         """
         results = []
         # 按 "玩家：" 或 "玩家:" 分割，每段对应一个玩家的区块
@@ -309,11 +312,16 @@ class LadderService:
             else:
                 pilgrimage_delta = 0
 
-            if ladder_delta != 0 or pilgrimage_delta != 0:
+            # 提取道具（【获得道具：名称】，名称可包含品级括号）
+            items = re.findall(r'获得道具[：:]\s*([^】]+)', part)
+            items = [item.strip() for item in items if item.strip()]
+
+            if ladder_delta != 0 or pilgrimage_delta != 0 or items:
                 results.append({
                     "name": name,
                     "ladder_delta": ladder_delta,
                     "pilgrimage_delta": pilgrimage_delta,
+                    "items": items,
                 })
 
         if not results:
@@ -327,7 +335,7 @@ class LadderService:
         parsed_list: List[Dict[str, Any]],
         operator_id: str,
     ) -> Tuple[int, List[str], List[str]]:
-        """批量录入积分。所有更新在一个事务内完成，全部成功或全部回滚。
+        """批量录入积分和道具。所有更新在一个事务内完成。
 
         返回 (成功人数, 成功详情列表, 跳过玩家名列表)。
         """
@@ -340,6 +348,7 @@ class LadderService:
                 name = entry["name"]
                 ladder_delta = entry["ladder_delta"]
                 pilgrimage_delta = entry["pilgrimage_delta"]
+                items = entry.get("items", [])
 
                 # Check if player exists
                 player = await self.db.get_player_by_name(group_id, name)
@@ -354,20 +363,71 @@ class LadderService:
                     operator_id, "批量录入",
                     commit=False
                 )
-                if updated:
+
+                # Add items (count occurrences of each item name)
+                item_details = []
+                if items:
+                    from collections import Counter
+                    item_counts = Counter(items)
+                    for item_name, qty in item_counts.items():
+                        await self.db.add_item(group_id, player.player_id, item_name, qty)
+                        item_details.append(f"{item_name}*{qty}")
+
+                if updated or item_details:
                     success_count += 1
-                    ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
-                    pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
-                    success_details.append(
-                        f"  {name}: 登神之路{ladder_str}, 觐见之梯{pilgrimage_str}"
-                    )
+                    parts = []
+                    if ladder_delta != 0 or pilgrimage_delta != 0:
+                        ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
+                        pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
+                        parts.append(f"登神之路{ladder_str}, 觐见之梯{pilgrimage_str}")
+                    if item_details:
+                        parts.append(f"道具: {', '.join(item_details)}")
+                    success_details.append(f"  {name}: {', '.join(parts)}")
 
             # Commit all updates atomically
             await self.db.commit()
 
         except Exception as e:
-            # Rollback on failure — no partial updates
-            logger.error(f"Batch score update failed, rolling back: {e}")
+            logger.error(f"Batch update failed, rolling back: {e}")
             return 0, [], [entry["name"] for entry in parsed_list]
 
         return success_count, success_details, skipped
+
+    # === 储物空间 ===
+
+    async def get_inventory_text(self, group_id: str, player_name: str) -> Optional[str]:
+        """查询玩家储物空间。返回格式化文本，玩家不存在返回 None。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return None
+        items = await self.db.get_player_items(group_id, player.player_id)
+        return format_inventory(player_name, items)
+
+    async def give_items(self, group_id: str, player_name: str, items: List[Tuple[str, int]]) -> Tuple[bool, str]:
+        """赐予道具。items: [(道具名, 数量), ...]"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        for item_name, quantity in items:
+            await self.db.add_item(group_id, player.player_id, item_name, quantity)
+        await self.db.commit()
+        details = ", ".join(f"{name}*{qty}" for name, qty in items)
+        return True, f"已赐予 {player_name}: {details}"
+
+    async def take_items(self, group_id: str, player_name: str, items: List[Tuple[str, Optional[int]]]) -> Tuple[bool, str]:
+        """收回道具。items: [(道具名, 数量或None), ...]。None=全部收回。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        details = []
+        for item_name, quantity in items:
+            found = await self.db.remove_item(group_id, player.player_id, item_name, quantity)
+            if found:
+                if quantity is None:
+                    details.append(f"{item_name}(全部)")
+                else:
+                    details.append(f"{item_name}*{quantity}")
+            else:
+                details.append(f"{item_name}(未拥有)")
+        await self.db.commit()
+        return True, f"已从 {player_name} 收回: {', '.join(details)}"

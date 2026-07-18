@@ -86,6 +86,17 @@ class DatabaseManager:
                 group_id TEXT PRIMARY KEY,
                 output_mode TEXT DEFAULT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS player_items (
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, player_id, item_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_items_player
+                ON player_items(group_id, player_id);
         """)
         await self._db.commit()
 
@@ -561,6 +572,70 @@ class DatabaseManager:
                     f.unlink()
 
         await asyncio.to_thread(_remove_old)
+
+    # === 道具（储物空间） ===
+
+    async def add_item(self, group_id: str, player_id: str, item_name: str, quantity: int = 1) -> None:
+        """增加道具。已存在则累加数量。"""
+        if quantity <= 0:
+            return
+        await self._db.execute(
+            "INSERT INTO player_items (group_id, player_id, item_name, quantity) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(group_id, player_id, item_name) DO UPDATE SET "
+            "quantity = quantity + excluded.quantity, updated_at = CURRENT_TIMESTAMP",
+            (group_id, player_id, item_name, quantity)
+        )
+
+    async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None) -> bool:
+        """减少道具。quantity=None 时全部删除。返回是否成功找到该道具。"""
+        if quantity is None:
+            # 全部删除
+            cursor = await self._db.execute(
+                "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                (group_id, player_id, item_name)
+            )
+            return cursor.rowcount > 0
+        else:
+            # 减少指定数量
+            async with self._db.execute(
+                "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                (group_id, player_id, item_name)
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                return False
+            new_qty = row[0] - quantity
+            if new_qty <= 0:
+                await self._db.execute(
+                    "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (group_id, player_id, item_name)
+                )
+            else:
+                await self._db.execute(
+                    "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (new_qty, group_id, player_id, item_name)
+                )
+            return True
+
+    async def get_player_items(self, group_id: str, player_id: str) -> list:
+        """获取玩家所有道具。返回 [{"item_name": str, "quantity": int}, ...]"""
+        async with self._db.execute(
+            "SELECT item_name, quantity FROM player_items "
+            "WHERE group_id = ? AND player_id = ? ORDER BY item_name",
+            (group_id, player_id)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [{"item_name": r[0], "quantity": r[1]} for r in rows]
+
+    async def delete_all_items(self, group_id: str, player_id: str) -> int:
+        """清空玩家所有道具。返回删除的道具种类数。"""
+        cursor = await self._db.execute(
+            "DELETE FROM player_items WHERE group_id = ? AND player_id = ?",
+            (group_id, player_id)
+        )
+        return cursor.rowcount
 
     async def close(self):
         """Close the persistent database connection."""
