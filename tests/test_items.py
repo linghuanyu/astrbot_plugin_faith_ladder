@@ -159,6 +159,47 @@ class TestBatchParseWithItems:
         results, err = service.parse_batch_scores(text)
         assert err is not None  # no valid data
 
+    def test_parse_real_format(self, service):
+        """Test parsing the actual game result format with multiple items per line and '无'."""
+        text = (
+            "【特殊试炼【孤岛骗局（欺诈）】挑战？？】\n"
+            "【正在评分，并结算奖励……】\n"
+            "\n"
+            "【玩家：陈墨，表现评分：D】\n"
+            "【获得道具：无】\n"
+            "【登神之路+0】\n"
+            "【觐见之梯+1】\n"
+            "\n"
+            "【玩家：拥抱，表现评分：B】\n"
+            "【获得道具：望远镜（C），生锈的钥匙（B）】\n"
+            "【登神之路+13】\n"
+            "【觐见之梯+3】\n"
+            "\n"
+            "【玩家：温迪，表现评分：C】\n"
+            "【获得道具：无】\n"
+            "【登神之路+5】\n"
+            "【觐见之梯+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 3
+
+        # 陈墨: no items (无 is filtered out)
+        assert results[0]["name"] == "陈墨"
+        assert results[0]["items"] == []
+        assert results[0]["ladder_delta"] == 0
+        assert results[0]["pilgrimage_delta"] == 1
+
+        # 拥抱: two items separated by comma
+        assert results[1]["name"] == "拥抱"
+        assert results[1]["items"] == ["望远镜（C）", "生锈的钥匙（B）"]
+        assert results[1]["ladder_delta"] == 13
+        assert results[1]["pilgrimage_delta"] == 3
+
+        # 温迪: no items (无 is filtered out)
+        assert results[2]["name"] == "温迪"
+        assert results[2]["items"] == []
+
 
 class TestFormatInventory:
     """Tests for format_inventory."""

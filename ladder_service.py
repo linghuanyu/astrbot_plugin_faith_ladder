@@ -312,9 +312,15 @@ class LadderService:
             else:
                 pilgrimage_delta = 0
 
-            # 提取道具（【获得道具：名称】，名称可包含品级括号）
-            items = re.findall(r'获得道具[：:]\s*([^】]+)', part)
-            items = [item.strip() for item in items if item.strip()]
+            # 提取道具（【获得道具：名称】，支持逗号分隔多个道具）
+            raw_items = re.findall(r'获得道具[：:]\s*([^】]+)', part)
+            items = []
+            for raw in raw_items:
+                # 按中英文逗号分隔多个道具
+                for item in re.split(r'[，,]', raw):
+                    item = item.strip()
+                    if item and item != "无":
+                        items.append(item)
 
             if ladder_delta != 0 or pilgrimage_delta != 0 or items:
                 results.append({
