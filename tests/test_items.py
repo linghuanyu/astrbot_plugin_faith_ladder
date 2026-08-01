@@ -183,6 +183,24 @@ class TestBatchParseWithItems:
         assert results[0]["ladder_delta"] == 13
         assert results[0]["pilgrimage_delta"] == 3
 
+    def test_parse_alternative_ladder_name(self, service):
+        """Test '封神之路' (alternative name) and colon format."""
+        text = (
+            "【玩家: 阡陌 寂灭使徒 1075 108 表现评分:A】\n"
+            "【获得道具:泯灭手枪(B)】\n"
+            "【封神之路:+14】\n"
+            "【觐见之梯:+2】\n"
+            "【当前登神之路得分:1089】\n"
+            "【当前觐见之梯得分:110】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 1
+        assert results[0]["name"] == "阡陌"
+        assert results[0]["ladder_delta"] == 14
+        assert results[0]["pilgrimage_delta"] == 2
+        assert results[0]["items"] == ["泯灭手枪(B)"]
+
     def test_parse_with_graded_items(self, service):
         text = (
             "【玩家：半秒失忆 旧日追猎者 1030.107表现评分：A】\n"

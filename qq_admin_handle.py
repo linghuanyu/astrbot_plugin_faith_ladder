@@ -1,6 +1,7 @@
 """
 QQ 群管理命令逻辑。
 照搬 astrbot_plugin_qqadmin 的实现，仅添加白名单权限控制。
+成功操作静默（不发消息），错误情况保留提示。
 需要 aiocqhttp (OneBot11) 协议支持。
 """
 
@@ -41,7 +42,7 @@ async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
 
 
 class QQAdminHandler:
-    """QQ 群管命令实现。照搬 qqadmin 逻辑，添加白名单权限检查。"""
+    """QQ 群管命令实现。成功静默，错误保留提示。"""
 
     def __init__(self, plugin):
         self.plugin = plugin
@@ -66,7 +67,7 @@ class QQAdminHandler:
     # === 禁言 ===
 
     async def handle_ban(self, event: AiocqhttpMessageEvent, ban_time: int = None):
-        """禁言 <秒数> @用户"""
+        """禁言 <秒数> @用户 — 成功静默，错误保留"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
             event.stop_event()
@@ -78,7 +79,6 @@ class QQAdminHandler:
             event.stop_event()
             return
 
-        # 从消息文本提取秒数
         text = event.message_str.strip()
         duration = 60
         for part in text.split():
@@ -86,16 +86,15 @@ class QQAdminHandler:
                 duration = int(part)
                 break
 
-        results = []
+        errors = []
         for uid in targets:
-            # 一次 API 调用同时获取昵称和角色
             info = await self._get_member_info(event, uid)
             role = info.get("role", "member")
             nickname = info.get("card") or info.get("nickname") or str(uid)
 
             if role in ("owner", "admin"):
                 label = "群主" if role == "owner" else "管理员"
-                results.append(f"{nickname} — {label}不可操作，已跳过")
+                errors.append(f"{nickname} — {label}不可操作")
                 continue
             try:
                 await event.bot.set_group_ban(
@@ -103,23 +102,30 @@ class QQAdminHandler:
                     user_id=int(uid),
                     duration=duration,
                 )
-                results.append(f"已禁言 {nickname} {duration}秒")
+                # 成功：静默
             except Exception as e:
-                results.append(f"禁言失败: {e}")
+                errors.append(f"禁言失败: {e}")
 
-        yield event.plain_result("\n".join(results))
+        if errors:
+            yield event.plain_result("\n".join(errors))
         event.stop_event()
 
     # === 解禁 ===
 
     async def handle_unban(self, event: AiocqhttpMessageEvent):
-        """解禁 @用户"""
+        """解禁 @用户 — 成功静默"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
             event.stop_event()
             return
 
-        for uid in get_ats(event):
+        targets = get_ats(event)
+        if not targets:
+            yield event.plain_result("请 @ 要解禁的用户。")
+            event.stop_event()
+            return
+
+        for uid in targets:
             try:
                 await event.bot.set_group_ban(
                     group_id=int(event.get_group_id()),
@@ -128,27 +134,33 @@ class QQAdminHandler:
                 )
             except Exception:
                 pass
-        yield event.plain_result("已解禁")
+        # 成功：静默
         event.stop_event()
 
     # === 踢人 ===
 
     async def handle_kick(self, event: AiocqhttpMessageEvent):
-        """踢出 @用户"""
+        """踢出 @用户 — 成功静默，错误保留"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
             event.stop_event()
             return
 
-        for uid in get_ats(event):
-            # 一次 API 调用同时获取昵称和角色
+        targets = get_ats(event)
+        if not targets:
+            yield event.plain_result("请 @ 要踢出的用户。")
+            event.stop_event()
+            return
+
+        errors = []
+        for uid in targets:
             info = await self._get_member_info(event, uid)
             role = info.get("role", "member")
             nickname = info.get("card") or info.get("nickname") or str(uid)
 
             if role in ("owner", "admin"):
                 label = "群主" if role == "owner" else "管理员"
-                yield event.plain_result(f"{nickname} — {label}不可操作，已跳过")
+                errors.append(f"{nickname} — {label}不可操作")
                 continue
             try:
                 await event.bot.set_group_kick(
@@ -156,15 +168,18 @@ class QQAdminHandler:
                     user_id=int(uid),
                     reject_add_request=False,
                 )
-                yield event.plain_result(f"已将【{uid}-{nickname}】踢出群聊")
+                # 成功：静默
             except Exception as e:
-                yield event.plain_result(f"踢出失败: {e}")
+                errors.append(f"踢出失败: {e}")
+
+        if errors:
+            yield event.plain_result("\n".join(errors))
         event.stop_event()
 
     # === 撤回 ===
 
     async def handle_recall(self, event: AiocqhttpMessageEvent):
-        """撤回消息（引用消息 或 @用户批量撤回）"""
+        """撤回消息 — 成功静默，错误保留"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
             event.stop_event()
@@ -178,7 +193,7 @@ class QQAdminHandler:
         if isinstance(first_seg, Reply):
             try:
                 await client.delete_msg(message_id=int(first_seg.id))
-                yield event.plain_result("已撤回该消息。")
+                # 成功：静默
             except Exception:
                 yield event.plain_result("消息已过期或不存在")
             event.stop_event()
@@ -208,24 +223,21 @@ class QQAdminHandler:
             except Exception:
                 messages = []
 
-            delete_count = 0
             sem = asyncio.Semaphore(10)
 
             async def try_delete(message):
-                nonlocal delete_count
                 if str(message["sender"]["user_id"]) not in target_ids:
                     return
                 async with sem:
                     try:
                         await client.delete_msg(message_id=message["message_id"])
-                        delete_count += 1
                     except Exception:
                         pass
 
             tasks = [try_delete(msg) for msg in messages]
             await asyncio.gather(*tasks)
 
-            yield event.plain_result(f"已检索{count}条消息，成功撤回{delete_count}条")
+            # 成功：静默
             event.stop_event()
             return
 
@@ -235,7 +247,7 @@ class QQAdminHandler:
     # === 全员禁 ===
 
     async def handle_mute_all(self, event: AiocqhttpMessageEvent):
-        """全员禁言"""
+        """全员禁言 — 成功静默"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
             event.stop_event()
@@ -244,7 +256,7 @@ class QQAdminHandler:
             await event.bot.set_group_whole_ban(
                 group_id=int(event.get_group_id()), enable=True
             )
-            yield event.plain_result("已开启全员禁言。")
+            # 成功：静默
         except Exception as e:
             yield event.plain_result(f"操作失败: {e}")
         event.stop_event()
@@ -252,7 +264,7 @@ class QQAdminHandler:
     # === 全员解 ===
 
     async def handle_unmute_all(self, event: AiocqhttpMessageEvent):
-        """关闭全员禁言"""
+        """关闭全员禁言 — 成功静默"""
         if not await self._check_permission(event):
             yield event.plain_result("你没有群管权限。")
             event.stop_event()
@@ -261,7 +273,7 @@ class QQAdminHandler:
             await event.bot.set_group_whole_ban(
                 group_id=int(event.get_group_id()), enable=False
             )
-            yield event.plain_result("已关闭全员禁言。")
+            # 成功：静默
         except Exception as e:
             yield event.plain_result(f"操作失败: {e}")
         event.stop_event()

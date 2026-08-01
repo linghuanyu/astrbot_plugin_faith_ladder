@@ -204,5 +204,10 @@
     "description": "生命信仰弃誓文本",
     "type": "string",
     "default": "{name}抛弃了生命之根。生机断绝，誓约已碎。"
+  },
+  "auto_whitelist_group": {
+    "description": "自动白名单群号（该群成员加入时自动加入白名单，退群时自动移除）",
+    "type": "string",
+    "default": ""
   }
 }

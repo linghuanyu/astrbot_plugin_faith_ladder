@@ -121,6 +121,15 @@ class FaithLadderPlugin(Star):
             purge_score_history=self.db_manager.purge_old_score_history,
         )
         await self._scheduler.start()
+
+        # 注册群成员变动监听（白名单自动同步）
+        try:
+            if hasattr(self.context, 'register_event_handler'):
+                self.context.register_event_handler(self.on_group_member_change)
+                logger.info("[AutoWhitelist] 群成员变动监听已注册")
+        except Exception as e:
+            logger.warning(f"[AutoWhitelist] 事件监听注册失败（可用'同步白名单'命令手动同步）: {e}")
+
         logger.info("FaithLadder plugin initialized")
 
     async def terminate(self):
@@ -998,3 +1007,76 @@ class FaithLadderPlugin(Star):
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
         yield event.plain_result(message)
+
+    # === 白名单自动同步 ===
+
+    @filter.command("同步白名单")
+    async def cmd_sync_whitelist(self, event: AstrMessageEvent):
+        """同步指定群的当前成员到白名单。格式: 同步白名单"""
+        if not self._is_plugin_admin(event):
+            yield event.plain_result("权限不足：仅管理员可同步白名单。")
+            return
+
+        target_group = self.config.get("auto_whitelist_group", "")
+        if not target_group:
+            yield event.plain_result("请先在 WebUI 配置 auto_whitelist_group（自动白名单群号）。")
+            return
+
+        try:
+            members = await event.bot.get_group_member_list(group_id=int(target_group))
+        except Exception as e:
+            yield event.plain_result(f"获取群成员列表失败: {e}")
+            return
+
+        bot_id = str(event.get_self_id())
+        added = 0
+        for member in members:
+            uid = str(member.get("user_id", ""))
+            if not uid or uid == bot_id:
+                continue
+            success, _ = await self.permission_service.add_to_whitelist("user", uid, "sync")
+            if success:
+                added += 1
+
+        yield event.plain_result(f"白名单同步完成: 新增 {added} 人（群 {target_group} 共 {len(members)} 名成员）")
+
+    async def _handle_auto_whitelist(self, user_id: str, action: str):
+        """处理白名单自动同步（加入/离开指定群）。"""
+        target_group = self.config.get("auto_whitelist_group", "")
+        if not target_group:
+            return
+
+        if action == "join":
+            success, msg = await self.permission_service.add_to_whitelist("user", user_id, "auto")
+            if success:
+                logger.info(f"[AutoWhitelist] 自动添加白名单: {user_id}")
+        elif action == "leave":
+            success, msg = await self.permission_service.remove_from_whitelist("user", user_id)
+            if success:
+                logger.info(f"[AutoWhitelist] 自动移除白名单: {user_id}")
+
+    async def on_group_member_change(self, event: AstrMessageEvent):
+        """监听群成员变动事件，自动同步白名单。
+        需要在 initialize() 中注册到事件总线。
+        """
+        try:
+            # 检查是否为 aiocqhttp 的 notice 事件
+            raw = getattr(event.message_obj, 'raw_message', None) or {}
+            notice_type = raw.get('notice_type', '')
+            group_id = str(raw.get('group_id', ''))
+            user_id = str(raw.get('user_id', ''))
+
+            target_group = self.config.get("auto_whitelist_group", "")
+            if not target_group or group_id != target_group or not user_id:
+                return
+
+            bot_id = str(event.get_self_id()) if hasattr(event, 'get_self_id') else ''
+            if user_id == bot_id:
+                return
+
+            if notice_type == 'group_increase':
+                await self._handle_auto_whitelist(user_id, "join")
+            elif notice_type == 'group_decrease':
+                await self._handle_auto_whitelist(user_id, "leave")
+        except Exception as e:
+            logger.error(f"[AutoWhitelist] 处理成员变动事件失败: {e}")

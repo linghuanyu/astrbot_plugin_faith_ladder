@@ -296,16 +296,16 @@ class LadderService:
             if not name:
                 continue
 
-            # 提取天梯积分（兼容 "登神之路" / "登神指路"，支持 +/-）
-            ladder_match = re.search(r'登神之路([+-])\s*(\d+)', part)
+            # 提取天梯积分（兼容 "登神之路" / "封神之路" / "登神指路"，支持冒号和 +/-）
+            ladder_match = re.search(r'(?:登神之路|封神之路|登神指路):?([+-])\s*(\d+)', part)
             if ladder_match:
                 sign = 1 if ladder_match.group(1) == '+' else -1
                 ladder_delta = sign * int(ladder_match.group(2))
             else:
                 ladder_delta = 0
 
-            # 提取觐见之梯分数（支持 +/-）
-            pilgrimage_match = re.search(r'觐见之梯([+-])\s*(\d+)', part)
+            # 提取觐见之梯分数（支持冒号和 +/-）
+            pilgrimage_match = re.search(r'觐见之梯:?([+-])\s*(\d+)', part)
             if pilgrimage_match:
                 sign = 1 if pilgrimage_match.group(1) == '+' else -1
                 pilgrimage_delta = sign * int(pilgrimage_match.group(2))

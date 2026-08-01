@@ -168,6 +168,7 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"
+        f"同步白名单 — 同步指定群成员到白名单\n"
         f"{cmd_admin} 重置/删除/改名/清空/清除弃誓\n"
         f"输出模式 text/image - 切换输出模式（管理员，全局默认: {output_mode}）\n"
         f"\n"
