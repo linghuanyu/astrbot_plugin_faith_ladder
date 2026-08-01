@@ -119,6 +119,7 @@ class FaithLadderPlugin(Star):
             send_to_group=send_to_group,
             get_active_groups=self.db_manager.get_active_groups,
             purge_score_history=self.db_manager.purge_old_score_history,
+            purge_expired_statuses=self.db_manager.purge_expired_statuses,
         )
         await self._scheduler.start()
 
@@ -1080,3 +1081,94 @@ class FaithLadderPlugin(Star):
                 await self._handle_auto_whitelist(user_id, "leave")
         except Exception as e:
             logger.error(f"[AutoWhitelist] 处理成员变动事件失败: {e}")
+
+    # === 状态 ===
+
+    @filter.command("添加状态")
+    async def cmd_add_status(self, event: AstrMessageEvent):
+        """添加状态。格式: 添加状态 <玩家名> <状态名> <天数>"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "添加状态")
+        if not args:
+            yield event.plain_result("用法: 添加状态 <玩家名> <状态名> <天数>\n示例: 添加状态 繁荣 虚弱 3")
+            return
+
+        parts = args.split()
+        if len(parts) < 3:
+            yield event.plain_result("用法: 添加状态 <玩家名> <状态名> <天数>")
+            return
+
+        player_name = parts[0]
+        # 状态名可能是多词（用空格分隔的最后一部分是天数）
+        days_str = parts[-1]
+        status_name = " ".join(parts[1:-1])
+
+        try:
+            days = int(days_str)
+        except ValueError:
+            yield event.plain_result("天数必须是整数。")
+            return
+
+        if days <= 0:
+            yield event.plain_result("天数必须大于0。")
+            return
+
+        success, message = await self.ladder_service.add_status(group_id, player_name, status_name, days)
+        yield event.plain_result(message)
+
+    @filter.command("移除状态")
+    async def cmd_remove_status(self, event: AstrMessageEvent):
+        """移除状态。格式: 移除状态 <玩家名> <状态名>"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "移除状态")
+        if not args:
+            yield event.plain_result("用法: 移除状态 <玩家名> <状态名>")
+            return
+
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            yield event.plain_result("用法: 移除状态 <玩家名> <状态名>")
+            return
+
+        player_name = parts[0]
+        status_name = parts[1].strip()
+
+        success, message = await self.ladder_service.remove_status(group_id, player_name, status_name)
+        yield event.plain_result(message)
+
+    @filter.command("清除状态")
+    async def cmd_clear_status(self, event: AstrMessageEvent):
+        """清除所有状态。格式: 清除状态 <玩家名>"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "清除状态")
+        if not args or not args.strip():
+            yield event.plain_result("用法: 清除状态 <玩家名>")
+            return
+
+        player_name = args.strip()
+        success, message = await self.ladder_service.clear_statuses(group_id, player_name)
+        yield event.plain_result(message)

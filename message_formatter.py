@@ -75,9 +75,10 @@ def format_player_card(
     ladder_rank: int = 0,
     pilgrimage_rank: int = 0,
     init_ladder: int = 1000,
-    init_pilgrimage: int = 100
+    init_pilgrimage: int = 100,
+    statuses: list = None
 ) -> str:
-    """Format a player's info card with rankings."""
+    """Format a player's info card with rankings and statuses."""
     class_str = player.class_ if player.class_ else "未设定"
     faith_str = player.faith if player.faith else "未设定"
     oathbreaker_str = "(弃誓者)" if player.oathbreaker else ""
@@ -97,16 +98,25 @@ def format_player_card(
     else:
         pilgrimage_rank_str = "未上榜"
 
-    return (
-        f"=== 玩家信息 ===\n"
-        f"姓名: {player.player_name}{oathbreaker_str}\n"
-        f"职业: {class_str}\n"
-        f"信仰: {faith_str}\n"
-        f"登神之路: {player.ladder_score}\n"
-        f"登神之路排名: {ladder_rank_str}\n"
-        f"觐见之梯: {player.pilgrimage_score}\n"
-        f"觐见之梯排名: {pilgrimage_rank_str}"
-    )
+    lines = [
+        f"=== 玩家信息 ===",
+        f"姓名: {player.player_name}{oathbreaker_str}",
+        f"职业: {class_str}",
+        f"信仰: {faith_str}",
+        f"登神之路: {player.ladder_score}",
+        f"登神之路排名: {ladder_rank_str}",
+        f"觐见之梯: {player.pilgrimage_score}",
+        f"觐见之梯排名: {pilgrimage_rank_str}",
+    ]
+
+    # 状态显示
+    if statuses:
+        lines.append("")
+        lines.append("[状态]")
+        for s in statuses:
+            lines.append(f"{s['status_name']}: 剩余{s['remaining_days']}天")
+
+    return "\n".join(lines)
 
 
 def format_help(config: dict) -> str:
@@ -157,6 +167,11 @@ def format_help(config: dict) -> str:
         f"查询储物空间 <玩家名> - 查看玩家道具\n"
         f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）\n"
         f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）\n"
+        f"\n"
+        f"[状态] (白名单权限)\n"
+        f"添加状态 <玩家名> <状态名> <天数> - 添加状态\n"
+        f"移除状态 <玩家名> <状态名> - 移除指定状态\n"
+        f"清除状态 <玩家名> - 清除所有状态\n"
         f"\n"
         f"[群管] (白名单权限)\n"
         f"禁言 <秒数> @用户 - 禁言（默认60秒）\n"

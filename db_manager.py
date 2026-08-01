@@ -97,6 +97,19 @@ class DatabaseManager:
             );
             CREATE INDEX IF NOT EXISTS idx_items_player
                 ON player_items(group_id, player_id);
+
+            CREATE TABLE IF NOT EXISTS player_statuses (
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                status_name TEXT NOT NULL,
+                expire_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, player_id, status_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_statuses_player
+                ON player_statuses(group_id, player_id);
+            CREATE INDEX IF NOT EXISTS idx_statuses_expire
+                ON player_statuses(expire_at);
         """)
         await self._db.commit()
 
@@ -385,6 +398,11 @@ class DatabaseManager:
             "DELETE FROM player_items WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         )
+        # Clean up player statuses
+        await self._db.execute(
+            "DELETE FROM player_statuses WHERE player_id = ? AND group_id = ?",
+            (player_id, group_id)
+        )
         await self._db.commit()
         return cursor.rowcount > 0
 
@@ -448,6 +466,10 @@ class DatabaseManager:
         # Clean up all items in the group
         await self._db.execute(
             "DELETE FROM player_items WHERE group_id = ?", (group_id,)
+        )
+        # Clean up all statuses in the group
+        await self._db.execute(
+            "DELETE FROM player_statuses WHERE group_id = ?", (group_id,)
         )
         await self._db.commit()
         return cursor.rowcount
@@ -643,6 +665,73 @@ class DatabaseManager:
         cursor = await self._db.execute(
             "DELETE FROM player_items WHERE group_id = ? AND player_id = ?",
             (group_id, player_id)
+        )
+        return cursor.rowcount
+
+    # === 状态 ===
+
+    async def add_status(self, group_id: str, player_id: str, status_name: str, days: int) -> None:
+        """添加状态。从当前时间开始持续 days 天。"""
+        if days <= 0:
+            return
+        from datetime import datetime, timedelta
+        expire_at = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        await self._db.execute(
+            "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
+            "expire_at = excluded.expire_at",
+            (group_id, player_id, status_name, expire_at)
+        )
+
+    async def remove_status(self, group_id: str, player_id: str, status_name: str) -> bool:
+        """移除指定状态。返回是否成功找到。"""
+        cursor = await self._db.execute(
+            "DELETE FROM player_statuses WHERE group_id = ? AND player_id = ? AND status_name = ?",
+            (group_id, player_id, status_name)
+        )
+        return cursor.rowcount > 0
+
+    async def clear_statuses(self, group_id: str, player_id: str) -> int:
+        """清除玩家所有状态。返回删除数量。"""
+        cursor = await self._db.execute(
+            "DELETE FROM player_statuses WHERE group_id = ? AND player_id = ?",
+            (group_id, player_id)
+        )
+        return cursor.rowcount
+
+    async def get_player_statuses(self, group_id: str, player_id: str) -> list:
+        """获取玩家未过期的状态列表。返回 [{"status_name": str, "expire_at": str, "remaining_days": int}, ...]"""
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        async with self._db.execute(
+            "SELECT status_name, expire_at FROM player_statuses "
+            "WHERE group_id = ? AND player_id = ? AND expire_at > ? "
+            "ORDER BY expire_at",
+            (group_id, player_id, now)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            result = []
+            now_dt = datetime.now()
+            for r in rows:
+                expire_dt = datetime.strptime(r[1], "%Y-%m-%d %H:%M:%S")
+                delta = expire_dt - now_dt
+                # 按日历天计算：向上取整（不足一天算一天）
+                remaining = max(0, delta.days + (1 if delta.seconds > 0 else 0))
+                result.append({
+                    "status_name": r[0],
+                    "expire_at": r[1],
+                    "remaining_days": remaining,
+                })
+            return result
+
+    async def purge_expired_statuses(self) -> int:
+        """清理所有过期状态记录。返回删除数量。"""
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor = await self._db.execute(
+            "DELETE FROM player_statuses WHERE expire_at <= ?",
+            (now,)
         )
         return cursor.rowcount
 

@@ -74,7 +74,9 @@ class LadderService:
         pilgrimage_rank = await self.db.get_player_pilgrimage_rank(
             group_id, player.pilgrimage_score, player.ladder_score
         )
-        return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage)
+        # 获取有效状态
+        statuses = await self.db.get_player_statuses(group_id, player.player_id)
+        return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
 
     async def add_score(
         self,
@@ -437,3 +439,34 @@ class LadderService:
                 details.append(f"该玩家没有此道具: {item_name}")
         await self.db.commit()
         return True, f"已从 {player_name} 收回: {', '.join(details)}"
+
+    # === 状态 ===
+
+    async def add_status(self, group_id: str, player_name: str, status_name: str, days: int) -> Tuple[bool, str]:
+        """添加状态。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        await self.db.add_status(group_id, player.player_id, status_name, days)
+        await self.db.commit()
+        return True, f"已为 {player_name} 添加状态 [{status_name}]（持续{days}天）"
+
+    async def remove_status(self, group_id: str, player_name: str, status_name: str) -> Tuple[bool, str]:
+        """移除指定状态。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        found = await self.db.remove_status(group_id, player.player_id, status_name)
+        await self.db.commit()
+        if found:
+            return True, f"已移除 {player_name} 的状态 [{status_name}]"
+        return False, f"{player_name} 没有状态 [{status_name}]"
+
+    async def clear_statuses(self, group_id: str, player_name: str) -> Tuple[bool, str]:
+        """清除所有状态。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        count = await self.db.clear_statuses(group_id, player.player_id)
+        await self.db.commit()
+        return True, f"已清除 {player_name} 的 {count} 个状态"

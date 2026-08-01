@@ -26,6 +26,7 @@ class SchedulerService:
         image_renderer: Optional[Any] = None,
         get_output_mode: Optional[Callable[[str], Awaitable[str]]] = None,
         purge_score_history: Optional[Callable[[int], Awaitable[int]]] = None,
+        purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
     ):
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
@@ -36,6 +37,7 @@ class SchedulerService:
         self._image_renderer = image_renderer
         self._get_output_mode = get_output_mode
         self._purge_score_history = purge_score_history
+        self._purge_expired_statuses = purge_expired_statuses
         self._get_config = get_config
         self._send_to_group = send_to_group
         self._get_active_groups = get_active_groups
@@ -121,6 +123,15 @@ class SchedulerService:
                             logger.info(f"Purged {deleted} old score history entries (>{retention_days} days)")
                     except Exception as e:
                         logger.error(f"Score history purge error: {e}")
+
+                # Purge expired statuses
+                if self._purge_expired_statuses:
+                    try:
+                        deleted = await self._purge_expired_statuses()
+                        if deleted > 0:
+                            logger.info(f"Purged {deleted} expired player statuses")
+                    except Exception as e:
+                        logger.error(f"Status purge error: {e}")
 
                 # Run once per day (check every hour)
                 await asyncio.sleep(3600)
