@@ -142,18 +142,28 @@ class DatabaseManager:
             rows = await cursor.fetchall()
 
         for group_id, player_id, item_name, quantity in rows:
-            # 循环剥离所有尾部 *N，累乘数量
+            # 检查是否有多个 *N 后缀（如 糖果*3*1）
+            # 单个 *N（如 糖果*3）是正常的道具名，不处理
+            match_outer = re.match(r'^(.+)\*(\d+)$', item_name)
+            if not match_outer:
+                continue
+            remaining = match_outer.group(1).strip()
+            match_inner = re.match(r'^(.+)\*(\d+)$', remaining)
+            if not match_inner:
+                # 只有一个 *N，正常道具名，跳过
+                continue
+
+            # 有多个 *N，是旧 bug 数据，剥离所有尾部 *N
             clean_name = item_name
             total_multiplier = 1
             while True:
-                match = re.match(r'^(.+)\*(\d+)$', clean_name)
-                if not match:
+                m = re.match(r'^(.+)\*(\d+)$', clean_name)
+                if not m:
                     break
-                clean_name = match.group(1).strip()
-                total_multiplier *= int(match.group(2))
+                clean_name = m.group(1).strip()
+                total_multiplier *= int(m.group(2))
 
-            if clean_name != item_name:
-                new_qty = quantity * total_multiplier
+            new_qty = quantity * total_multiplier
                 # Check if clean name already exists
                 async with self._db.execute(
                     "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
