@@ -81,10 +81,13 @@ class QQAdminHandler:
 
         text = event.message_str.strip()
         duration = 60
-        for part in text.split():
-            if part.isdigit():
-                duration = int(part)
-                break
+        # 只从 Plain 文本段提取秒数，避免 @ 段中的数字被误识别
+        for seg in event.get_messages():
+            if isinstance(seg, Plain) and seg.text:
+                for part in seg.text.split():
+                    if part.isdigit():
+                        duration = int(part)
+                        break
 
         errors = []
         for uid in targets:
@@ -206,10 +209,13 @@ class QQAdminHandler:
 
             text = event.message_str.strip()
             count = 10
-            for part in text.split():
-                if part.isdigit():
-                    count = min(int(part), 50)
-                    break
+            # 只从 Plain 文本段提取数量
+            for seg in event.get_messages():
+                if isinstance(seg, Plain) and seg.text:
+                    for part in seg.text.split():
+                        if part.isdigit():
+                            count = min(int(part), 50)
+                            break
 
             try:
                 result = await client.api.call_action(

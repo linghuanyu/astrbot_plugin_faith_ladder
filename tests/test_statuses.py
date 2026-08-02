@@ -131,11 +131,13 @@ class TestFormatPlayerCardWithStatuses:
         statuses = [
             {"status_name": "虚弱", "remaining_days": 2},
             {"status_name": "护盾", "remaining_days": 5},
+            {"status_name": "中毒", "remaining_days": 0},
         ]
         result = format_player_card(player, ladder_rank=3, pilgrimage_rank=2, statuses=statuses)
         assert "[状态]" in result
         assert "虚弱: 剩余2天" in result
         assert "护盾: 剩余5天" in result
+        assert "中毒: 今日到期" in result
 
     def test_card_without_statuses(self):
         player = Player(

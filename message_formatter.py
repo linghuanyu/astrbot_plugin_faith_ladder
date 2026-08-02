@@ -114,7 +114,11 @@ def format_player_card(
         lines.append("")
         lines.append("[状态]")
         for s in statuses:
-            lines.append(f"{s['status_name']}: 剩余{s['remaining_days']}天")
+            remaining = s['remaining_days']
+            if remaining == 0:
+                lines.append(f"{s['status_name']}: 今日到期")
+            else:
+                lines.append(f"{s['status_name']}: 剩余{remaining}天")
 
     return "\n".join(lines)
 
