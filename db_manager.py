@@ -164,30 +164,30 @@ class DatabaseManager:
                 total_multiplier *= int(m.group(2))
 
             new_qty = quantity * total_multiplier
-                # Check if clean name already exists
-                async with self._db.execute(
-                    "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (group_id, player_id, clean_name)
-                ) as existing_cursor:
-                    existing = await existing_cursor.fetchone()
+            # Check if clean name already exists
+            async with self._db.execute(
+                "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                (group_id, player_id, clean_name)
+            ) as existing_cursor:
+                existing = await existing_cursor.fetchone()
 
-                if existing:
-                    # Merge quantities
-                    await self._db.execute(
-                        "UPDATE player_items SET quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                        (existing[0] + new_qty, group_id, player_id, clean_name)
-                    )
-                    # Delete old record
-                    await self._db.execute(
-                        "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                        (group_id, player_id, item_name)
-                    )
-                else:
-                    # Rename and update quantity
-                    await self._db.execute(
-                        "UPDATE player_items SET item_name = ?, quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                        (clean_name, new_qty, group_id, player_id, item_name)
-                    )
+            if existing:
+                # Merge quantities
+                await self._db.execute(
+                    "UPDATE player_items SET quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (existing[0] + new_qty, group_id, player_id, clean_name)
+                )
+                # Delete old record
+                await self._db.execute(
+                    "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (group_id, player_id, item_name)
+                )
+            else:
+                # Rename and update quantity
+                await self._db.execute(
+                    "UPDATE player_items SET item_name = ?, quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (clean_name, new_qty, group_id, player_id, item_name)
+                )
 
         await self._db.commit()
 
