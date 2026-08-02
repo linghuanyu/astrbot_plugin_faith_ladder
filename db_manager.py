@@ -119,6 +119,9 @@ class DatabaseManager:
         # Migrate: add oathbreaker column if missing
         await self._migrate_oathbreaker()
 
+        # Migrate: clean up old item names with *N suffix
+        await self._migrate_item_names()
+
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
         async with self._db.execute("PRAGMA table_info(players)") as cursor:
@@ -129,6 +132,47 @@ class DatabaseManager:
                 "ALTER TABLE players ADD COLUMN oathbreaker INTEGER DEFAULT 0"
             )
             await self._db.commit()
+
+    async def _migrate_item_names(self):
+        """Clean up old item names that have *N suffix (e.g., '糖果*3' -> '糖果')."""
+        import re
+        async with self._db.execute(
+            "SELECT group_id, player_id, item_name, quantity FROM player_items"
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        for group_id, player_id, item_name, quantity in rows:
+            match = re.match(r'^(.+)\*(\d+)$', item_name)
+            if match:
+                clean_name = match.group(1).strip()
+                parsed_qty = int(match.group(2))
+                new_qty = quantity * parsed_qty
+                # Check if clean name already exists
+                async with self._db.execute(
+                    "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (group_id, player_id, clean_name)
+                ) as existing_cursor:
+                    existing = await existing_cursor.fetchone()
+
+                if existing:
+                    # Merge quantities
+                    await self._db.execute(
+                        "UPDATE player_items SET quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                        (existing[0] + new_qty, group_id, player_id, clean_name)
+                    )
+                    # Delete old record
+                    await self._db.execute(
+                        "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                        (group_id, player_id, item_name)
+                    )
+                else:
+                    # Rename and update quantity
+                    await self._db.execute(
+                        "UPDATE player_items SET item_name = ?, quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                        (clean_name, new_qty, group_id, player_id, item_name)
+                    )
+
+        await self._db.commit()
 
     async def _migrate_whitelist(self):
         """Migrate whitelist table from per-group to global if needed."""
