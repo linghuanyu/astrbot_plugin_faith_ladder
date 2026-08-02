@@ -142,11 +142,18 @@ class DatabaseManager:
             rows = await cursor.fetchall()
 
         for group_id, player_id, item_name, quantity in rows:
-            match = re.match(r'^(.+)\*(\d+)$', item_name)
-            if match:
+            # 循环剥离所有尾部 *N，累乘数量
+            clean_name = item_name
+            total_multiplier = 1
+            while True:
+                match = re.match(r'^(.+)\*(\d+)$', clean_name)
+                if not match:
+                    break
                 clean_name = match.group(1).strip()
-                parsed_qty = int(match.group(2))
-                new_qty = quantity * parsed_qty
+                total_multiplier *= int(match.group(2))
+
+            if clean_name != item_name:
+                new_qty = quantity * total_multiplier
                 # Check if clean name already exists
                 async with self._db.execute(
                     "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
