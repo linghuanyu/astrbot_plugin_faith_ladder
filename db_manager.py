@@ -142,15 +142,23 @@ class DatabaseManager:
             rows = await cursor.fetchall()
 
         for group_id, player_id, item_name, quantity in rows:
-            # 检查是否有多个 *N 后缀（如 糖果*3*1）
-            # 单个 *N（如 糖果*3）是正常的道具名，不处理
-            match_outer = re.match(r'^(.+)\*(\d+)$', item_name)
-            if not match_outer:
-                continue
-            remaining = match_outer.group(1).strip()
-            match_inner = re.match(r'^(.+)\*(\d+)$', remaining)
-            if not match_inner:
-                # 只有一个 *N，正常道具名，跳过
+            needs_migration = False
+
+            # 情况1: 末尾是 ）*N（品级括号后跟数量，如 护身符（C级）*2）
+            match_grade = re.match(r'^(.+）)\*(\d+)$', item_name)
+            if match_grade:
+                needs_migration = True
+
+            # 情况2: 多个 *N 后缀（如 糖果*3*1）
+            if not needs_migration:
+                match_outer = re.match(r'^(.+)\*(\d+)$', item_name)
+                if match_outer:
+                    remaining = match_outer.group(1).strip()
+                    match_inner = re.match(r'^(.+)\*(\d+)$', remaining)
+                    if match_inner:
+                        needs_migration = True
+
+            if not needs_migration:
                 continue
 
             # 有多个 *N，是旧 bug 数据，剥离所有尾部 *N
