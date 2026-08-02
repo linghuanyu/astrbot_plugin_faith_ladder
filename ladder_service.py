@@ -314,14 +314,24 @@ class LadderService:
             else:
                 pilgrimage_delta = 0
 
-            # 提取道具（【获得道具：名称】，支持空格分隔多个道具）
+            # 提取道具（【获得道具：名称】，支持空格分隔多个道具，支持 *数量 后缀）
             raw_items = re.findall(r'获得道具[：:]\s*([^】]+)', part)
             items = []
             for raw in raw_items:
                 # 按空格分隔多个道具
                 for item in raw.split():
                     item = item.strip()
-                    if item and item != "无":
+                    if not item or item == "无":
+                        continue
+                    # 解析 *数量 后缀（如 美味糖果（C级）*3）
+                    qty_match = re.match(r'^(.+)\*(\d+)$', item)
+                    if qty_match:
+                        name_part = qty_match.group(1).strip()
+                        qty = int(qty_match.group(2))
+                        if name_part and qty > 0:
+                            # 添加 qty 次，让 Counter 正确统计
+                            items.extend([name_part] * qty)
+                    else:
                         items.append(item)
 
             if ladder_delta != 0 or pilgrimage_delta != 0 or items:

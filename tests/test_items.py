@@ -183,6 +183,21 @@ class TestBatchParseWithItems:
         assert results[0]["ladder_delta"] == 13
         assert results[0]["pilgrimage_delta"] == 3
 
+    def test_parse_item_with_quantity(self, service):
+        """Test item name with *quantity suffix is parsed correctly."""
+        text = (
+            "【玩家：张三，表现评分：A】\n"
+            "【获得道具：美味糖果（C级）*3】\n"
+            "【登神之路+10】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert len(results) == 1
+        assert results[0]["name"] == "张三"
+        # *3 means 3 of the same item
+        assert results[0]["items"] == ["美味糖果（C级）", "美味糖果（C级）", "美味糖果（C级）"]
+        assert results[0]["ladder_delta"] == 10
+
     def test_parse_alternative_ladder_name(self, service):
         """Test '封神之路' (alternative name) and colon format."""
         text = (
