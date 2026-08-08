@@ -12,6 +12,12 @@ from datetime import datetime, timedelta, timezone
 
 from astrbot_plugin_faith_ladder.models import Player
 
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
 
 class DatabaseManager:
     """Manages all database operations for the faith ladder plugin."""
@@ -204,29 +210,40 @@ class DatabaseManager:
         await self._db.commit()
 
     async def _migrate_items_add_grade(self):
-        """Add grade column to player_items and backfill from item_name."""
+        """Add grade column to player_items and backfill from item_name.
+        Idempotent: safe to re-run if interrupted. ALTER TABLE is auto-committed
+        in SQLite and can't be rolled back, so we separate column creation from
+        data migration and make the data migration retryable."""
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
 
-        if "grade" in columns:
-            return
-
-        await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT DEFAULT NULL")
+        if "grade" not in columns:
+            await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT DEFAULT NULL")
 
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
 
-        async with self._db.execute(
-            "SELECT rowid, item_name FROM player_items"
-        ) as cursor:
-            rows = await cursor.fetchall()
+        try:
+            async with self._db.execute(
+                "SELECT rowid, item_name FROM player_items"
+            ) as cursor:
+                rows = await cursor.fetchall()
 
-        for rowid, old_name in rows:
-            base_name, grade = parse_item_full_name(old_name)
-            await self._db.execute(
-                "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
-                (grade, base_name, rowid)
-            )
-        await self._db.commit()
+            migrated = 0
+            for rowid, old_name in rows:
+                base_name, grade = parse_item_full_name(old_name)
+                # Only UPDATE if the name actually changed (had a grade pattern)
+                # This makes the migration idempotent — already-migrated rows are skipped
+                if base_name != old_name:
+                    await self._db.execute(
+                        "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
+                        (grade, base_name, rowid)
+                    )
+                    migrated += 1
+
+            if migrated > 0:
+                await self._db.commit()
+        except Exception as e:
+            logger.error(f"Item grade migration failed (will retry on next startup): {e}")
 
     async def _migrate_whitelist(self):
         """Migrate whitelist table from per-group to global if needed."""

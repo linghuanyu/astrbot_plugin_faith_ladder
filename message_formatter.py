@@ -171,7 +171,7 @@ def format_help(config: dict) -> str:
         f"查询储物空间 <玩家名> [玩家名2 ...] - 查看玩家道具（支持批量）\n"
         f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）\n"
         f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）\n"
-        f"清除储物空间 <玩家名> [道具名] - 清除储物空间（可指定道具）\n"
+        f"清除储物空间 <玩家名> [道具名|全部] - 清除储物空间（清空需加「全部」）\n"
         f"\n"
         f"[赠送道具]\n"
         f"赠送道具 <发送方名> <接收方名> <道具*数量> - 赠送（直接扣除，等待接收）\n"
@@ -199,23 +199,6 @@ def format_help(config: dict) -> str:
         f"\n"
         f"推送: {push_info} | 初始积分: 登神之路1000 觐见100\n"
         f"{cmd_help} - 显示本帮助"
-    )
-
-
-def format_gift_confirmation(
-    sender_name: str, receiver_name: str,
-    item_name: str, quantity: int, current_qty: int
-) -> str:
-    """Format gift confirmation message for sender."""
-    return (
-        f"赠送确认：\n"
-        f"  赠送方：{sender_name}\n"
-        f"  接收方：{receiver_name}\n"
-        f"  道具：{item_name} * {quantity}\n"
-        f"  你当前拥有：{item_name} * {current_qty}\n"
-        f"\n"
-        f"发送「确认赠送」完成赠送\n"
-        f"发送「取消赠送」放弃赠送"
     )
 
 

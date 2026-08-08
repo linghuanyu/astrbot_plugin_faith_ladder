@@ -1024,7 +1024,8 @@ class FaithLadderPlugin(Star):
 
     @filter.command("清除储物空间")
     async def cmd_clear_inventory(self, event: AstrMessageEvent):
-        """清除储物空间。格式: 清除储物空间 <玩家名> [道具名（可含等级）]"""
+        """清除储物空间。格式: 清除储物空间 <玩家名> [道具名|全部]
+        清空全部道具需要加「全部」确认，清除指定道具不需要。"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -1036,12 +1037,28 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "清除储物空间")
         if not args or not args.strip():
-            yield event.plain_result("用法: 清除储物空间 <玩家名> [道具名]\n示例: 清除储物空间 Alice\n      清除储物空间 Alice 共生噬刃\n      清除储物空间 Alice 共生噬刃（C级）")
+            yield event.plain_result(
+                "用法: 清除储物空间 <玩家名> [道具名|全部]\n"
+                "示例: 清除储物空间 Alice 全部        — 清空所有道具\n"
+                "      清除储物空间 Alice 共生噬刃     — 清除指定道具\n"
+                "      清除储物空间 Alice 共生噬刃（C级）— 清除指定等级"
+            )
             return
 
         parts = args.split(None, 1)
         player_name = parts[0]
         raw_name = parts[1].strip() if len(parts) > 1 else None
+
+        # 清空全部需要「全部」关键字确认
+        if raw_name is None:
+            yield event.plain_result(
+                f"这将清空 {player_name} 的所有道具！\n"
+                f"如需确认，请发送: 清除储物空间 {player_name} 全部"
+            )
+            return
+
+        if raw_name == "全部":
+            raw_name = None  # 传给 service 的 None 表示清空全部
 
         success, message = await self.ladder_service.clear_items(group_id, player_name, raw_name)
         yield event.plain_result(message)
