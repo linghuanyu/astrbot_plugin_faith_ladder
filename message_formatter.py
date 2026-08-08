@@ -172,12 +172,12 @@ def format_help(config: dict) -> str:
         f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）\n"
         f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）\n"
         f"\n"
-        f"[赠送道具] (白名单权限)\n"
-        f"赠送道具 <玩家名> <道具*数量> - 发起赠送\n"
+        f"[赠送道具]\n"
+        f"赠送道具 <发送方名> <接收方名> <道具*数量> - 发起赠送\n"
         f"确认赠送 - 确认赠送\n"
         f"取消赠送 - 取消赠送\n"
-        f"接受道具 <赠送方名> - 接受赠送（白名单）\n"
-        f"拒绝道具 <赠送方名> - 拒绝赠送（白名单）\n"
+        f"接受道具 - 接受赠送（白名单）\n"
+        f"拒绝道具 - 拒绝赠送（白名单）\n"
         f"\n"
         f"[状态] (白名单权限)\n"
         f"添加状态 <玩家名> <状态名> <天数> - 添加状态\n"
@@ -221,14 +221,13 @@ def format_gift_confirmation(
 
 
 def format_gift_request(
-    sender_name: str, item_name: str, quantity: int
+    sender_name: str, receiver_name: str, item_name: str, quantity: int
 ) -> str:
     """Format gift notification for receiver."""
     return (
-        f"{sender_name} 确认赠送你 {item_name}*{quantity}\n"
-        f"发送「接受道具 {sender_name}」接受\n"
-        f"发送「拒绝道具 {sender_name}」拒绝\n"
-        f"（60秒后未操作自动拒绝，道具退回）"
+        f"{sender_name} 确认赠送 {receiver_name} {item_name}*{quantity}\n"
+        f"接收方发送「接受道具」接受\n"
+        f"接收方发送「拒绝道具」拒绝"
     )
 
 
