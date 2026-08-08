@@ -32,7 +32,7 @@ from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
     "astrbot_plugin_faith_ladder",
     "custom",
     "信仰游戏天梯排行榜，双积分排名，集成职业信仰体系，支持群聊积分管理。",
-    "1.0.0"
+    "2.1.0"
 )
 class FaithLadderPlugin(Star):
     """信仰游戏天梯排行榜插件。"""
