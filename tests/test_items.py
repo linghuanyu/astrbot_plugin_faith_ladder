@@ -394,6 +394,18 @@ class TestParseItemFullName:
         assert base == "铁剑（X级）"
         assert grade is None
 
+    def test_d_grade(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("淬锋砺剑（D）")
+        assert base == "淬锋砺剑"
+        assert grade == "D"
+
+    def test_lowercase_grade_normalized(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("塑形内衣（d级）")
+        assert base == "塑形内衣"
+        assert grade == "D"
+
 
 class TestFormatItemDisplay:
     """Tests for format_item_display."""

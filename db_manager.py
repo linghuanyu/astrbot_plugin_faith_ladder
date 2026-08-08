@@ -217,8 +217,10 @@ class DatabaseManager:
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
 
-        if "grade" not in columns:
+        column_existed = "grade" in columns
+        if not column_existed:
             await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT DEFAULT NULL")
+            logger.info("[Migration] Added 'grade' column to player_items")
 
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
 
@@ -228,6 +230,7 @@ class DatabaseManager:
             ) as cursor:
                 rows = await cursor.fetchall()
 
+            logger.info(f"[Migration] Scanning {len(rows)} rows for grade migration")
             migrated = 0
             for rowid, old_name in rows:
                 base_name, grade = parse_item_full_name(old_name)
@@ -239,11 +242,15 @@ class DatabaseManager:
                         (grade, base_name, rowid)
                     )
                     migrated += 1
+                    logger.info(f"[Migration] Row {rowid}: '{old_name}' → base='{base_name}', grade='{grade}'")
 
             if migrated > 0:
                 await self._db.commit()
+                logger.info(f"[Migration] Successfully migrated {migrated} rows")
+            else:
+                logger.info("[Migration] No rows needed grade migration")
         except Exception as e:
-            logger.error(f"Item grade migration failed (will retry on next startup): {e}")
+            logger.error(f"[Migration] Item grade migration failed (will retry on next startup): {e}")
 
     async def _migrate_whitelist(self):
         """Migrate whitelist table from per-group to global if needed."""
@@ -790,7 +797,7 @@ class DatabaseManager:
     async def get_player_items(self, group_id: str, player_id: str) -> list:
         """获取玩家所有道具。返回 [{"item_name": str, "grade": str|None, "quantity": int}, ...]
         按等级从高到低排序：SSS > SS > S > A > B > C > 无等级。"""
-        grade_order = {"SSS": 0, "SS": 1, "S": 2, "A": 3, "B": 4, "C": 5}
+        grade_order = {"SSS": 0, "SS": 1, "S": 2, "A": 3, "B": 4, "C": 5, "D": 6}
         async with self._db.execute(
             "SELECT item_name, grade, quantity FROM player_items "
             "WHERE group_id = ? AND player_id = ?",

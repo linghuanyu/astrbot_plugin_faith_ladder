@@ -23,7 +23,7 @@ except ImportError:
 
 # === 道具等级解析 ===
 
-VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
+VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C", "D")
 _GRADE_RE = re.compile(r'^(.+?)[（(]([A-Za-z]+)[级]?[)）]$')
 
 
