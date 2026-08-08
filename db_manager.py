@@ -797,7 +797,7 @@ class DatabaseManager:
     async def get_player_items(self, group_id: str, player_id: str) -> list:
         """获取玩家所有道具。返回 [{"item_name": str, "grade": str|None, "quantity": int}, ...]
         按等级从高到低排序：SSS > SS > S > A > B > C > 无等级。"""
-        grade_order = {"SSS": 0, "SS": 1, "S": 2, "A": 3, "B": 4, "C": 5, "D": 6}
+        grade_order = {"SSS": 0, "SS": 1, "S": 2, "A": 3, "B": 4, "C": 5}
         async with self._db.execute(
             "SELECT item_name, grade, quantity FROM player_items "
             "WHERE group_id = ? AND player_id = ?",

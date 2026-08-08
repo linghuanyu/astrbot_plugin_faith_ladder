@@ -23,14 +23,17 @@ except ImportError:
 
 # === 道具等级解析 ===
 
-VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C", "D")
+VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
 _GRADE_RE = re.compile(r'^(.+?)[（(]([A-Za-z]+)[级]?[)）]$')
 
 
 def parse_item_full_name(full_name: str) -> Tuple[str, Optional[str]]:
     """从完整名解析出 (基础名, 等级)。
+    等级必须在 VALID_GRADES 内，否则视为无等级（括号部分保留在名字中）。
     '共生噬刃（C级）' → ('共生噬刃', 'C')
     '共生噬刃(C)'     → ('共生噬刃', 'C')
+    '淬锋砺剑（D）'   → ('淬锋砺剑（D）', None)  — D 不在 VALID_GRADES
+    '塑形内衣（d级）' → ('塑形内衣（d级）', None) — d→D 不在 VALID_GRADES
     '铁剑'           → ('铁剑', None)
     """
     m = _GRADE_RE.match(full_name.strip())

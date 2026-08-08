@@ -394,17 +394,19 @@ class TestParseItemFullName:
         assert base == "铁剑（X级）"
         assert grade is None
 
-    def test_d_grade(self):
+    def test_d_grade_not_valid(self):
+        """D 不在 VALID_GRADES 内，视为无等级，括号保留在名字中。"""
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
         base, grade = parse_item_full_name("淬锋砺剑（D）")
-        assert base == "淬锋砺剑"
-        assert grade == "D"
+        assert base == "淬锋砺剑（D）"
+        assert grade is None
 
-    def test_lowercase_grade_normalized(self):
+    def test_lowercase_d_not_valid(self):
+        """小写 d 转为 D 后不在 VALID_GRADES 内，视为无等级。"""
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
         base, grade = parse_item_full_name("塑形内衣（d级）")
-        assert base == "塑形内衣"
-        assert grade == "D"
+        assert base == "塑形内衣（d级）"
+        assert grade is None
 
 
 class TestFormatItemDisplay:
