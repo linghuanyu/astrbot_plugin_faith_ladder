@@ -172,6 +172,13 @@ def format_help(config: dict) -> str:
         f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）\n"
         f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）\n"
         f"\n"
+        f"[赠送道具] (白名单权限)\n"
+        f"赠送道具 <玩家名> <道具*数量> - 发起赠送\n"
+        f"确认赠送 - 确认赠送\n"
+        f"取消赠送 - 取消赠送\n"
+        f"接受道具 <赠送方名> - 接受赠送（白名单）\n"
+        f"拒绝道具 <赠送方名> - 拒绝赠送（白名单）\n"
+        f"\n"
         f"[状态] (白名单权限)\n"
         f"添加状态 <玩家名> <状态名> <天数> - 添加状态\n"
         f"移除状态 <玩家名> <状态名> - 移除指定状态\n"
@@ -193,6 +200,35 @@ def format_help(config: dict) -> str:
         f"\n"
         f"推送: {push_info} | 初始积分: 登神之路1000 觐见100\n"
         f"{cmd_help} - 显示本帮助"
+    )
+
+
+def format_gift_confirmation(
+    sender_name: str, receiver_name: str,
+    item_name: str, quantity: int, current_qty: int
+) -> str:
+    """Format gift confirmation message for sender."""
+    return (
+        f"赠送确认：\n"
+        f"  赠送方：{sender_name}\n"
+        f"  接收方：{receiver_name}\n"
+        f"  道具：{item_name} * {quantity}\n"
+        f"  你当前拥有：{item_name} * {current_qty}\n"
+        f"\n"
+        f"发送「确认赠送」完成赠送\n"
+        f"发送「取消赠送」放弃赠送"
+    )
+
+
+def format_gift_request(
+    sender_name: str, item_name: str, quantity: int
+) -> str:
+    """Format gift notification for receiver."""
+    return (
+        f"{sender_name} 确认赠送你 {item_name}*{quantity}\n"
+        f"发送「接受道具 {sender_name}」接受\n"
+        f"发送「拒绝道具 {sender_name}」拒绝\n"
+        f"（60秒后未操作自动拒绝，道具退回）"
     )
 
 

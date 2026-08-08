@@ -480,3 +480,27 @@ class LadderService:
         count = await self.db.clear_statuses(group_id, player.player_id)
         await self.db.commit()
         return True, f"已清除 {player_name} 的 {count} 个状态"
+
+    # === 赠送道具 ===
+
+    async def deduct_item(
+        self, group_id: str, player_id: str, player_name: str,
+        item_name: str, quantity: int
+    ) -> Tuple[bool, str]:
+        """扣除道具（发送方确认时调用）。"""
+        items = await self.db.get_player_items(group_id, player_id)
+        current_qty = next((i["quantity"] for i in items if i["item_name"] == item_name), 0)
+        if current_qty < quantity:
+            return False, f"道具不足：你只有 {current_qty} 个 {item_name}"
+        await self.db.remove_item(group_id, player_id, item_name, quantity)
+        await self.db.commit()
+        return True, f"已扣除 {item_name}*{quantity}"
+
+    async def receive_item(
+        self, group_id: str, player_id: str, player_name: str,
+        item_name: str, quantity: int
+    ) -> Tuple[bool, str]:
+        """接收道具（接收方接受时调用）。"""
+        await self.db.add_item(group_id, player_id, item_name, quantity)
+        await self.db.commit()
+        return True, f"已收到 {item_name}*{quantity}"

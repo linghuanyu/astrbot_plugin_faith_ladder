@@ -60,6 +60,8 @@ class FaithLadderPlugin(Star):
 
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
+        self._pending_gifts_send = {}     # 发送方待确认
+        self._pending_gifts_receive = {}  # 接收方待确认
 
     def _get_data_dir(self) -> Path:
         data_path = None
@@ -1172,3 +1174,193 @@ class FaithLadderPlugin(Star):
         player_name = args.strip()
         success, message = await self.ladder_service.clear_statuses(group_id, player_name)
         yield event.plain_result(message)
+
+    # === 赠送道具 ===
+
+    @filter.command("赠送道具")
+    async def cmd_gift_item(self, event: AstrMessageEvent):
+        """发起赠送。格式: 赠送道具 <玩家名> <道具*数量>"""
+        group_id = self._get_group_id(event)
+        sender_id = str(event.get_sender_id())
+
+        # 获取赠送方玩家信息
+        sender_player = await self.db_manager.get_player_by_name(group_id, sender_id)
+        if not sender_player:
+            yield event.plain_result("你尚未注册，无法赠送。")
+            return
+
+        args = self._get_args(event, "赠送道具")
+        if not args:
+            yield event.plain_result("用法: 赠送道具 <玩家名> <道具*数量>\n示例: 赠送道具 繁荣 铁剑*3")
+            return
+
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            yield event.plain_result("用法: 赠送道具 <玩家名> <道具*数量>")
+            return
+
+        receiver_name = parts[0]
+        item_args = parts[1].strip()
+
+        # 解析道具（复用 _parse_item_args）
+        items = self._parse_item_args(item_args)
+        if not items:
+            yield event.plain_result("未指定有效道具。格式: 道具名*数量")
+            return
+
+        # 目前只支持赠送一种道具
+        item_name, quantity = items[0]
+
+        # 不能赠送给自己
+        receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
+        if not receiver_player:
+            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
+            return
+        if receiver_player.player_id == sender_player.player_id:
+            yield event.plain_result("不能赠送给自己。")
+            return
+
+        # 检查是否拥有足够道具
+        sender_items = await self.db_manager.get_player_items(group_id, sender_player.player_id)
+        current_qty = next((i["quantity"] for i in sender_items if i["item_name"] == item_name), 0)
+        if current_qty < quantity:
+            yield event.plain_result(f"你只有 {current_qty} 个 {item_name}，不足以赠送 {quantity} 个。")
+            return
+
+        # 存入待确认
+        from astrbot_plugin_faith_ladder.message_formatter import format_gift_confirmation
+        self._pending_gifts_send[sender_id] = {
+            "group_id": group_id,
+            "sender_id": sender_player.player_id,
+            "sender_name": sender_player.player_name,
+            "receiver_name": receiver_name,
+            "receiver_id": receiver_player.player_id,
+            "item_name": item_name,
+            "quantity": quantity,
+        }
+
+        confirmation = format_gift_confirmation(
+            sender_player.player_name, receiver_name,
+            item_name, quantity, current_qty
+        )
+        yield event.plain_result(confirmation)
+
+    @filter.command("确认赠送")
+    async def cmd_confirm_gift(self, event: AstrMessageEvent):
+        """发送方确认赠送。"""
+        sender_id = str(event.get_sender_id())
+        gift = self._pending_gifts_send.get(sender_id)
+        if not gift:
+            yield event.plain_result("没有待确认的赠送。")
+            return
+
+        # 扣除赠送方道具
+        success, msg = await self.ladder_service.deduct_item(
+            gift["group_id"], gift["sender_id"], gift["sender_name"],
+            gift["item_name"], gift["quantity"]
+        )
+        if not success:
+            yield event.plain_result(f"赠送失败: {msg}")
+            del self._pending_gifts_send[sender_id]
+            return
+
+        # 存入接收方待确认
+        self._pending_gifts_receive[gift["receiver_id"]] = {
+            "group_id": gift["group_id"],
+            "sender_id": gift["sender_id"],
+            "sender_name": gift["sender_name"],
+            "receiver_id": gift["receiver_id"],
+            "receiver_name": gift["receiver_name"],
+            "item_name": gift["item_name"],
+            "quantity": gift["quantity"],
+        }
+        del self._pending_gifts_send[sender_id]
+
+        from astrbot_plugin_faith_ladder.message_formatter import format_gift_request
+        notification = format_gift_request(
+            gift["sender_name"], gift["item_name"], gift["quantity"]
+        )
+        yield event.plain_result(f"已确认赠送，等待 {gift['receiver_name']} 接受。\n\n{notification}")
+
+    @filter.command("取消赠送")
+    async def cmd_cancel_gift(self, event: AstrMessageEvent):
+        """发送方取消赠送。"""
+        sender_id = str(event.get_sender_id())
+        if sender_id not in self._pending_gifts_send:
+            yield event.plain_result("没有待取消的赠送。")
+            return
+        del self._pending_gifts_send[sender_id]
+        yield event.plain_result("已取消赠送。")
+
+    @filter.command("接受道具")
+    async def cmd_accept_gift(self, event: AstrMessageEvent):
+        """接收方接受赠送（白名单权限）。格式: 接受道具 <赠送方名>"""
+        # 白名单权限检查
+        receiver_id = str(event.get_sender_id())
+        has_permission = await self.permission_service.check_score_permission(receiver_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足：只有白名单用户才能接受赠送。")
+            return
+
+        gift = self._pending_gifts_receive.get(receiver_id)
+        if not gift:
+            yield event.plain_result("你没有待接受的赠送。")
+            return
+
+        # 验证赠送方名（如果指定）
+        args = self._get_args(event, "接受道具")
+        if args and args.strip():
+            sender_name = args.strip()
+            if sender_name != gift["sender_name"]:
+                yield event.plain_result(f"没有来自 {sender_name} 的赠送。")
+                return
+
+        # 增加接收方道具
+        success, msg = await self.ladder_service.receive_item(
+            gift["group_id"], gift["receiver_id"], gift["receiver_name"],
+            gift["item_name"], gift["quantity"]
+        )
+        del self._pending_gifts_receive[receiver_id]
+
+        if success:
+            yield event.plain_result(
+                f"已接受 {gift['sender_name']} 赠送的 {gift['item_name']}*{gift['quantity']}"
+            )
+        else:
+            yield event.plain_result(f"接受失败: {msg}")
+
+    @filter.command("拒绝道具")
+    async def cmd_reject_gift(self, event: AstrMessageEvent):
+        """接收方拒绝赠送（白名单权限）。格式: 拒绝道具 <赠送方名>"""
+        # 白名单权限检查
+        receiver_id = str(event.get_sender_id())
+        has_permission = await self.permission_service.check_score_permission(receiver_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足：只有白名单用户才能拒绝赠送。")
+            return
+
+        gift = self._pending_gifts_receive.get(receiver_id)
+        if not gift:
+            yield event.plain_result("你没有待拒绝的赠送。")
+            return
+
+        # 验证赠送方名（如果指定）
+        args = self._get_args(event, "拒绝道具")
+        if args and args.strip():
+            sender_name = args.strip()
+            if sender_name != gift["sender_name"]:
+                yield event.plain_result(f"没有来自 {sender_name} 的赠送。")
+                return
+
+        # 退回赠送方道具
+        await self.ladder_service.receive_item(
+            gift["group_id"], gift["sender_id"], gift["sender_name"],
+            gift["item_name"], gift["quantity"]
+        )
+        del self._pending_gifts_receive[receiver_id]
+
+        yield event.plain_result(
+            f"已拒绝 {gift['sender_name']} 的赠送，{gift['item_name']}*{gift['quantity']} 已退回"
+        )
