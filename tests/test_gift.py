@@ -26,7 +26,7 @@ class TestDeductAndReceiveItems:
     async def test_deduct_item_success(self, service):
         await service.db.upsert_player("g1", "u1", "Alice")
         await service.db.add_item("g1", "u1", "铁剑", 5)
-        success, msg = await service.deduct_item("g1", "u1", "Alice", "铁剑", 3)
+        success, msg, base_name, grade = await service.deduct_item("g1", "u1", "Alice", "铁剑", 3)
         assert success is True
         items = await service.db.get_player_items("g1", "u1")
         assert items[0]["quantity"] == 2
@@ -35,7 +35,7 @@ class TestDeductAndReceiveItems:
     async def test_deduct_item_insufficient(self, service):
         await service.db.upsert_player("g1", "u1", "Alice")
         await service.db.add_item("g1", "u1", "铁剑", 2)
-        success, msg = await service.deduct_item("g1", "u1", "Alice", "铁剑", 5)
+        success, msg, _, _ = await service.deduct_item("g1", "u1", "Alice", "铁剑", 5)
         assert success is False
         assert "不足" in msg
 
@@ -57,7 +57,7 @@ class TestDeductAndReceiveItems:
         await service.db.add_item("g1", "u1", "铁剑", 5)
 
         # Sender deducts
-        success, _ = await service.deduct_item("g1", "u1", "Alice", "铁剑", 3)
+        success, _, _, _ = await service.deduct_item("g1", "u1", "Alice", "铁剑", 3)
         assert success is True
 
         # Receiver receives

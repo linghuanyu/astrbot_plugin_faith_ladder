@@ -60,7 +60,6 @@ class FaithLadderPlugin(Star):
 
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
-        self._pending_gifts_send = None     # 当前待确认的赠送（发送阶段）
         self._pending_gifts_receive = None  # 当前待确认的赠送（接收阶段）
 
     def _get_data_dir(self) -> Path:
@@ -881,7 +880,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("查询储物空间")
     async def cmd_query_inventory(self, event: AstrMessageEvent):
-        """查看玩家储物空间。格式: 查询储物空间 <玩家名>"""
+        """查看玩家储物空间。格式: 查询储物空间 <玩家名> [玩家名2 ...]（支持批量）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -893,15 +892,27 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "查询储物空间")
         if not args or not args.strip():
-            yield event.plain_result("用法: 查询储物空间 <玩家名>")
+            yield event.plain_result("用法: 查询储物空间 <玩家名> [玩家名2 ...]")
             return
 
-        target_name = args.strip()
-        text = await self.ladder_service.get_inventory_text(group_id, target_name)
-        if text is None:
-            yield event.plain_result(f"{target_name} 不存在。")
-            return
-        yield event.plain_result(text)
+        # 批量查询：空格分隔多个玩家名
+        names = args.strip().split()
+        results = []
+        not_found = []
+        for name in names:
+            text = await self.ladder_service.get_inventory_text(group_id, name)
+            if text is None:
+                not_found.append(name)
+            else:
+                results.append(text)
+
+        parts = []
+        if results:
+            parts.append("\n\n".join(results))
+        if not_found:
+            parts.append(f"\n以下玩家不存在: {', '.join(not_found)}")
+
+        yield event.plain_result("\n".join(parts) if parts else "未查询到任何玩家。")
 
     def _parse_item_args(self, text: str) -> list:
         """解析道具参数。格式: 道具名*数量，空格分隔多个。
@@ -1009,6 +1020,30 @@ class FaithLadderPlugin(Star):
                     items.append((part, None))  # None = 全部收回
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
+        yield event.plain_result(message)
+
+    @filter.command("清除储物空间")
+    async def cmd_clear_inventory(self, event: AstrMessageEvent):
+        """清除储物空间。格式: 清除储物空间 <玩家名> [道具名（可含等级）]"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "清除储物空间")
+        if not args or not args.strip():
+            yield event.plain_result("用法: 清除储物空间 <玩家名> [道具名]\n示例: 清除储物空间 Alice\n      清除储物空间 Alice 共生噬刃\n      清除储物空间 Alice 共生噬刃（C级）")
+            return
+
+        parts = args.split(None, 1)
+        player_name = parts[0]
+        raw_name = parts[1].strip() if len(parts) > 1 else None
+
+        success, message = await self.ladder_service.clear_items(group_id, player_name, raw_name)
         yield event.plain_result(message)
 
     # === 白名单自动同步 ===
@@ -1179,7 +1214,8 @@ class FaithLadderPlugin(Star):
 
     @filter.command("赠送道具")
     async def cmd_gift_item(self, event: AstrMessageEvent):
-        """发起赠送。格式: 赠送道具 <发送方名> <接收方名> <道具*数量>"""
+        """赠送道具。格式: 赠送道具 <发送方名> <接收方名> <道具*数量>
+        直接扣除发送方道具，等待接收方接受/拒绝。"""
         group_id = self._get_group_id(event)
 
         args = self._get_args(event, "赠送道具")
@@ -1194,14 +1230,13 @@ class FaithLadderPlugin(Star):
 
         sender_name, receiver_name, item_args = parts[0], parts[1], parts[2].strip()
 
-        # 解析道具
+        # 解析道具（只支持一种）
         items = self._parse_item_args(item_args)
         if not items:
             yield event.plain_result("未指定有效道具。格式: 道具名*数量")
             return
 
-        # 目前只支持赠送一种道具
-        item_name, quantity = items[0]
+        item_raw, quantity = items[0]
 
         # 查找发送方和接收方
         sender_player = await self.db_manager.get_player_by_name(group_id, sender_name)
@@ -1214,86 +1249,41 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"玩家 {receiver_name} 不存在。")
             return
 
-        # 不能赠送给自己
         if sender_player.player_id == receiver_player.player_id:
             yield event.plain_result("不能赠送给自己。")
             return
 
-        # 检查是否拥有足够道具
-        sender_items = await self.db_manager.get_player_items(group_id, sender_player.player_id)
-        current_qty = next((i["quantity"] for i in sender_items if i["item_name"] == item_name), 0)
-        if current_qty < quantity:
-            yield event.plain_result(f"{sender_name} 只有 {current_qty} 个 {item_name}，不足以赠送 {quantity} 个。")
-            return
-
-        # 存入待确认（单值，一次只处理一个赠送）
-        from astrbot_plugin_faith_ladder.message_formatter import format_gift_confirmation
-        self._pending_gifts_send = {
-            "group_id": group_id,
-            "sender_id": sender_player.player_id,
-            "sender_name": sender_name,
-            "receiver_name": receiver_name,
-            "receiver_id": receiver_player.player_id,
-            "item_name": item_name,
-            "quantity": quantity,
-        }
-
-        confirmation = format_gift_confirmation(
-            sender_name, receiver_name,
-            item_name, quantity, current_qty
-        )
-        yield event.plain_result(confirmation)
-
-    @filter.command("确认赠送")
-    async def cmd_confirm_gift(self, event: AstrMessageEvent):
-        """确认赠送，无需参数。"""
-        gift = self._pending_gifts_send
-        if not gift:
-            yield event.plain_result("没有待确认的赠送。")
-            return
-
-        # 扣除赠送方道具
-        success, msg = await self.ladder_service.deduct_item(
-            gift["group_id"], gift["sender_id"], gift["sender_name"],
-            gift["item_name"], gift["quantity"]
+        # 直接扣除发送方道具
+        success, msg, base_name, grade = await self.ladder_service.deduct_item(
+            group_id, sender_player.player_id, sender_name, item_raw, quantity
         )
         if not success:
-            yield event.plain_result(f"赠送失败: {msg}")
-            self._pending_gifts_send = None
+            yield event.plain_result(msg)
             return
 
         # 存入接收方待确认
         self._pending_gifts_receive = {
-            "group_id": gift["group_id"],
-            "sender_id": gift["sender_id"],
-            "sender_name": gift["sender_name"],
-            "receiver_id": gift["receiver_id"],
-            "receiver_name": gift["receiver_name"],
-            "item_name": gift["item_name"],
-            "quantity": gift["quantity"],
+            "group_id": group_id,
+            "sender_id": sender_player.player_id,
+            "sender_name": sender_name,
+            "receiver_id": receiver_player.player_id,
+            "receiver_name": receiver_name,
+            "item_name": base_name,
+            "grade": grade,
+            "quantity": quantity,
         }
-        self._pending_gifts_send = None
 
         from astrbot_plugin_faith_ladder.message_formatter import format_gift_request
         notification = format_gift_request(
-            gift["sender_name"], gift["receiver_name"],
-            gift["item_name"], gift["quantity"]
+            sender_name, receiver_name, base_name, grade, quantity
         )
-        yield event.plain_result(f"已确认赠送，等待 {gift['receiver_name']} 接受。\n\n{notification}")
-
-    @filter.command("取消赠送")
-    async def cmd_cancel_gift(self, event: AstrMessageEvent):
-        """取消赠送，无需参数。"""
-        if not self._pending_gifts_send:
-            yield event.plain_result("没有待取消的赠送。")
-            return
-        self._pending_gifts_send = None
-        yield event.plain_result("已取消赠送。")
+        yield event.plain_result(
+            f"已从 {sender_name} 扣除，等待 {receiver_name} 接受。\n\n{notification}"
+        )
 
     @filter.command("接受道具")
     async def cmd_accept_gift(self, event: AstrMessageEvent):
         """接收方接受赠送（白名单权限），无需参数。"""
-        # 白名单权限检查
         user_id = str(event.get_sender_id())
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
@@ -1306,16 +1296,17 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("没有待接受的赠送。")
             return
 
-        # 增加接收方道具
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         success, msg = await self.ladder_service.receive_item(
             gift["group_id"], gift["receiver_id"], gift["receiver_name"],
-            gift["item_name"], gift["quantity"]
+            gift["item_name"], gift["quantity"], grade=gift.get("grade")
         )
         self._pending_gifts_receive = None
 
         if success:
+            display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
             yield event.plain_result(
-                f"已接受 {gift['sender_name']} 赠送的 {gift['item_name']}*{gift['quantity']}"
+                f"已接受 {gift['sender_name']} 赠送的 {display}"
             )
         else:
             yield event.plain_result(f"接受失败: {msg}")
@@ -1323,7 +1314,6 @@ class FaithLadderPlugin(Star):
     @filter.command("拒绝道具")
     async def cmd_reject_gift(self, event: AstrMessageEvent):
         """接收方拒绝赠送（白名单权限），无需参数。"""
-        # 白名单权限检查
         user_id = str(event.get_sender_id())
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
@@ -1336,13 +1326,15 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("没有待拒绝的赠送。")
             return
 
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         # 退回赠送方道具
         await self.ladder_service.receive_item(
             gift["group_id"], gift["sender_id"], gift["sender_name"],
-            gift["item_name"], gift["quantity"]
+            gift["item_name"], gift["quantity"], grade=gift.get("grade")
         )
         self._pending_gifts_receive = None
 
+        display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
         yield event.plain_result(
-            f"已拒绝 {gift['sender_name']} 的赠送，{gift['item_name']}*{gift['quantity']} 已退回"
+            f"已拒绝 {gift['sender_name']} 的赠送，{display} 已退回"
         )

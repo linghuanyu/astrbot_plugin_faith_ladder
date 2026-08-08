@@ -168,14 +168,13 @@ def format_help(config: dict) -> str:
         f"弃誓 <玩家名> [新信仰] - 标记弃誓者\n"
         f"\n"
         f"[储物空间] (白名单权限)\n"
-        f"查询储物空间 <玩家名> - 查看玩家道具\n"
+        f"查询储物空间 <玩家名> [玩家名2 ...] - 查看玩家道具（支持批量）\n"
         f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）\n"
         f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）\n"
+        f"清除储物空间 <玩家名> [道具名] - 清除储物空间（可指定道具）\n"
         f"\n"
         f"[赠送道具]\n"
-        f"赠送道具 <发送方名> <接收方名> <道具*数量> - 发起赠送\n"
-        f"确认赠送 - 确认赠送\n"
-        f"取消赠送 - 取消赠送\n"
+        f"赠送道具 <发送方名> <接收方名> <道具*数量> - 赠送（直接扣除，等待接收）\n"
         f"接受道具 - 接受赠送（白名单）\n"
         f"拒绝道具 - 拒绝赠送（白名单）\n"
         f"\n"
@@ -221,11 +220,13 @@ def format_gift_confirmation(
 
 
 def format_gift_request(
-    sender_name: str, receiver_name: str, item_name: str, quantity: int
+    sender_name: str, receiver_name: str, item_name: str, grade, quantity: int
 ) -> str:
     """Format gift notification for receiver."""
+    from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+    display = format_item_display(item_name, grade, quantity)
     return (
-        f"{sender_name} 确认赠送 {receiver_name} {item_name}*{quantity}\n"
+        f"{sender_name} 赠送 {receiver_name} {display}\n"
         f"接收方发送「接受道具」接受\n"
         f"接收方发送「拒绝道具」拒绝"
     )
@@ -290,14 +291,14 @@ def format_score_result(
 
 def format_inventory(player_name: str, items: list) -> str:
     """Format player inventory display.
-    items: [{"item_name": str, "quantity": int}, ...]
+    items: [{"item_name": str, "grade": str|None, "quantity": int}, ...]
     """
+    from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+
     if not items:
         return f"=== 储物空间 ===\n玩家: {player_name}\n\n储物空间为空。"
 
     lines = [f"=== 储物空间 ===", f"玩家: {player_name}", ""]
     for item in items:
-        name = item["item_name"]
-        qty = item["quantity"]
-        lines.append(f"{name} * {qty}")
+        lines.append(format_item_display(item["item_name"], item["grade"], item["quantity"]))
     return "\n".join(lines)

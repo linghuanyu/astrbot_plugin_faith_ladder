@@ -299,8 +299,8 @@ class TestFormatInventory:
 
     def test_with_items(self):
         items = [
-            {"item_name": "铁剑", "quantity": 2},
-            {"item_name": "生命药水", "quantity": 5},
+            {"item_name": "铁剑", "grade": None, "quantity": 2},
+            {"item_name": "生命药水", "grade": None, "quantity": 5},
         ]
         result = format_inventory("Alice", items)
         assert "=== 储物空间 ===" in result
@@ -309,9 +309,9 @@ class TestFormatInventory:
         assert "生命药水 * 5" in result
 
     def test_graded_item(self):
-        items = [{"item_name": "共生噬刃（C级）", "quantity": 1}]
+        items = [{"item_name": "共生噬刃", "grade": "C", "quantity": 1}]
         result = format_inventory("Alice", items)
-        assert "共生噬刃（C级） * 1" in result
+        assert "共生噬刃（C级）" in result
 
 
 class TestGiveAndTakeItems:
@@ -331,7 +331,7 @@ class TestGiveAndTakeItems:
         await service.db.upsert_player("g1", "u1", "Alice")
         success, msg = await service.give_items("g1", "Alice", [("铁剑", 2), ("生命药水", 3)])
         assert success is True
-        assert "铁剑*2" in msg
+        assert "铁剑 * 2" in msg
         items = await service.db.get_player_items("g1", "u1")
         assert len(items) == 2
 
@@ -356,6 +356,164 @@ class TestGiveAndTakeItems:
         await service.db.add_item("g1", "u1", "铁剑", 5)
         success, msg = await service.take_items("g1", "Alice", [("铁剑", None)])
         assert success is True
-        assert "全部" in msg
+        assert "铁剑 * 5" in msg
         items = await service.db.get_player_items("g1", "u1")
         assert len(items) == 0
+
+
+class TestParseItemFullName:
+    """Tests for parse_item_full_name."""
+
+    def test_with_grade_parentheses(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("共生噬刃（C级）")
+        assert base == "共生噬刃"
+        assert grade == "C"
+
+    def test_with_grade_ascii_parentheses(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("泯灭手枪(B)")
+        assert base == "泯灭手枪"
+        assert grade == "B"
+
+    def test_without_grade(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("铁剑")
+        assert base == "铁剑"
+        assert grade is None
+
+    def test_uppercase_grade(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("共生噬刃（sss级）")
+        assert base == "共生噬刃"
+        assert grade == "SSS"
+
+    def test_invalid_grade(self):
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("铁剑（X级）")
+        assert base == "铁剑（X级）"
+        assert grade is None
+
+
+class TestFormatItemDisplay:
+    """Tests for format_item_display."""
+
+    def test_with_grade_qty_gt_1(self):
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        result = format_item_display("共生噬刃", "C", 3)
+        assert result == "共生噬刃（C级） * 3"
+
+    def test_with_grade_qty_1(self):
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        result = format_item_display("共生噬刃", "C", 1)
+        assert result == "共生噬刃（C级）"
+
+    def test_no_grade_qty_gt_1(self):
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        result = format_item_display("铁剑", None, 5)
+        assert result == "铁剑 * 5"
+
+    def test_no_grade_qty_1(self):
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        result = format_item_display("铁剑", None, 1)
+        assert result == "铁剑"
+
+
+class TestClearItems:
+    """Tests for clear_items."""
+
+    @pytest.fixture
+    async def service(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = DatabaseManager(Path(tmpdir))
+            await db.initialize()
+            svc = LadderService(db)
+            yield svc
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_clear_all(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 3)
+        await service.db.add_item("g1", "u1", "生命药水", 5)
+        success, msg = await service.clear_items("g1", "Alice")
+        assert success is True
+        items = await service.db.get_player_items("g1", "u1")
+        assert len(items) == 0
+
+    @pytest.mark.asyncio
+    async def test_clear_specific_item(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 3)
+        await service.db.add_item("g1", "u1", "生命药水", 5)
+        success, msg = await service.clear_items("g1", "Alice", "铁剑")
+        assert success is True
+        items = await service.db.get_player_items("g1", "u1")
+        assert len(items) == 1
+        assert items[0]["item_name"] == "生命药水"
+
+    @pytest.mark.asyncio
+    async def test_clear_nonexistent_player(self, service):
+        success, msg = await service.clear_items("g1", "Ghost")
+        assert success is False
+        assert "不存在" in msg
+
+
+class TestItemsWithGrade:
+    """Tests for grade-separated item operations."""
+
+    @pytest.fixture
+    async def service(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = DatabaseManager(Path(tmpdir))
+            await db.initialize()
+            svc = LadderService(db)
+            yield svc
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_give_item_with_grade(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        success, msg = await service.give_items("g1", "Alice", [("共生噬刃（C级）", 2)])
+        assert success is True
+        items = await service.db.get_player_items("g1", "u1")
+        assert len(items) == 1
+        assert items[0]["item_name"] == "共生噬刃"
+        assert items[0]["grade"] == "C"
+        assert items[0]["quantity"] == 2
+
+    @pytest.mark.asyncio
+    async def test_take_item_by_name_without_grade(self, service):
+        """收回道具时不需要指定等级，按 item_name 匹配。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "共生噬刃", 3, grade="C")
+        success, msg = await service.take_items("g1", "Alice", [("共生噬刃", 2)])
+        assert success is True
+        items = await service.db.get_player_items("g1", "u1")
+        assert items[0]["quantity"] == 1
+
+    @pytest.mark.asyncio
+    async def test_inventory_sorted_by_grade(self, service):
+        """查询储物空间按等级从高到低排序。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 1)
+        await service.db.add_item("g1", "u1", "短刀", 1, grade="C")
+        await service.db.add_item("g1", "u1", "长刀", 1, grade="SSS")
+        await service.db.add_item("g1", "u1", "大剑", 1, grade="A")
+
+        items = await service.db.get_player_items("g1", "u1")
+        grades = [i["grade"] for i in items]
+        assert grades == ["SSS", "A", "C", None]
+
+    @pytest.mark.asyncio
+    async def test_deduct_item_with_grade(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "共生噬刃", 5, grade="C")
+        success, msg, base_name, grade = await service.deduct_item(
+            "g1", "u1", "Alice", "共生噬刃（C级）", 2
+        )
+        assert success is True
+        assert base_name == "共生噬刃"
+        assert grade == "C"
+        items = await service.db.get_player_items("g1", "u1")
+        assert items[0]["quantity"] == 3

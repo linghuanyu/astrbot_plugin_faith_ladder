@@ -91,6 +91,7 @@ class DatabaseManager:
                 group_id TEXT NOT NULL,
                 player_id TEXT NOT NULL,
                 item_name TEXT NOT NULL,
+                grade TEXT DEFAULT NULL,
                 quantity INTEGER DEFAULT 1,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, player_id, item_name)
@@ -121,6 +122,9 @@ class DatabaseManager:
 
         # Migrate: clean up old item names with *N suffix
         await self._migrate_item_names()
+
+        # Migrate: add grade column to player_items
+        await self._migrate_items_add_grade()
 
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
@@ -197,6 +201,31 @@ class DatabaseManager:
                     (clean_name, new_qty, group_id, player_id, item_name)
                 )
 
+        await self._db.commit()
+
+    async def _migrate_items_add_grade(self):
+        """Add grade column to player_items and backfill from item_name."""
+        async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if "grade" in columns:
+            return
+
+        await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT DEFAULT NULL")
+
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+
+        async with self._db.execute(
+            "SELECT rowid, item_name FROM player_items"
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        for rowid, old_name in rows:
+            base_name, grade = parse_item_full_name(old_name)
+            await self._db.execute(
+                "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
+                (grade, base_name, rowid)
+            )
         await self._db.commit()
 
     async def _migrate_whitelist(self):
@@ -675,32 +704,35 @@ class DatabaseManager:
 
     # === 道具（储物空间） ===
 
-    async def add_item(self, group_id: str, player_id: str, item_name: str, quantity: int = 1) -> None:
-        """增加道具。已存在则累加数量。"""
+    async def add_item(self, group_id: str, player_id: str, item_name: str, quantity: int = 1, grade: str = None) -> None:
+        """增加道具。item_name 为基础名，grade 为等级（可选）。已存在则累加数量。"""
         if quantity <= 0:
             return
         await self._db.execute(
-            "INSERT INTO player_items (group_id, player_id, item_name, quantity) "
-            "VALUES (?, ?, ?, ?) "
+            "INSERT INTO player_items (group_id, player_id, item_name, grade, quantity) "
+            "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(group_id, player_id, item_name) DO UPDATE SET "
             "quantity = quantity + excluded.quantity, updated_at = CURRENT_TIMESTAMP",
-            (group_id, player_id, item_name, quantity)
+            (group_id, player_id, item_name, grade, quantity)
         )
 
-    async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None) -> bool:
-        """减少道具。quantity=None 时全部删除。返回是否成功找到该道具。"""
+    async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None, grade: str = None) -> bool:
+        """减少道具。quantity=None 时全部删除。grade 不为 None 时精确匹配 grade。返回是否成功找到该道具。"""
+        if grade is not None:
+            where = "group_id = ? AND player_id = ? AND item_name = ? AND grade = ?"
+            params = (group_id, player_id, item_name, grade)
+        else:
+            where = "group_id = ? AND player_id = ? AND item_name = ?"
+            params = (group_id, player_id, item_name)
+
         if quantity is None:
-            # 全部删除
             cursor = await self._db.execute(
-                "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                (group_id, player_id, item_name)
+                f"DELETE FROM player_items WHERE {where}", params
             )
             return cursor.rowcount > 0
         else:
-            # 减少指定数量
             async with self._db.execute(
-                "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                (group_id, player_id, item_name)
+                f"SELECT quantity FROM player_items WHERE {where}", params
             ) as cursor:
                 row = await cursor.fetchone()
             if not row:
@@ -708,26 +740,49 @@ class DatabaseManager:
             new_qty = row[0] - quantity
             if new_qty <= 0:
                 await self._db.execute(
-                    "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (group_id, player_id, item_name)
+                    f"DELETE FROM player_items WHERE {where}", params
                 )
             else:
                 await self._db.execute(
-                    "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
-                    "WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (new_qty, group_id, player_id, item_name)
+                    f"UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
+                    f"WHERE {where}",
+                    (new_qty,) + params
                 )
             return True
 
+    async def clear_items(self, group_id: str, player_id: str, item_name: str = None, grade: str = None) -> int:
+        """清除道具。item_name=None → 清空全部；item_name 指定 → 清除该道具；+ grade → 指定等级。返回清除数量。"""
+        if item_name is None:
+            cursor = await self._db.execute(
+                "DELETE FROM player_items WHERE group_id = ? AND player_id = ?",
+                (group_id, player_id)
+            )
+        elif grade is None:
+            cursor = await self._db.execute(
+                "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                (group_id, player_id, item_name)
+            )
+        else:
+            cursor = await self._db.execute(
+                "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ? AND grade = ?",
+                (group_id, player_id, item_name, grade)
+            )
+        await self._db.commit()
+        return cursor.rowcount
+
     async def get_player_items(self, group_id: str, player_id: str) -> list:
-        """获取玩家所有道具。返回 [{"item_name": str, "quantity": int}, ...]"""
+        """获取玩家所有道具。返回 [{"item_name": str, "grade": str|None, "quantity": int}, ...]
+        按等级从高到低排序：SSS > SS > S > A > B > C > 无等级。"""
+        grade_order = {"SSS": 0, "SS": 1, "S": 2, "A": 3, "B": 4, "C": 5}
         async with self._db.execute(
-            "SELECT item_name, quantity FROM player_items "
-            "WHERE group_id = ? AND player_id = ? ORDER BY item_name",
+            "SELECT item_name, grade, quantity FROM player_items "
+            "WHERE group_id = ? AND player_id = ?",
             (group_id, player_id)
         ) as cursor:
             rows = await cursor.fetchall()
-            return [{"item_name": r[0], "quantity": r[1]} for r in rows]
+        results = [{"item_name": r[0], "grade": r[1], "quantity": r[2]} for r in rows]
+        results.sort(key=lambda x: (grade_order.get(x["grade"], 99) if x["grade"] else 100))
+        return results
 
     async def delete_all_items(self, group_id: str, player_id: str) -> int:
         """清空玩家所有道具。返回删除的道具种类数。"""

@@ -21,6 +21,37 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 
+# === 道具等级解析 ===
+
+VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
+_GRADE_RE = re.compile(r'^(.+?)[（(]([A-Za-z]+)[级]?[)）]$')
+
+
+def parse_item_full_name(full_name: str) -> Tuple[str, Optional[str]]:
+    """从完整名解析出 (基础名, 等级)。
+    '共生噬刃（C级）' → ('共生噬刃', 'C')
+    '共生噬刃(C)'     → ('共生噬刃', 'C')
+    '铁剑'           → ('铁剑', None)
+    """
+    m = _GRADE_RE.match(full_name.strip())
+    if m:
+        base, grade = m.group(1).strip(), m.group(2).strip().upper()
+        if grade in VALID_GRADES:
+            return base, grade
+    return full_name.strip(), None
+
+
+def format_item_display(item_name: str, grade: Optional[str], quantity: int) -> str:
+    """格式化道具展示。数量1不显*1。
+    ('共生噬刃', 'C', 3) → '共生噬刃（C级） * 3'
+    ('共生噬刃', 'C', 1) → '共生噬刃（C级）'
+    ('铁剑', None, 5)    → '铁剑 * 5'
+    ('铁剑', None, 1)    → '铁剑'
+    """
+    name = f"{item_name}（{grade}级）" if grade else item_name
+    return f"{name} * {quantity}" if quantity > 1 else name
+
+
 class LadderService:
     """Core business logic for the faith ladder plugin."""
 
@@ -382,14 +413,19 @@ class LadderService:
                     commit=False
                 )
 
-                # Add items (count occurrences of each item name)
+                # Add items (count occurrences of each (base_name, grade) pair)
                 item_details = []
                 if items:
                     from collections import Counter
-                    item_counts = Counter(items)
-                    for item_name, qty in item_counts.items():
-                        await self.db.add_item(group_id, player.player_id, item_name, qty)
-                        item_details.append(f"{item_name}*{qty}")
+                    # 解析每个道具的基础名和等级，按 (base_name, grade) 分组计数
+                    parsed_items = []
+                    for raw in items:
+                        base_name, grade = parse_item_full_name(raw)
+                        parsed_items.append((base_name, grade))
+                    item_counts = Counter(parsed_items)
+                    for (base_name, grade), qty in item_counts.items():
+                        await self.db.add_item(group_id, player.player_id, base_name, qty, grade=grade)
+                        item_details.append(format_item_display(base_name, grade, qty))
 
                 if updated or item_details:
                     success_count += 1
@@ -422,31 +458,40 @@ class LadderService:
         return format_inventory(player_name, items)
 
     async def give_items(self, group_id: str, player_name: str, items: List[Tuple[str, int]]) -> Tuple[bool, str]:
-        """赐予道具。items: [(道具名, 数量), ...]"""
-        player = await self.db.get_player_by_name(group_id, player_name)
-        if not player:
-            return False, f"玩家 {player_name} 不存在"
-        for item_name, quantity in items:
-            await self.db.add_item(group_id, player.player_id, item_name, quantity)
-        await self.db.commit()
-        details = ", ".join(f"{name}*{qty}" for name, qty in items)
-        return True, f"已赐予 {player_name}: {details}"
-
-    async def take_items(self, group_id: str, player_name: str, items: List[Tuple[str, Optional[int]]]) -> Tuple[bool, str]:
-        """收回道具。items: [(道具名, 数量或None), ...]。None=全部收回。"""
+        """赐予道具。items: [(道具名（可能含等级）, 数量), ...]"""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return False, f"玩家 {player_name} 不存在"
         details = []
-        for item_name, quantity in items:
-            found = await self.db.remove_item(group_id, player.player_id, item_name, quantity)
-            if found:
-                if quantity is None:
-                    details.append(f"{item_name}(全部)")
-                else:
-                    details.append(f"{item_name}*{quantity}")
+        for raw_name, quantity in items:
+            base_name, grade = parse_item_full_name(raw_name)
+            await self.db.add_item(group_id, player.player_id, base_name, quantity, grade=grade)
+            details.append(format_item_display(base_name, grade, quantity))
+        await self.db.commit()
+        return True, f"已赐予 {player_name}: {', '.join(details)}"
+
+    async def take_items(self, group_id: str, player_name: str, items: List[Tuple[str, Optional[int]]]) -> Tuple[bool, str]:
+        """收回道具。items: [(道具名（可能含等级）, 数量或None), ...]。None=全部收回。按 item_name 匹配，不需要等级。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        details = []
+        for raw_name, quantity in items:
+            base_name, grade = parse_item_full_name(raw_name)
+            # 按 item_name 匹配（不要求等级一致），收回实际道具
+            found_items = await self.db.get_player_items(group_id, player.player_id)
+            match = next((i for i in found_items if i["item_name"] == base_name), None)
+            if not match:
+                details.append(f"该玩家没有此道具: {base_name}")
+                continue
+            actual_grade = match["grade"]
+            actual_qty = match["quantity"]
+            await self.db.remove_item(group_id, player.player_id, base_name, quantity, grade=actual_grade)
+            if quantity is None:
+                # 全部收回，显示实际收回数量
+                details.append(format_item_display(base_name, actual_grade, actual_qty))
             else:
-                details.append(f"该玩家没有此道具: {item_name}")
+                details.append(format_item_display(base_name, actual_grade, quantity))
         await self.db.commit()
         return True, f"已从 {player_name} 收回: {', '.join(details)}"
 
@@ -485,22 +530,46 @@ class LadderService:
 
     async def deduct_item(
         self, group_id: str, player_id: str, player_name: str,
-        item_name: str, quantity: int
-    ) -> Tuple[bool, str]:
-        """扣除道具（发送方确认时调用）。"""
+        raw_item_name: str, quantity: int
+    ) -> Tuple[bool, str, Optional[str], Optional[str]]:
+        """扣除道具。返回 (success, msg, base_name, grade)。
+        输入 raw_item_name 可含等级，如 '共生噬刃（C级）'。
+        无等级输入时按 item_name 匹配第一个。"""
+        base_name, input_grade = parse_item_full_name(raw_item_name)
         items = await self.db.get_player_items(group_id, player_id)
-        current_qty = next((i["quantity"] for i in items if i["item_name"] == item_name), 0)
-        if current_qty < quantity:
-            return False, f"道具不足：你只有 {current_qty} 个 {item_name}"
-        await self.db.remove_item(group_id, player_id, item_name, quantity)
+        if input_grade:
+            match = next((i for i in items if i["item_name"] == base_name and i["grade"] == input_grade), None)
+        else:
+            match = next((i for i in items if i["item_name"] == base_name), None)
+        if not match:
+            return False, f"没有道具: {base_name}", base_name, input_grade
+        if match["quantity"] < quantity:
+            return False, f"道具不足：你只有 {match['quantity']} 个 {format_item_display(base_name, match['grade'], match['quantity'])}", base_name, input_grade
+        await self.db.remove_item(group_id, player_id, base_name, quantity, grade=match["grade"])
         await self.db.commit()
-        return True, f"已扣除 {item_name}*{quantity}"
+        return True, f"已扣除 {format_item_display(base_name, match['grade'], quantity)}", base_name, match["grade"]
 
     async def receive_item(
         self, group_id: str, player_id: str, player_name: str,
-        item_name: str, quantity: int
+        item_name: str, quantity: int, grade: Optional[str] = None
     ) -> Tuple[bool, str]:
         """接收道具（接收方接受时调用）。"""
-        await self.db.add_item(group_id, player_id, item_name, quantity)
+        await self.db.add_item(group_id, player_id, item_name, quantity, grade=grade)
         await self.db.commit()
-        return True, f"已收到 {item_name}*{quantity}"
+        return True, f"已收到 {format_item_display(item_name, grade, quantity)}"
+
+    async def clear_items(self, group_id: str, player_name: str, raw_name: Optional[str] = None) -> Tuple[bool, str]:
+        """清除储物空间。raw_name=None → 清空全部；指定道具名 → 清除该道具（可含等级）。"""
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, f"玩家 {player_name} 不存在"
+        if raw_name is None:
+            count = await self.db.clear_items(group_id, player.player_id)
+            return True, f"已清空 {player_name} 的储物空间（{count} 种道具）"
+        else:
+            base_name, grade = parse_item_full_name(raw_name)
+            count = await self.db.clear_items(group_id, player.player_id, base_name, grade)
+            if count == 0:
+                return False, f"{player_name} 没有此道具"
+            display = f"{base_name}（{grade}级）" if grade else base_name
+            return True, f"已清除 {player_name} 的 {display}"
