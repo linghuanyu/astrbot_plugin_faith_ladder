@@ -311,7 +311,7 @@ class TestFormatInventory:
     def test_graded_item(self):
         items = [{"item_name": "共生噬刃", "grade": "C", "quantity": 1}]
         result = format_inventory("Alice", items)
-        assert "共生噬刃（C级）" in result
+        assert "共生噬刃 |（C级）" in result
 
 
 class TestGiveAndTakeItems:
@@ -389,24 +389,39 @@ class TestParseItemFullName:
         assert grade == "SSS"
 
     def test_invalid_grade(self):
+        """X 不在 VALID_GRADES 内，解析出空字符串标记，去掉括号。"""
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
         base, grade = parse_item_full_name("铁剑（X级）")
-        assert base == "铁剑（X级）"
-        assert grade is None
+        assert base == "铁剑"
+        assert grade == ""
 
     def test_d_grade_not_valid(self):
-        """D 不在 VALID_GRADES 内，视为无等级，括号保留在名字中。"""
+        """D 不在 VALID_GRADES 内，解析出空字符串标记，去掉括号。"""
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
         base, grade = parse_item_full_name("淬锋砺剑（D）")
-        assert base == "淬锋砺剑（D）"
-        assert grade is None
+        assert base == "淬锋砺剑"
+        assert grade == ""
 
     def test_lowercase_d_not_valid(self):
-        """小写 d 转为 D 后不在 VALID_GRADES 内，视为无等级。"""
+        """小写 d 转为 D 后不在 VALID_GRADES 内，解析出空字符串标记。"""
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
         base, grade = parse_item_full_name("塑形内衣（d级）")
-        assert base == "塑形内衣（d级）"
-        assert grade is None
+        assert base == "塑形内衣"
+        assert grade == ""
+
+    def test_grade_with_plus(self):
+        """等级中的 + 号会被去除，b+ → B（有效等级）。"""
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("道具名（b+级）")
+        assert base == "道具名"
+        assert grade == "B"
+
+    def test_grade_with_plus_uppercase(self):
+        """B+ → B（有效等级）。"""
+        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        base, grade = parse_item_full_name("道具名（B+）")
+        assert base == "道具名"
+        assert grade == "B"
 
 
 class TestFormatItemDisplay:
@@ -415,12 +430,23 @@ class TestFormatItemDisplay:
     def test_with_grade_qty_gt_1(self):
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         result = format_item_display("共生噬刃", "C", 3)
-        assert result == "共生噬刃（C级） * 3"
+        assert result == "共生噬刃 * 3 |（C级）"
 
     def test_with_grade_qty_1(self):
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         result = format_item_display("共生噬刃", "C", 1)
-        assert result == "共生噬刃（C级）"
+        assert result == "共生噬刃 |（C级）"
+
+    def test_invalid_grade_display(self):
+        """非标准等级显示为 |（无等级）。"""
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        result = format_item_display("淬锋砺剑", "", 1)
+        assert result == "淬锋砺剑 |（无等级）"
+
+    def test_invalid_grade_display_qty(self):
+        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        result = format_item_display("淬锋砺剑", "", 3)
+        assert result == "淬锋砺剑 * 3 |（无等级）"
 
     def test_no_grade_qty_gt_1(self):
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display

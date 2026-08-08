@@ -24,35 +24,56 @@ except ImportError:
 # === 道具等级解析 ===
 
 VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
-_GRADE_RE = re.compile(r'^(.+?)[（(]([A-Za-z]+)[级]?[)）]$')
+_GRADE_RE = re.compile(r'^(.+?)[（(]([A-Za-z]+\+?)[级]?[)）]$')
 
 
 def parse_item_full_name(full_name: str) -> Tuple[str, Optional[str]]:
     """从完整名解析出 (基础名, 等级)。
-    等级必须在 VALID_GRADES 内，否则视为无等级（括号部分保留在名字中）。
-    '共生噬刃（C级）' → ('共生噬刃', 'C')
-    '共生噬刃(C)'     → ('共生噬刃', 'C')
-    '淬锋砺剑（D）'   → ('淬锋砺剑（D）', None)  — D 不在 VALID_GRADES
-    '塑形内衣（d级）' → ('塑形内衣（d级）', None) — d→D 不在 VALID_GRADES
-    '铁剑'           → ('铁剑', None)
+    等级中的 + 号会被自动去除（如 B+ → B）。
+    返回三种状态:
+    - grade 为有效等级字符串（SSS/SS/S/A/B/C）→ 有效等级
+    - grade 为 ""（空字符串）→ 有括号但不是有效等级（如 D/d）
+    - grade 为 None → 完全没有等级括号
+
+    '共生噬刃（C级）'  → ('共生噬刃', 'C')
+    '共生噬刃(C)'      → ('共生噬刃', 'C')
+    '道具名（b+级）'   → ('道具名', 'B')     — + 号去除后 B 有效
+    '淬锋砺剑（D）'    → ('淬锋砺剑', '')    — D 不在 VALID_GRADES
+    '塑形内衣（d级）'  → ('塑形内衣', '')    — d→D 不在 VALID_GRADES
+    '铁剑'            → ('铁剑', None)
     """
     m = _GRADE_RE.match(full_name.strip())
     if m:
-        base, grade = m.group(1).strip(), m.group(2).strip().upper()
+        base, grade = m.group(1).strip(), m.group(2).strip().upper().rstrip('+')
         if grade in VALID_GRADES:
             return base, grade
+        # 有括号但不是有效等级 → 返回空字符串标记
+        return base, ""
     return full_name.strip(), None
 
 
 def format_item_display(item_name: str, grade: Optional[str], quantity: int) -> str:
     """格式化道具展示。数量1不显*1。
-    ('共生噬刃', 'C', 3) → '共生噬刃（C级） * 3'
-    ('共生噬刃', 'C', 1) → '共生噬刃（C级）'
-    ('铁剑', None, 5)    → '铁剑 * 5'
-    ('铁剑', None, 1)    → '铁剑'
+    三种格式:
+    - 有效等级: '共生噬刃 |（C级）'
+    - 非标准等级: '淬锋砺剑 |（无等级）'
+    - 无等级: '铁剑'
+    数量紧跟名字，等级在最后。
+
+    ('共生噬刃', 'C', 3)  → '共生噬刃 * 3 |（C级）'
+    ('共生噬刃', 'C', 1)  → '共生噬刃 |（C级）'
+    ('淬锋砺剑', '', 3)   → '淬锋砺剑 * 3 |（无等级）'
+    ('淬锋砺剑', '', 1)   → '淬锋砺剑 |（无等级）'
+    ('铁剑', None, 5)     → '铁剑 * 5'
+    ('铁剑', None, 1)     → '铁剑'
     """
-    name = f"{item_name}（{grade}级）" if grade else item_name
-    return f"{name} * {quantity}" if quantity > 1 else name
+    qty_str = f" * {quantity}" if quantity > 1 else ""
+    if grade:
+        return f"{item_name}{qty_str} |（{grade}级）"
+    elif grade == "":
+        return f"{item_name}{qty_str} |（无等级）"
+    else:
+        return f"{item_name}{qty_str}"
 
 
 class LadderService:
@@ -574,5 +595,5 @@ class LadderService:
             count = await self.db.clear_items(group_id, player.player_id, base_name, grade)
             if count == 0:
                 return False, f"{player_name} 没有此道具"
-            display = f"{base_name}（{grade}级）" if grade else base_name
+            display = format_item_display(base_name, grade, 1)
             return True, f"已清除 {player_name} 的 {display}"
