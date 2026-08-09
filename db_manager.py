@@ -211,9 +211,10 @@ class DatabaseManager:
 
     async def _migrate_items_add_grade(self):
         """Add grade column to player_items and backfill from item_name.
-        Idempotent: safe to re-run if interrupted. ALTER TABLE is auto-committed
-        in SQLite and can't be rolled back, so we separate column creation from
-        data migration and make the data migration retryable."""
+        Idempotent: safe to re-run if interrupted. Handles:
+        1. First run: adds column and migrates all rows
+        2. Subsequent runs: only migrates rows where grade is NULL but item_name has a grade pattern
+        """
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
 
@@ -225,10 +226,17 @@ class DatabaseManager:
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
 
         try:
-            async with self._db.execute(
-                "SELECT rowid, item_name FROM player_items"
-            ) as cursor:
-                rows = await cursor.fetchall()
+            # If column just created, scan all rows. Otherwise only scan rows where grade is NULL.
+            if column_existed:
+                async with self._db.execute(
+                    "SELECT rowid, item_name FROM player_items WHERE grade IS NULL"
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                async with self._db.execute(
+                    "SELECT rowid, item_name FROM player_items"
+                ) as cursor:
+                    rows = await cursor.fetchall()
 
             logger.info(f"[Migration] Scanning {len(rows)} rows for grade migration")
             migrated = 0

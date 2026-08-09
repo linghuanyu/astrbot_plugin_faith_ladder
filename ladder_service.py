@@ -24,30 +24,44 @@ except ImportError:
 # === 道具等级解析 ===
 
 VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
-_GRADE_RE = re.compile(r'^(.+?)[（(]([A-Za-z]+\+?)[级]?[)）]$')
+# 匹配：名字 + 括号 + 内容（提取字母） + 括号
+# 支持格式：（C级）、(B)、（b+级）、（A残级）、（枯纹根茎）等
+# 从括号内容中提取开头的字母作为等级，忽略中文和其他字符
+_GRADE_RE = re.compile(r'^(.*)[（(]([^)）]*)[)）]$')
 
 
 def parse_item_full_name(full_name: str) -> Tuple[str, Optional[str]]:
     """从完整名解析出 (基础名, 等级)。
     等级中的 + 号会被自动去除（如 B+ → B）。
+    括号内有字母则提取字母作为等级，忽略中文和其他字符。
     返回三种状态:
     - grade 为有效等级字符串（SSS/SS/S/A/B/C）→ 有效等级
-    - grade 为 ""（空字符串）→ 有括号但不是有效等级（如 D/d）
+    - grade 为 ""（空字符串）→ 有括号但不是有效等级（如 D/d/中文）
     - grade 为 None → 完全没有等级括号
 
-    '共生噬刃（C级）'  → ('共生噬刃', 'C')
-    '共生噬刃(C)'      → ('共生噬刃', 'C')
-    '道具名（b+级）'   → ('道具名', 'B')     — + 号去除后 B 有效
-    '淬锋砺剑（D）'    → ('淬锋砺剑', '')    — D 不在 VALID_GRADES
-    '塑形内衣（d级）'  → ('塑形内衣', '')    — d→D 不在 VALID_GRADES
-    '铁剑'            → ('铁剑', None)
+    '共生噬刃（C级）'    → ('共生噬刃', 'C')
+    '共生噬刃(C)'        → ('共生噬刃', 'C')
+    '道具名（b+级）'     → ('道具名', 'B')     — + 号去除后 B 有效
+    '共识之杖（A残级）'  → ('共识之杖', 'A')   — "残"被忽略，提取 A
+    '(B）'              → ('', 'B')           — 空基础名，提取 B
+    '淬锋砺剑（D）'      → ('淬锋砺剑', '')    — D 不在 VALID_GRADES
+    '塑形内衣（d级）'    → ('塑形内衣', '')    — d→D 不在 VALID_GRADES
+    '繁荣新芽（枯纹根茎）' → ('繁荣新芽', '')  — 无字母，空字符串
+    '铁剑'              → ('铁剑', None)
     """
     m = _GRADE_RE.match(full_name.strip())
     if m:
-        base, grade = m.group(1).strip(), m.group(2).strip().upper().rstrip('+')
-        if grade in VALID_GRADES:
-            return base, grade
-        # 有括号但不是有效等级 → 返回空字符串标记
+        base = m.group(1).strip()
+        content = m.group(2).strip()
+        # 从括号内容中提取开头的字母（支持 + 号）
+        grade_match = re.match(r'^([A-Za-z]+\+?)', content)
+        if grade_match:
+            grade = grade_match.group(1).upper().rstrip('+')
+            if grade in VALID_GRADES:
+                return base, grade
+            # 有字母但不是有效等级 → 返回空字符串标记
+            return base, ""
+        # 括号内无字母（如中文）→ 返回空字符串标记
         return base, ""
     return full_name.strip(), None
 
