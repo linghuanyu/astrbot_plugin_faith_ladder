@@ -513,25 +513,35 @@ class LadderService:
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return False, f"玩家 {player_name} 不存在"
-        details = []
+        success_details = []
+        fail_details = []
         for raw_name, quantity in items:
             base_name, grade = parse_item_full_name(raw_name)
             # 按 item_name 匹配（不要求等级一致），收回实际道具
             found_items = await self.db.get_player_items(group_id, player.player_id)
             match = next((i for i in found_items if i["item_name"] == base_name), None)
             if not match:
-                details.append(f"该玩家没有此道具: {base_name}")
+                fail_details.append(f"收回失败：{player_name} 没有道具 {base_name}")
                 continue
             actual_grade = match["grade"]
             actual_qty = match["quantity"]
             await self.db.remove_item(group_id, player.player_id, base_name, quantity, grade=actual_grade)
             if quantity is None:
                 # 全部收回，显示实际收回数量
-                details.append(format_item_display(base_name, actual_grade, actual_qty))
+                success_details.append(format_item_display(base_name, actual_grade, actual_qty))
             else:
-                details.append(format_item_display(base_name, actual_grade, quantity))
+                success_details.append(format_item_display(base_name, actual_grade, quantity))
         await self.db.commit()
-        return True, f"已从 {player_name} 收回: {', '.join(details)}"
+
+        if not success_details:
+            # 全部失败，只返回失败信息
+            return False, "\n".join(fail_details)
+        elif not fail_details:
+            # 全部成功
+            return True, f"已从 {player_name} 收回: {', '.join(success_details)}"
+        else:
+            # 部分成功部分失败
+            return True, f"已从 {player_name} 收回: {', '.join(success_details)}\n" + "\n".join(fail_details)
 
     # === 状态 ===
 
