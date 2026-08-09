@@ -211,8 +211,7 @@ class DatabaseManager:
 
     async def _migrate_items_add_grade(self):
         """Add grade column to player_items and backfill from item_name.
-        Idempotent: safe to re-run. Scans ALL rows and re-parses item_name.
-        If item_name contains a grade pattern, extract it to grade column.
+        Idempotent: safe to re-run. Handles duplicate items by merging quantities.
         """
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
@@ -227,17 +226,41 @@ class DatabaseManager:
         try:
             # Always scan all rows to catch any remaining unmigrated data
             async with self._db.execute(
-                "SELECT rowid, item_name, grade FROM player_items"
+                "SELECT rowid, group_id, player_id, item_name, grade, quantity FROM player_items"
             ) as cursor:
                 rows = await cursor.fetchall()
 
             logger.info(f"[Migration] Scanning {len(rows)} rows for grade migration")
             migrated = 0
-            for rowid, old_name, current_grade in rows:
+            merged = 0
+
+            for rowid, group_id, player_id, old_name, current_grade, quantity in rows:
                 base_name, grade = parse_item_full_name(old_name)
-                # Only UPDATE if the name changed (had a grade pattern)
-                # This makes the migration idempotent
-                if base_name != old_name:
+
+                # Only process if the name changed (had a grade pattern)
+                if base_name == old_name:
+                    continue
+
+                # Check if target row already exists
+                async with self._db.execute(
+                    "SELECT rowid, quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                    (group_id, player_id, base_name)
+                ) as check_cursor:
+                    existing = await check_cursor.fetchone()
+
+                if existing:
+                    # Target exists - merge quantities and delete this row
+                    existing_rowid, existing_qty = existing
+                    new_qty = existing_qty + quantity
+                    await self._db.execute(
+                        "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE rowid = ?",
+                        (new_qty, existing_rowid)
+                    )
+                    await self._db.execute("DELETE FROM player_items WHERE rowid = ?", (rowid,))
+                    merged += 1
+                    logger.info(f"[Migration] Merged row {rowid} into {existing_rowid}: '{old_name}' → '{base_name}' (qty {quantity}+{existing_qty}={new_qty})")
+                else:
+                    # No conflict - just update this row
                     await self._db.execute(
                         "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
                         (grade, base_name, rowid)
@@ -245,9 +268,9 @@ class DatabaseManager:
                     migrated += 1
                     logger.info(f"[Migration] Row {rowid}: '{old_name}' → base='{base_name}', grade='{grade}'")
 
-            if migrated > 0:
+            if migrated > 0 or merged > 0:
                 await self._db.commit()
-                logger.info(f"[Migration] Successfully migrated {migrated} rows")
+                logger.info(f"[Migration] Successfully migrated {migrated} rows, merged {merged} duplicate rows")
             else:
                 logger.info("[Migration] No rows needed grade migration")
         except Exception as e:
