@@ -211,9 +211,8 @@ class DatabaseManager:
 
     async def _migrate_items_add_grade(self):
         """Add grade column to player_items and backfill from item_name.
-        Idempotent: safe to re-run if interrupted. Handles:
-        1. First run: adds column and migrates all rows
-        2. Subsequent runs: only migrates rows where grade is NULL but item_name has a grade pattern
+        Idempotent: safe to re-run. Scans ALL rows and re-parses item_name.
+        If item_name contains a grade pattern, extract it to grade column.
         """
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
@@ -226,24 +225,18 @@ class DatabaseManager:
         from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
 
         try:
-            # If column just created, scan all rows. Otherwise only scan rows where grade is NULL.
-            if column_existed:
-                async with self._db.execute(
-                    "SELECT rowid, item_name FROM player_items WHERE grade IS NULL"
-                ) as cursor:
-                    rows = await cursor.fetchall()
-            else:
-                async with self._db.execute(
-                    "SELECT rowid, item_name FROM player_items"
-                ) as cursor:
-                    rows = await cursor.fetchall()
+            # Always scan all rows to catch any remaining unmigrated data
+            async with self._db.execute(
+                "SELECT rowid, item_name, grade FROM player_items"
+            ) as cursor:
+                rows = await cursor.fetchall()
 
             logger.info(f"[Migration] Scanning {len(rows)} rows for grade migration")
             migrated = 0
-            for rowid, old_name in rows:
+            for rowid, old_name, current_grade in rows:
                 base_name, grade = parse_item_full_name(old_name)
-                # Only UPDATE if the name actually changed (had a grade pattern)
-                # This makes the migration idempotent — already-migrated rows are skipped
+                # Only UPDATE if the name changed (had a grade pattern)
+                # This makes the migration idempotent
                 if base_name != old_name:
                     await self._db.execute(
                         "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
