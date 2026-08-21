@@ -136,14 +136,6 @@ class FaithLadderPlugin(Star):
         except Exception as e:
             logger.warning(f"[AutoWhitelist] 事件监听注册失败（可用'同步白名单'命令手动同步）: {e}")
 
-        # 注册消息监听（祷词验证）
-        try:
-            if hasattr(self.context, 'register_event_handler'):
-                self.context.register_event_handler(self._on_message_for_prayer)
-                logger.info("[Prayer] 祷词验证消息监听已注册")
-        except Exception as e:
-            logger.warning(f"[Prayer] 消息监听注册失败: {e}")
-
         logger.info("FaithLadder plugin initialized")
 
     async def terminate(self):
@@ -1426,10 +1418,15 @@ class FaithLadderPlugin(Star):
         except Exception as e:
             logger.error(f"[AutoWhitelist] 处理成员变动事件失败: {e}")
 
-    async def _on_message_for_prayer(self, event: AstrMessageEvent):
-        """监听所有消息，检查是否有待验证的祷词。"""
+    @filter.on_llm_request(priority=10_000)
+    async def _on_message_for_prayer(self, event: AstrMessageEvent, req=None) -> None:
+        """在消息到达 LLM 之前拦截，检查是否有待验证的祷词。
+        使用 on_llm_request 钩子确保对所有消息（包括非命令消息）生效。
+        """
         try:
-            await self._check_prayer_verification(event)
+            handled = await self._check_prayer_verification(event)
+            if handled:
+                event.stop_event()
         except Exception as e:
             logger.error(f"[Prayer] 祷词验证处理失败: {e}")
 
