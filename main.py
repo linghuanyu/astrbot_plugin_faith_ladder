@@ -720,6 +720,18 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"未找到群名片包含「{player_name}」的群成员，无法进行祷词验证。")
             return
 
+        member_id = str(target_member["user_id"])
+        target_card = target_member.get("card") or target_member.get("nickname") or member_id
+
+        # 检查是否已有进行中的注册（同一目标成员）
+        existing_pending = self._pending_registrations.get((group_id, member_id))
+        overwrite_warning = ""
+        if existing_pending:
+            remaining = int(existing_pending["expire_at"] - time.time())
+            if remaining > 0:
+                old_name = existing_pending.get("target_name", "?")
+                overwrite_warning = f"\n注意：将覆盖对「{old_name}」进行中的注册（剩余 {remaining} 秒）"
+
         # 获取祷词（支持数组格式，任意一个匹配即可）
         prayer_key = f"prayer_text_{faith_name}"
         prayers_raw = self.config.get(prayer_key, [])
@@ -732,7 +744,6 @@ class FaithLadderPlugin(Star):
             return
 
         # 存储待注册状态（key 为 (group_id, member_id)，支持同群多人并发注册）
-        member_id = str(target_member["user_id"])
         self._pending_registrations[(group_id, member_id)] = {
             "target_name": player_name,
             "faith": faith_name,
@@ -745,7 +756,64 @@ class FaithLadderPlugin(Star):
             "prayers": prayers,
         }
 
-        yield event.plain_result("请需要注册的玩家尽快发送祷词")
+        result_lines = [
+            f"找到目标：{target_card}（QQ: {member_id}）",
+            f"请需要注册的玩家尽快发送祷词（60 秒内有效）",
+        ]
+        if overwrite_warning:
+            result_lines.append(overwrite_warning.strip())
+
+        yield event.plain_result("\n".join(result_lines))
+
+    # === 取消录入 ===
+
+    @filter.command("取消录入", alias={"cancel_register"})
+    async def cmd_cancel_register(self, event: AstrMessageEvent):
+        """取消当前进行中的录入。格式: 取消录入 <玩家名>（操作者可取消自己发起的 pending 注册）"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        if not has_permission and not is_admin:
+            yield event.plain_result("权限不足。")
+            return
+
+        args = self._get_args(event, "取消录入")
+        if not args:
+            # 无参数时取消自己发起的所有 pending
+            cancelled = 0
+            for (gid, mid), pending in list(self._pending_registrations.items()):
+                if gid == group_id and pending.get("operator_id") == user_id:
+                    del self._pending_registrations[(gid, mid)]
+                    cancelled += 1
+            if cancelled == 0:
+                yield event.plain_result("当前没有你发起的进行中注册。")
+            else:
+                yield event.plain_result(f"已取消 {cancelled} 个进行中的注册。")
+            return
+
+        # 有参数：按玩家名取消（查找名片对应的成员）
+        target_name = args.strip().split()[0]
+        target_member = await self._find_member_by_name(event, target_name)
+        if not target_member:
+            yield event.plain_result(f"未找到群名片包含「{target_name}」的成员。")
+            return
+
+        member_id = str(target_member["user_id"])
+        pending_key = (group_id, member_id)
+        if pending_key not in self._pending_registrations:
+            yield event.plain_result(f"没有对「{target_name}」进行中的注册。")
+            return
+
+        pending = self._pending_registrations[pending_key]
+        # 只允许操作者本人或管理员取消
+        if pending.get("operator_id") != user_id and not is_admin:
+            yield event.plain_result("只能取消自己发起的注册。")
+            return
+
+        del self._pending_registrations[pending_key]
+        yield event.plain_result(f"已取消对「{pending['target_name']}」的录入。")
 
     # === 设置职业（仅职业） ===
 
