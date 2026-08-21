@@ -64,7 +64,7 @@ class FaithLadderPlugin(Star):
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
         self._pending_gifts_receive = None  # 当前待确认的赠送（接收阶段）
-        self._pending_registrations = {}  # group_id -> 待注册状态（祷词验证）
+        self._pending_registrations = {}  # (group_id, member_id) -> 待注册状态（祷词验证），支持同群并发注册
 
     def _get_data_dir(self) -> Path:
         data_path = None
@@ -155,20 +155,25 @@ class FaithLadderPlugin(Star):
     # === 祷词验证处理 ===
 
     async def _check_prayer_verification(self, event: AstrMessageEvent) -> bool:
-        """检查消息是否匹配待注册的祷词。返回是否已处理。"""
+        """检查消息是否匹配待注册的祷词。返回是否已处理。
+        支持同群并发注册：以 (group_id, member_id) 为 key。
+        """
         group_id = self._get_group_id(event)
-        pending = self._pending_registrations.get(group_id)
-        if not pending:
-            return False
-
-        # 检查是否超时
-        if pending["expire_at"] < time.time():
-            del self._pending_registrations[group_id]
-            return False
-
-        # 检查发送者是否是目标成员
         sender_id = str(event.get_sender_id())
-        if sender_id != pending["member_id"]:
+        now = time.time()
+
+        # 清理本群所有超时的 pending
+        expired_keys = [
+            k for k in self._pending_registrations
+            if k[0] == group_id and self._pending_registrations[k]["expire_at"] < now
+        ]
+        for k in expired_keys:
+            del self._pending_registrations[k]
+
+        # 找到发送者对应的 pending 注册（key 的 member_id 匹配）
+        pending_key = (group_id, sender_id)
+        pending = self._pending_registrations.get(pending_key)
+        if not pending:
             return False
 
         # 匹配祷词（忽略标点和空格，任意一个匹配即可）
@@ -190,20 +195,33 @@ class FaithLadderPlugin(Star):
         pilgrimage_score = pending["pilgrimage_score"]
         operator_id = pending["operator_id"]
 
-        del self._pending_registrations[group_id]
+        del self._pending_registrations[pending_key]
 
         success, message = await self.ladder_service.register_player(
             group_id, target_name, faith_name, class_name,
             ladder_score, pilgrimage_score, operator_id
         )
-        # 发送结果（作为新消息）
+
+        # 发送注册结果给目标玩家
         try:
             from astrbot.api.message_components import Plain
             await self.context.send_message(
                 event.message_obj.umo, [Plain(text=message)]
             )
         except Exception as e:
-            logger.error(f"Failed to send registration result: {e}")
+            logger.error(f"Failed to send registration result to target: {e}")
+
+        # 通知操作者注册成功
+        if operator_id != sender_id:
+            try:
+                notify_text = f"录入成功：{target_name}（{faith_name} · {class_name}）已注册完成。"
+                from astrbot.api.message_components import Plain
+                await self.context.send_message(
+                    event.message_obj.umo, [Plain(text=notify_text)]
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify operator: {e}")
+
         return True
 
     # === Helpers ===
@@ -713,14 +731,15 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"未配置信仰 {faith_name} 的祷词，请联系管理员。")
             return
 
-        # 存储待注册状态
-        self._pending_registrations[group_id] = {
+        # 存储待注册状态（key 为 (group_id, member_id)，支持同群多人并发注册）
+        member_id = str(target_member["user_id"])
+        self._pending_registrations[(group_id, member_id)] = {
             "target_name": player_name,
             "faith": faith_name,
             "class_": class_name,
             "ladder_score": ladder_score,
             "pilgrimage_score": pilgrimage_score,
-            "member_id": str(target_member["user_id"]),
+            "member_id": member_id,
             "operator_id": user_id,
             "expire_at": time.time() + 60,
             "prayers": prayers,
