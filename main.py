@@ -171,11 +171,14 @@ class FaithLadderPlugin(Star):
         if sender_id != pending["member_id"]:
             return False
 
-        # 匹配祷词（忽略标点和空格）
+        # 匹配祷词（忽略标点和空格，任意一个匹配即可）
         msg = self.normalize_prayer(event.message_str)
-        expected = self.normalize_prayer(pending["prayer"])
+        prayers = pending.get("prayers", [])
+        # 兼容旧格式（单个字符串）
+        if not prayers and pending.get("prayer"):
+            prayers = [pending["prayer"]]
 
-        if msg != expected:
+        if not any(msg == self.normalize_prayer(p) for p in prayers):
             # 不匹配，静默忽略，等待下次消息
             return False
 
@@ -699,10 +702,14 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"未找到群名片包含「{player_name}」的群成员，无法进行祷词验证。")
             return
 
-        # 获取祷词
+        # 获取祷词（支持数组格式，任意一个匹配即可）
         prayer_key = f"prayer_text_{faith_name}"
-        prayer = self.config.get(prayer_key, "")
-        if not prayer:
+        prayers_raw = self.config.get(prayer_key, [])
+        if isinstance(prayers_raw, list):
+            prayers = [p for p in prayers_raw if p]
+        else:
+            prayers = [prayers_raw] if prayers_raw else []
+        if not prayers:
             yield event.plain_result(f"未配置信仰 {faith_name} 的祷词，请联系管理员。")
             return
 
@@ -716,7 +723,7 @@ class FaithLadderPlugin(Star):
             "member_id": str(target_member["user_id"]),
             "operator_id": user_id,
             "expire_at": time.time() + 60,
-            "prayer": prayer,
+            "prayers": prayers,
         }
 
         yield event.plain_result("请需要注册的玩家尽快发送祷词")

@@ -62,9 +62,51 @@ class TestNormalizePrayer:
 
     def test_match_with_different_formatting(self):
         """Two versions of the same prayer with different formatting should match."""
-        prayer1 = "万法归寂虚无永存"
-        prayer2 = "万法，归寂！虚无……永存？"
+        prayer1 = "感孕众生衔育自然"
+        prayer2 = "感孕众生，衔育自然！"
         assert normalize_prayer(prayer1) == normalize_prayer(prayer2)
+
+
+class TestMultiPrayerMatching:
+    """Tests for multi-prayer matching (any match is valid)."""
+
+    LIFE_PRAYERS = ["感孕众生衔育自然", "万物滋生亦繁亦荣", "灵魂安眠生命终焉"]
+    VOID_PRAYERS = ["不辨真伪勿论虚实", "命若繁星望而不及"]
+
+    def test_any_prayer_matches(self):
+        """Any prayer in the list should match."""
+        msg = normalize_prayer("万物滋生，亦繁亦荣")
+        assert any(msg == normalize_prayer(p) for p in self.LIFE_PRAYERS)
+
+    def test_first_prayer_matches(self):
+        msg = normalize_prayer("感孕众生，衔育自然")
+        assert any(msg == normalize_prayer(p) for p in self.LIFE_PRAYERS)
+
+    def test_last_prayer_matches(self):
+        msg = normalize_prayer("灵魂安眠，生命终焉")
+        assert any(msg == normalize_prayer(p) for p in self.LIFE_PRAYERS)
+
+    def test_wrong_prayer_does_not_match(self):
+        msg = normalize_prayer("文明火起秩序长存")  # 文明信仰，不是生命
+        assert not any(msg == normalize_prayer(p) for p in self.LIFE_PRAYERS)
+
+    def test_void_any_match(self):
+        msg1 = normalize_prayer("不辨真伪，勿论虚实")
+        msg2 = normalize_prayer("命若繁星，望而不及")
+        assert any(msg1 == normalize_prayer(p) for p in self.VOID_PRAYERS)
+        assert any(msg2 == normalize_prayer(p) for p in self.VOID_PRAYERS)
+
+    def test_empty_prayer_list(self):
+        """Empty list should never match."""
+        msg = normalize_prayer("感孕众生")
+        assert not any(msg == normalize_prayer(p) for p in [])
+
+    def test_backward_compat_single_string(self):
+        """Single-string legacy format wrapped in list should still work."""
+        legacy = "万法归寂虚无永存"
+        prayers = [legacy]  # wrapped for backward compatibility
+        msg = normalize_prayer("万法归寂，虚无永存")
+        assert any(msg == normalize_prayer(p) for p in prayers)
 
 
 class TestResolveNameFromCard:
