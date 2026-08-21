@@ -207,32 +207,32 @@
   },
   "prayer_text_虚无": {
     "description": "虚无信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "array",
+    "type": "list",
     "default": ["不辨真伪勿论虚实", "命若繁星望而不及"]
   },
   "prayer_text_存在": {
     "description": "存在信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "array",
+    "type": "list",
     "default": ["昔我长铭流光拓影", "时光如隙我亦如风"]
   },
   "prayer_text_文明": {
     "description": "文明信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "array",
+    "type": "list",
     "default": ["文明火起秩序长存", "洞窥本质行见真理", "何以求存唯血与火"]
   },
   "prayer_text_沉沦": {
     "description": "沉沦信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "array",
+    "type": "list",
     "default": ["解脱枷锁直面心欲", "众生应腐万物将朽", "于无中生于寂中灭"]
   },
   "prayer_text_混沌": {
     "description": "混沌信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "array",
+    "type": "list",
     "default": ["虚构规律寰宇笑谈", "生命皆痴文明皆愚", "万物归寂寰宇无音"]
   },
   "prayer_text_生命": {
     "description": "生命信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "array",
+    "type": "list",
     "default": ["感孕众生衔育自然", "万物滋生亦繁亦荣", "灵魂安眠生命终焉"]
   },
   "auto_whitelist_group": {
