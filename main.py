@@ -4,7 +4,10 @@ A dual-ladder ranking system with class/faith customization for group chats.
 """
 
 import sys
+import re
+import time
 from pathlib import Path
+from typing import Optional, Tuple
 
 # AstrBot 加载插件时，插件的父目录可能不在 sys.path 中
 _plugin_dir = Path(__file__).parent.resolve()
@@ -61,6 +64,7 @@ class FaithLadderPlugin(Star):
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
         self._pending_gifts_receive = None  # 当前待确认的赠送（接收阶段）
+        self._pending_registrations = {}  # group_id -> 待注册状态（祷词验证）
 
     def _get_data_dir(self) -> Path:
         data_path = None
@@ -132,6 +136,14 @@ class FaithLadderPlugin(Star):
         except Exception as e:
             logger.warning(f"[AutoWhitelist] 事件监听注册失败（可用'同步白名单'命令手动同步）: {e}")
 
+        # 注册消息监听（祷词验证）
+        try:
+            if hasattr(self.context, 'register_event_handler'):
+                self.context.register_event_handler(self._on_message_for_prayer)
+                logger.info("[Prayer] 祷词验证消息监听已注册")
+        except Exception as e:
+            logger.warning(f"[Prayer] 消息监听注册失败: {e}")
+
         logger.info("FaithLadder plugin initialized")
 
     async def terminate(self):
@@ -139,6 +151,57 @@ class FaithLadderPlugin(Star):
             await self._scheduler.stop()
         await self.db_manager.close()
         logger.info("FaithLadder plugin terminated")
+
+    # === 祷词验证处理 ===
+
+    async def _check_prayer_verification(self, event: AstrMessageEvent) -> bool:
+        """检查消息是否匹配待注册的祷词。返回是否已处理。"""
+        group_id = self._get_group_id(event)
+        pending = self._pending_registrations.get(group_id)
+        if not pending:
+            return False
+
+        # 检查是否超时
+        if pending["expire_at"] < time.time():
+            del self._pending_registrations[group_id]
+            return False
+
+        # 检查发送者是否是目标成员
+        sender_id = str(event.get_sender_id())
+        if sender_id != pending["member_id"]:
+            return False
+
+        # 匹配祷词（忽略标点和空格）
+        msg = self.normalize_prayer(event.message_str)
+        expected = self.normalize_prayer(pending["prayer"])
+
+        if msg != expected:
+            # 不匹配，静默忽略，等待下次消息
+            return False
+
+        # 匹配成功，完成注册
+        target_name = pending["target_name"]
+        faith_name = pending["faith"]
+        class_name = pending["class_"]
+        ladder_score = pending["ladder_score"]
+        pilgrimage_score = pending["pilgrimage_score"]
+        operator_id = pending["operator_id"]
+
+        del self._pending_registrations[group_id]
+
+        success, message = await self.ladder_service.register_player(
+            group_id, target_name, faith_name, class_name,
+            ladder_score, pilgrimage_score, operator_id
+        )
+        # 发送结果（作为新消息）
+        try:
+            from astrbot.api.message_components import Plain
+            await self.context.send_message(
+                event.message_obj.umo, [Plain(text=message)]
+            )
+        except Exception as e:
+            logger.error(f"Failed to send registration result: {e}")
+        return True
 
     # === Helpers ===
 
@@ -318,68 +381,129 @@ class FaithLadderPlugin(Star):
         await self.db_manager.set_group_output_mode(group_id, args)
         yield event.plain_result(f"本群输出模式已切换为: {args}")
 
-    # === 查询玩家 ===
+    # === 群名片解析与玩家识别 ===
 
-    def _extract_name_from_card(self, card: str) -> str:
-        """从群名片格式中提取玩家名。
-        支持格式:
-          【XX】 蓬莱 守墓人100 100  → 蓬莱
-          【欺诈】name 1 1            → name
+    @staticmethod
+    def normalize_prayer(text: str) -> str:
+        """去除标点和空格，用于祷词匹配。"""
+        return re.sub(
+            r'[\s　，。！？、；：“”‘’（）【】《》…—\-\.,!?;:\'\"()\[\]<>]+',
+            '', text
+        )
+
+    async def _resolve_name_from_card(self, card: str, group_id: str) -> Optional[str]:
+        """从群名片解析玩家名，通过数据库匹配确认。
+        尝试名片中的每个词，返回第一个匹配数据库玩家名的词。
+        无匹配则返回 None。
         """
-        import re
         card = card.strip()
-        # 先尝试去掉开头的【...】标签（可能有也可能没有后续空格）
         match = re.match(r'^【[^】]*】\s*(.*)', card)
-        if match:
-            remaining = match.group(1).strip()
-            if remaining:
-                # 标签后的第一段就是名字
-                return remaining.split()[0]
-        # 没有【】标签，取第一段
-        parts = card.split()
-        if len(parts) >= 1:
-            return parts[0]
-        return card
+        remaining = match.group(1).strip() if match else card.strip()
+
+        # 提取所有词（跳过纯数字）
+        words = [w for w in remaining.split() if not w.isdigit()]
+
+        # 逐个匹配数据库
+        for word in words:
+            player = await self.db_manager.get_player_by_name(group_id, word)
+            if player:
+                return word
+
+        return None
+
+    async def _resolve_player_name(self, event: AstrMessageEvent) -> Optional[str]:
+        """自动识别发送者自己的群名片中的玩家名。"""
+        try:
+            sender_id = str(event.get_sender_id())
+            group_id = self._get_group_id(event)
+            info = await event.bot.get_group_member_info(
+                group_id=int(group_id), user_id=int(sender_id)
+            )
+            card = info.get("card", "") or info.get("nickname", "")
+            if card:
+                return await self._resolve_name_from_card(card, group_id)
+        except Exception:
+            pass
+        return None
+
+    async def _parse_target_name(self, event: AstrMessageEvent, args: str) -> Tuple[str, str]:
+        """从命令参数中解析目标玩家名和剩余参数（诸神用）。
+        返回 (target_name, rest_args)。
+        """
+        parts = args.strip().split(None, 1)
+        rest = parts[1] if len(parts) > 1 else ""
+
+        if not parts:
+            return "", ""
+
+        first = parts[0]
+        # 检查是否是有效玩家名
+        player = await self.db_manager.get_player_by_name(self._get_group_id(event), first)
+        if player:
+            return first, rest
+
+        return "", args.strip()
+
+    async def _resolve_target_or_self(
+        self, event: AstrMessageEvent, args: str
+    ) -> Tuple[Optional[str], str, Optional[str]]:
+        """解析目标玩家，带权限控制。
+        返回 (player_name, rest_args, error_message)。
+        """
+        user_id = str(event.get_sender_id())
+        has_perm = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+
+        # 判断是否有明确指定目标
+        has_explicit_target = bool(args.strip())
+
+        if has_perm or is_admin:
+            # 诸神/管理员：必须指定目标
+            target, rest = await self._parse_target_name(event, args)
+            if not target:
+                return None, "", "请指定玩家名。"
+            return target, rest, None
+        else:
+            # 非诸神：只能查自己
+            if has_explicit_target:
+                return None, "", "只能查询自己。"
+            self_name = await self._resolve_player_name(event)
+            if not self_name:
+                return None, "", "无法识别你的身份，请确认群名片格式正确。"
+            return self_name, args.strip(), None
+
+    async def _find_member_by_name(
+        self, event: AstrMessageEvent, player_name: str
+    ) -> Optional[dict]:
+        """查找群名片中包含指定玩家名的群成员。"""
+        try:
+            members = await event.bot.get_group_member_list(
+                group_id=int(self._get_group_id(event))
+            )
+            for member in members:
+                card = member.get("card", "") or member.get("nickname", "")
+                if player_name in card:
+                    return member
+        except Exception:
+            pass
+        return None
 
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
-        """查询指定玩家信息。格式: 查询 <玩家名> 或 查询 @用户"""
+        """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        # 检查是否有 @ 目标
-        target_name = None
-        try:
-            from astrbot.core.message.components import At
-            for seg in event.get_messages():
-                if isinstance(seg, At):
-                    target_uid = str(seg.qq)
-                    # 获取群名片
-                    try:
-                        info = await event.bot.get_group_member_info(
-                            group_id=int(group_id), user_id=int(target_uid)
-                        )
-                        card = info.get("card", "") or info.get("nickname", "")
-                        if card:
-                            target_name = self._extract_name_from_card(card)
-                    except Exception:
-                        pass
+        args = self._get_args(event, "查询")
+        if not args:
+            for alias in ("query", "查看"):
+                args = self._get_args(event, alias)
+                if args:
                     break
-        except Exception:
-            pass
 
-        # 如果没有 @ 目标，从文本参数获取
-        if not target_name:
-            args = self._get_args(event, "查询")
-            if not args:
-                for alias in ("query", "查看"):
-                    args = self._get_args(event, alias)
-                    if args:
-                        break
-            target_name = args.strip() if args else ""
-
-        if not target_name:
-            yield event.plain_result("用法: 查询 <玩家名> 或 查询 @用户")
+        target_name, _, error = await self._resolve_target_or_self(event, args or "")
+        if error:
+            yield event.plain_result(error)
             return
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
@@ -510,7 +634,8 @@ class FaithLadderPlugin(Star):
 
     @filter.command("录入玩家", alias={"register", "添加玩家"})
     async def cmd_register_player(self, event: AstrMessageEvent):
-        """录入新玩家。格式: 录入玩家 <姓名> <信仰> <职业> <天梯分> <觐见分>"""
+        """录入新玩家。格式: 录入玩家 <姓名> <信仰> <职业> [天梯分] [觐见分]
+        需要名片对应的玩家发送祷词确认才能完成注册。"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -547,18 +672,54 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
             return
 
+        if faith_name not in VALID_FAITHS:
+            yield event.plain_result(f"无效的信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}")
+            return
+
+        if class_name not in VALID_CLASSES:
+            yield event.plain_result(f"无效的职业: {class_name}。可选: {'/'.join(VALID_CLASSES)}")
+            return
+
         try:
             ladder_score = int(ladder_str)
             pilgrimage_score = int(pilgrimage_str)
         except ValueError:
-            yield event.plain_result( "分数必须是整数。")
+            yield event.plain_result("分数必须是整数。")
             return
 
-        success, message = await self.ladder_service.register_player(
-            group_id, player_name, faith_name, class_name,
-            ladder_score, pilgrimage_score, user_id
-        )
-        yield event.plain_result( message)
+        # 检查玩家是否已存在
+        existing = await self.db_manager.get_player_by_name(group_id, player_name)
+        if existing:
+            yield event.plain_result(f"玩家 {player_name} 已存在。")
+            return
+
+        # 查找名片包含该玩家名的群成员
+        target_member = await self._find_member_by_name(event, player_name)
+        if not target_member:
+            yield event.plain_result(f"未找到群名片包含「{player_name}」的群成员，无法进行祷词验证。")
+            return
+
+        # 获取祷词
+        prayer_key = f"prayer_text_{faith_name}"
+        prayer = self.config.get(prayer_key, "")
+        if not prayer:
+            yield event.plain_result(f"未配置信仰 {faith_name} 的祷词，请联系管理员。")
+            return
+
+        # 存储待注册状态
+        self._pending_registrations[group_id] = {
+            "target_name": player_name,
+            "faith": faith_name,
+            "class_": class_name,
+            "ladder_score": ladder_score,
+            "pilgrimage_score": pilgrimage_score,
+            "member_id": str(target_member["user_id"]),
+            "operator_id": user_id,
+            "expire_at": time.time() + 60,
+            "prayer": prayer,
+        }
+
+        yield event.plain_result("请需要注册的玩家尽快发送祷词")
 
     # === 设置职业（仅职业） ===
 
@@ -890,23 +1051,33 @@ class FaithLadderPlugin(Star):
 
     @filter.command("查询储物空间")
     async def cmd_query_inventory(self, event: AstrMessageEvent):
-        """查看玩家储物空间。格式: 查询储物空间 <玩家名> [玩家名2 ...]（支持批量）"""
+        """查看玩家储物空间。格式: 查询储物空间（查自己）或 查询储物空间 <玩家名> ...（诸神批量）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
-            yield event.plain_result("权限不足。")
-            return
 
         args = self._get_args(event, "查询储物空间")
-        if not args or not args.strip():
-            yield event.plain_result("用法: 查询储物空间 <玩家名> [玩家名2 ...]")
-            return
+        args = args.strip() if args else ""
 
-        # 批量查询：空格分隔多个玩家名
-        names = args.strip().split()
+        if has_permission or is_admin:
+            # 诸神/管理员：必须指定目标
+            if not args:
+                yield event.plain_result("用法: 查询储物空间 <玩家名> [玩家名2 ...]")
+                return
+            names = args.split()
+        else:
+            # 非诸神：只能查自己
+            if args:
+                yield event.plain_result("只能查询自己。")
+                return
+            self_name = await self._resolve_player_name(event)
+            if not self_name:
+                yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+                return
+            names = [self_name]
+
         results = []
         not_found = []
         for name in names:
@@ -1146,6 +1317,13 @@ class FaithLadderPlugin(Star):
         except Exception as e:
             logger.error(f"[AutoWhitelist] 处理成员变动事件失败: {e}")
 
+    async def _on_message_for_prayer(self, event: AstrMessageEvent):
+        """监听所有消息，检查是否有待验证的祷词。"""
+        try:
+            await self._check_prayer_verification(event)
+        except Exception as e:
+            logger.error(f"[Prayer] 祷词验证处理失败: {e}")
+
     # === 状态 ===
 
     @filter.command("添加状态")
@@ -1241,21 +1419,27 @@ class FaithLadderPlugin(Star):
 
     @filter.command("赠送道具")
     async def cmd_gift_item(self, event: AstrMessageEvent):
-        """赠送道具。格式: 赠送道具 <发送方名> <接收方名> <道具*数量>
-        直接扣除发送方道具，等待接收方接受/拒绝。"""
+        """赠送道具。格式: 赠送道具 <接收方名> <道具*数量>
+        发送方自动为命令发送者（从群名片识别），直接扣除道具，等待接收方接受/拒绝。"""
         group_id = self._get_group_id(event)
+
+        # 发送方 = 自己（从群名片识别）
+        sender_name = await self._resolve_player_name(event)
+        if not sender_name:
+            yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+            return
 
         args = self._get_args(event, "赠送道具")
         if not args:
-            yield event.plain_result("用法: 赠送道具 <发送方名> <接收方名> <道具*数量>\n示例: 赠送道具 Alice Bob 铁剑*3")
+            yield event.plain_result("用法: 赠送道具 <接收方名> <道具*数量>\n示例: 赠送道具 Bob 铁剑*3")
             return
 
-        parts = args.split(None, 2)
-        if len(parts) < 3:
-            yield event.plain_result("用法: 赠送道具 <发送方名> <接收方名> <道具*数量>")
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            yield event.plain_result("用法: 赠送道具 <接收方名> <道具*数量>")
             return
 
-        sender_name, receiver_name, item_args = parts[0], parts[1], parts[2].strip()
+        receiver_name, item_args = parts[0], parts[1].strip()
 
         # 解析道具（只支持一种）
         items = self._parse_item_args(item_args)

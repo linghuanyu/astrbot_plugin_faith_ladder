@@ -205,6 +205,36 @@
     "type": "string",
     "default": "{name}抛弃了生命之根。生机断绝，誓约已碎。"
   },
+  "prayer_text_虚无": {
+    "description": "虚无信仰录入玩家祷词（8字，匹配时忽略标点和空格）",
+    "type": "string",
+    "default": "万法归寂虚无永存"
+  },
+  "prayer_text_存在": {
+    "description": "存在信仰录入玩家祷词（8字，匹配时忽略标点和空格）",
+    "type": "string",
+    "default": "我思故我存在即真"
+  },
+  "prayer_text_文明": {
+    "description": "文明信仰录入玩家祷词（8字，匹配时忽略标点和空格）",
+    "type": "string",
+    "default": "秩序之光文明永续"
+  },
+  "prayer_text_沉沦": {
+    "description": "沉沦信仰录入玩家祷词（8字，匹配时忽略标点和空格）",
+    "type": "string",
+    "default": "深渊无尽沉沦到底"
+  },
+  "prayer_text_混沌": {
+    "description": "混沌信仰录入玩家祷词（8字，匹配时忽略标点和空格）",
+    "type": "string",
+    "default": "混乱无序混沌永恒"
+  },
+  "prayer_text_生命": {
+    "description": "生命信仰录入玩家祷词（8字，匹配时忽略标点和空格）",
+    "type": "string",
+    "default": "生生不息生命长存"
+  },
   "auto_whitelist_group": {
     "description": "自动白名单群号（该群成员加入时自动加入白名单，退群时自动移除）",
     "type": "string",
