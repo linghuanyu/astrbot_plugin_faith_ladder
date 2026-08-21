@@ -5,7 +5,6 @@ A dual-ladder ranking system with class/faith customization for group chats.
 
 import sys
 import re
-import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -64,7 +63,6 @@ class FaithLadderPlugin(Star):
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
         self._pending_gifts_receive = None  # 当前待确认的赠送（接收阶段）
-        self._pending_registrations = {}  # (group_id, member_id) -> 待注册状态（祷词验证），支持同群并发注册
 
     def _get_data_dir(self) -> Path:
         data_path = None
@@ -143,78 +141,6 @@ class FaithLadderPlugin(Star):
             await self._scheduler.stop()
         await self.db_manager.close()
         logger.info("FaithLadder plugin terminated")
-
-    # === 祷词验证处理 ===
-
-    async def _check_prayer_verification(self, event: AstrMessageEvent) -> bool:
-        """检查消息是否匹配待注册的祷词。返回是否已处理。
-        支持同群并发注册：以 (group_id, member_id) 为 key。
-        """
-        group_id = self._get_group_id(event)
-        sender_id = str(event.get_sender_id())
-        now = time.time()
-
-        # 清理本群所有超时的 pending
-        expired_keys = [
-            k for k in self._pending_registrations
-            if k[0] == group_id and self._pending_registrations[k]["expire_at"] < now
-        ]
-        for k in expired_keys:
-            del self._pending_registrations[k]
-
-        # 找到发送者对应的 pending 注册（key 的 member_id 匹配）
-        pending_key = (group_id, sender_id)
-        pending = self._pending_registrations.get(pending_key)
-        if not pending:
-            return False
-
-        # 匹配祷词（忽略标点和空格，任意一个匹配即可）
-        msg = self.normalize_prayer(event.message_str)
-        prayers = pending.get("prayers", [])
-        # 兼容旧格式（单个字符串）
-        if not prayers and pending.get("prayer"):
-            prayers = [pending["prayer"]]
-
-        if not any(msg == self.normalize_prayer(p) for p in prayers):
-            # 不匹配，静默忽略，等待下次消息
-            return False
-
-        # 匹配成功，完成注册
-        target_name = pending["target_name"]
-        faith_name = pending["faith"]
-        class_name = pending["class_"]
-        ladder_score = pending["ladder_score"]
-        pilgrimage_score = pending["pilgrimage_score"]
-        operator_id = pending["operator_id"]
-
-        del self._pending_registrations[pending_key]
-
-        success, message = await self.ladder_service.register_player(
-            group_id, target_name, faith_name, class_name,
-            ladder_score, pilgrimage_score, operator_id
-        )
-
-        # 发送注册结果给目标玩家
-        try:
-            from astrbot.api.message_components import Plain
-            await self.context.send_message(
-                event.message_obj.umo, [Plain(text=message)]
-            )
-        except Exception as e:
-            logger.error(f"Failed to send registration result to target: {e}")
-
-        # 通知操作者注册成功
-        if operator_id != sender_id:
-            try:
-                notify_text = f"录入成功：{target_name}（{faith_name} · {class_name}）已注册完成。"
-                from astrbot.api.message_components import Plain
-                await self.context.send_message(
-                    event.message_obj.umo, [Plain(text=notify_text)]
-                )
-            except Exception as e:
-                logger.error(f"Failed to notify operator: {e}")
-
-        return True
 
     # === Helpers ===
 
@@ -396,13 +322,6 @@ class FaithLadderPlugin(Star):
 
     # === 群名片解析与玩家识别 ===
 
-    @staticmethod
-    def normalize_prayer(text: str) -> str:
-        """去除标点和空格，用于祷词匹配。"""
-        return re.sub(
-            r'[\s　，。！？、；：“”‘’（）【】《》…—\-\.,!?;:\'\"()\[\]<>]+',
-            '', text
-        )
 
     async def _resolve_name_from_card(self, card: str, group_id: str) -> Optional[str]:
         """从群名片解析玩家名，通过数据库匹配确认。
@@ -721,106 +640,21 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"玩家 {player_name} 已存在。")
             return
 
-        # 查找名片包含该玩家名的群成员
+        # 查找名片包含该玩家名的群成员（用于确认目标身份）
         target_member = await self._find_member_by_name(event, player_name)
-        if not target_member:
-            yield event.plain_result(f"未找到群名片包含「{player_name}」的群成员，无法进行祷词验证。")
-            return
+        target_info = ""
+        if target_member:
+            member_id = str(target_member["user_id"])
+            target_card = target_member.get("card") or target_member.get("nickname") or member_id
+            target_info = f"（对应群名片：{target_card}，QQ: {member_id}）"
 
-        member_id = str(target_member["user_id"])
-        target_card = target_member.get("card") or target_member.get("nickname") or member_id
+        # 直接注册玩家
+        success, message = await self.ladder_service.register_player(
+            group_id, player_name, faith_name, class_name,
+            ladder_score, pilgrimage_score, user_id
+        )
 
-        # 检查是否已有进行中的注册（同一目标成员）
-        existing_pending = self._pending_registrations.get((group_id, member_id))
-        overwrite_warning = ""
-        if existing_pending:
-            remaining = int(existing_pending["expire_at"] - time.time())
-            if remaining > 0:
-                old_name = existing_pending.get("target_name", "?")
-                overwrite_warning = f"\n注意：将覆盖对「{old_name}」进行中的注册（剩余 {remaining} 秒）"
-
-        # 获取祷词（支持数组格式，任意一个匹配即可）
-        prayer_key = f"prayer_text_{faith_name}"
-        prayers_raw = self.config.get(prayer_key, [])
-        if isinstance(prayers_raw, list):
-            prayers = [p for p in prayers_raw if p]
-        else:
-            prayers = [prayers_raw] if prayers_raw else []
-        if not prayers:
-            yield event.plain_result(f"未配置信仰 {faith_name} 的祷词，请联系管理员。")
-            return
-
-        # 存储待注册状态（key 为 (group_id, member_id)，支持同群多人并发注册）
-        self._pending_registrations[(group_id, member_id)] = {
-            "target_name": player_name,
-            "faith": faith_name,
-            "class_": class_name,
-            "ladder_score": ladder_score,
-            "pilgrimage_score": pilgrimage_score,
-            "member_id": member_id,
-            "operator_id": user_id,
-            "expire_at": time.time() + 60,
-            "prayers": prayers,
-        }
-
-        result_lines = [
-            f"找到目标：{target_card}（QQ: {member_id}）",
-            f"请需要注册的玩家尽快发送祷词（60 秒内有效）",
-        ]
-        if overwrite_warning:
-            result_lines.append(overwrite_warning.strip())
-
-        yield event.plain_result("\n".join(result_lines))
-
-    # === 取消录入 ===
-
-    @filter.command("取消录入", alias={"cancel_register"})
-    async def cmd_cancel_register(self, event: AstrMessageEvent):
-        """取消当前进行中的录入。格式: 取消录入 <玩家名>（操作者可取消自己发起的 pending 注册）"""
-        group_id = self._get_group_id(event)
-        user_id = str(event.get_sender_id())
-
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
-            yield event.plain_result("权限不足。")
-            return
-
-        args = self._get_args(event, "取消录入")
-        if not args:
-            # 无参数时取消自己发起的所有 pending
-            cancelled = 0
-            for (gid, mid), pending in list(self._pending_registrations.items()):
-                if gid == group_id and pending.get("operator_id") == user_id:
-                    del self._pending_registrations[(gid, mid)]
-                    cancelled += 1
-            if cancelled == 0:
-                yield event.plain_result("当前没有你发起的进行中注册。")
-            else:
-                yield event.plain_result(f"已取消 {cancelled} 个进行中的注册。")
-            return
-
-        # 有参数：按玩家名取消（查找名片对应的成员）
-        target_name = args.strip().split()[0]
-        target_member = await self._find_member_by_name(event, target_name)
-        if not target_member:
-            yield event.plain_result(f"未找到群名片包含「{target_name}」的成员。")
-            return
-
-        member_id = str(target_member["user_id"])
-        pending_key = (group_id, member_id)
-        if pending_key not in self._pending_registrations:
-            yield event.plain_result(f"没有对「{target_name}」进行中的注册。")
-            return
-
-        pending = self._pending_registrations[pending_key]
-        # 只允许操作者本人或管理员取消
-        if pending.get("operator_id") != user_id and not is_admin:
-            yield event.plain_result("只能取消自己发起的注册。")
-            return
-
-        del self._pending_registrations[pending_key]
-        yield event.plain_result(f"已取消对「{pending['target_name']}」的录入。")
+        yield event.plain_result(message + target_info)
 
     # === 设置职业（仅职业） ===
 
@@ -1417,18 +1251,6 @@ class FaithLadderPlugin(Star):
                 await self._handle_auto_whitelist(user_id, "leave")
         except Exception as e:
             logger.error(f"[AutoWhitelist] 处理成员变动事件失败: {e}")
-
-    @filter.on_llm_request(priority=10_000)
-    async def _on_message_for_prayer(self, event: AstrMessageEvent, req=None) -> None:
-        """在消息到达 LLM 之前拦截，检查是否有待验证的祷词。
-        使用 on_llm_request 钩子确保对所有消息（包括非命令消息）生效。
-        """
-        try:
-            handled = await self._check_prayer_verification(event)
-            if handled:
-                event.stop_event()
-        except Exception as e:
-            logger.error(f"[Prayer] 祷词验证处理失败: {e}")
 
     # === 状态 ===
 
