@@ -649,7 +649,22 @@ class FaithLadderPlugin(Star):
         if skipped:
             reply_parts.append(f"\n以下玩家不存在，已跳过: {', '.join(skipped)}")
 
+        # 自动将批量录入消息设置为精华消息
+        await self._try_set_essence(event)
+
         yield event.plain_result("\n".join(reply_parts))
+
+    async def _try_set_essence(self, event: AstrMessageEvent):
+        """尝试将当前消息设置为精华消息。失败时静默忽略。"""
+        try:
+            # 获取消息 ID（AstrBot 统一消息对象）
+            message_id = getattr(event.message_obj, 'message_id', None)
+            if not message_id:
+                return
+            await event.bot.set_essence_msg(message_id=int(message_id))
+        except Exception as e:
+            from astrbot.api import logger
+            logger.debug(f"[Essence] 设置精华消息失败（可能无权限或不支持）: {e}")
 
     # === 录入玩家 ===
 
