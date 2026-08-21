@@ -204,7 +204,7 @@ class TestFormatWhitelist:
     def test_empty_whitelist(self):
         """Test formatting empty whitelist."""
         result = format_whitelist([])
-        assert result == "白名单为空。"
+        assert result == "诸神列表为空。"
 
     def test_whitelist_with_entries(self):
         """Test formatting whitelist with entries."""

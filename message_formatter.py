@@ -197,7 +197,7 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"
-        f"同步白名单 — 同步指定群成员到白名单\n"
+        f"同步白名单 — 同步指定群成员到诸神列表\n"
         f"{cmd_admin} 重置/删除/改名/清空/清除弃誓\n"
         f"输出模式 text/image - 切换输出模式（管理员，全局默认: {output_mode}）\n"
         f"\n"
@@ -222,9 +222,9 @@ def format_gift_request(
 def format_whitelist(entries: List[dict]) -> str:
     """Format whitelist display."""
     if not entries:
-        return "白名单为空。"
+        return "诸神列表为空。"
 
-    lines = ["=== 白名单 ===", ""]
+    lines = ["=== 诸神列表 ===", ""]
     for i, entry in enumerate(entries, 1):
         lines.append(f"{i}. [{entry['entry_type']}] {entry['entry_id']}")
     lines.append(f"\n共 {len(entries)} 条记录")
@@ -234,9 +234,9 @@ def format_whitelist(entries: List[dict]) -> str:
 def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]) -> str:
     """Format whitelist display combining config and DB sources."""
     if not config_entries and not db_entries:
-        return "白名单为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
+        return "诸神列表为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
 
-    lines = ["=== 白名单 ==", ""]
+    lines = ["=== 诸神列表 ==", ""]
 
     if config_entries:
         lines.append("[WebUI 配置]")

@@ -291,7 +291,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜", alias={"ladder", "ranking", "排行榜"})
     async def cmd_ladder(self, event: AstrMessageEvent):
-        """显示天梯排行榜（需要白名单权限）"""
+        """显示天梯排行榜（需要诸神权限）"""
         user_id = str(event.get_sender_id())
         is_admin = self._is_plugin_admin(event)
 
@@ -332,7 +332,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("觐见榜", alias={"pilgrimage", "觐见"})
     async def cmd_pilgrimage(self, event: AstrMessageEvent):
-        """显示觐见之梯排行榜（需要白名单权限）"""
+        """显示觐见之梯排行榜（需要诸神权限）"""
         user_id = str(event.get_sender_id())
         is_admin = self._is_plugin_admin(event)
 
@@ -935,7 +935,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("天梯榜管理", alias={"ladderadmin", "榜管理"})
     async def cmd_admin(self, event: AstrMessageEvent):
-        """管理员/白名单操作。格式: 天梯榜管理 <操作> [参数]"""
+        """管理员/诸神操作。格式: 天梯榜管理 <操作> [参数]"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
         is_admin = self._is_plugin_admin(event)
@@ -951,8 +951,8 @@ class FaithLadderPlugin(Star):
                 f"\n"
                 f"重置/ reset <玩家名> — 重置单个玩家积分 (管理员)\n"
                 f"全部重置/ resetall — 重置本群所有玩家积分 (管理员)\n"
-                f"删除/ delete <玩家名> — 删除单个玩家 (白名单/管理员)\n"
-                f"改名/ rename <旧名> <新名> — 改名 (白名单/管理员)\n"
+                f"删除/ delete <玩家名> — 删除单个玩家 (诸神/管理员)\n"
+                f"改名/ rename <旧名> <新名> — 改名 (诸神/管理员)\n"
                 f"清空/ clear — 清空本群所有玩家和数据 (管理员)\n"
                 f"清除弃誓/ clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
                 f"\n"
@@ -1062,7 +1062,7 @@ class FaithLadderPlugin(Star):
     async def cmd_whitelist(self, event: AstrMessageEvent):
         """白名单管理。格式: 白名单 <add/remove/list> [类型] [ID]"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result( "权限不足: 仅管理员可管理白名单。")
+            yield event.plain_result( "权限不足: 仅管理员可管理诸神列表。")
             return
 
         user_id = str(event.get_sender_id())
@@ -1344,12 +1344,12 @@ class FaithLadderPlugin(Star):
     async def cmd_sync_whitelist(self, event: AstrMessageEvent):
         """同步指定群的当前成员到白名单。格式: 同步白名单"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result("权限不足：仅管理员可同步白名单。")
+            yield event.plain_result("权限不足：仅管理员可同步诸神列表。")
             return
 
         target_group = self.config.get("auto_whitelist_group", "")
         if not target_group:
-            yield event.plain_result("请先在 WebUI 配置 auto_whitelist_group（自动白名单群号）。")
+            yield event.plain_result("请先在 WebUI 配置 auto_whitelist_group（诸神自动同步群号）。")
             return
 
         try:
@@ -1368,7 +1368,7 @@ class FaithLadderPlugin(Star):
             if success:
                 added += 1
 
-        yield event.plain_result(f"白名单同步完成: 新增 {added} 人（群 {target_group} 共 {len(members)} 名成员）")
+        yield event.plain_result(f"诸神列表同步完成: 新增 {added} 人（群 {target_group} 共 {len(members)} 名成员）")
 
     async def _handle_auto_whitelist(self, user_id: str, action: str):
         """处理白名单自动同步（加入/离开指定群）。"""
@@ -1588,12 +1588,12 @@ class FaithLadderPlugin(Star):
 
     @filter.command("接受道具")
     async def cmd_accept_gift(self, event: AstrMessageEvent):
-        """接收方接受赠送（白名单权限），无需参数。"""
+        """接收方接受赠送（诸神权限），无需参数。"""
         user_id = str(event.get_sender_id())
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result("权限不足：只有白名单用户才能接受赠送。")
+            yield event.plain_result("权限不足：只有诸神才能接受赠送。")
             return
 
         gift = self._pending_gifts_receive
@@ -1618,12 +1618,12 @@ class FaithLadderPlugin(Star):
 
     @filter.command("拒绝道具")
     async def cmd_reject_gift(self, event: AstrMessageEvent):
-        """接收方拒绝赠送（白名单权限），无需参数。"""
+        """接收方拒绝赠送（诸神权限），无需参数。"""
         user_id = str(event.get_sender_id())
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         if not has_permission and not is_admin:
-            yield event.plain_result("权限不足：只有白名单用户才能拒绝赠送。")
+            yield event.plain_result("权限不足：只有诸神才能拒绝赠送。")
             return
 
         gift = self._pending_gifts_receive

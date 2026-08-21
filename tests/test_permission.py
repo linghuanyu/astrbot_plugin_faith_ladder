@@ -29,7 +29,7 @@ class TestPermissionService:
         success, msg = await service.add_to_whitelist("user", "u123", "admin")
         assert success is True
         assert "u123" in msg
-        assert "全局" in msg
+        assert "诸神" in msg
 
     async def test_add_whitelist_group(self, db_manager):
         """Test adding group to whitelist."""
@@ -58,7 +58,7 @@ class TestPermissionService:
         await service.add_to_whitelist("user", "u123", "admin")
         success, msg = await service.add_to_whitelist("user", "u123", "admin")
         assert success is False
-        assert "已在白名单中" in msg
+        assert "已是诸神" in msg
 
     async def test_remove_whitelist_success(self, db_manager):
         """Test removing from whitelist."""
@@ -86,7 +86,7 @@ class TestPermissionService:
         """Test getting whitelist text when empty."""
         service = PermissionService(db_manager)
         text = await service.get_whitelist_text()
-        assert "白名单为空" in text
+        assert "诸神列表为空" in text
 
     async def test_get_whitelist_text_with_entries(self, db_manager):
         """Test getting whitelist text with entries."""

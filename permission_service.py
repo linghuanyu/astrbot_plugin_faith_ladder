@@ -81,9 +81,9 @@ class PermissionService:
 
         added = await self.db.add_to_whitelist(entry_type, entry_id, added_by)
         if added:
-            return True, f"已添加 [{entry_type}] {entry_id} 到全局白名单。"
+            return True, f"已添加 [{entry_type}] {entry_id} 到诸神列表。"
         else:
-            return False, f"[{entry_type}] {entry_id} 已在白名单中。"
+            return False, f"[{entry_type}] {entry_id} 已是诸神。"
 
     async def remove_from_whitelist(
         self, entry_type: str, entry_id: str
@@ -94,7 +94,7 @@ class PermissionService:
 
         removed = await self.db.remove_from_whitelist(entry_type, entry_id)
         if removed:
-            return True, f"已从白名单移除 [{entry_type}] {entry_id}。"
+            return True, f"已从诸神列表移除 [{entry_type}] {entry_id}。"
         else:
             return False, f"未找到 [{entry_type}] {entry_id}。"
 
