@@ -283,3 +283,51 @@ class QQAdminHandler:
         except Exception as e:
             yield event.plain_result(f"操作失败: {e}")
         event.stop_event()
+
+    # === 设置精华 ===
+
+    async def handle_set_essence(self, event: AiocqhttpMessageEvent):
+        """设置精华消息 — 引用一条消息设置为精华，成功静默"""
+        if not await self._check_permission(event):
+            yield event.plain_result("你没有群管权限。")
+            event.stop_event()
+            return
+
+        chain = event.get_messages()
+        first_seg = chain[0] if chain else None
+
+        if not isinstance(first_seg, Reply):
+            yield event.plain_result("请引用要设置为精华的消息。")
+            event.stop_event()
+            return
+
+        try:
+            await event.bot.set_essence_msg(message_id=int(first_seg.id))
+            # 成功：静默
+        except Exception as e:
+            yield event.plain_result(f"设置精华失败: {e}")
+        event.stop_event()
+
+    # === 移除精华 ===
+
+    async def handle_remove_essence(self, event: AiocqhttpMessageEvent):
+        """移除精华消息 — 引用一条消息移除精华，成功静默"""
+        if not await self._check_permission(event):
+            yield event.plain_result("你没有群管权限。")
+            event.stop_event()
+            return
+
+        chain = event.get_messages()
+        first_seg = chain[0] if chain else None
+
+        if not isinstance(first_seg, Reply):
+            yield event.plain_result("请引用要移除精华的消息。")
+            event.stop_event()
+            return
+
+        try:
+            await event.bot.delete_essence_msg(message_id=int(first_seg.id))
+            # 成功：静默
+        except Exception as e:
+            yield event.plain_result(f"移除精华失败: {e}")
+        event.stop_event()

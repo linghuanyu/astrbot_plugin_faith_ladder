@@ -876,6 +876,16 @@ class FaithLadderPlugin(Star):
         async for result in self._qq_admin.handle_unmute_all(event):
             yield result
 
+    @filter.command("设置精华")
+    async def cmd_set_essence(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_set_essence(event):
+            yield result
+
+    @filter.command("移除精华")
+    async def cmd_remove_essence(self, event: AstrMessageEvent):
+        async for result in self._qq_admin.handle_remove_essence(event):
+            yield result
+
     # === 储物空间 ===
 
     @filter.command("查询储物空间")
