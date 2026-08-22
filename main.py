@@ -328,12 +328,7 @@ class FaithLadderPlugin(Star):
         尝试名片中的每个词，返回第一个匹配数据库玩家名的词。
         无匹配则返回 None。
         """
-        card = card.strip()
-        match = re.match(r'^【[^】]*】\s*(.*)', card)
-        remaining = match.group(1).strip() if match else card.strip()
-
-        # 提取所有词（跳过纯数字）
-        words = [w for w in remaining.split() if not w.isdigit()]
+        words = self._extract_card_words(card)
 
         # 逐个匹配数据库
         for word in words:
@@ -386,9 +381,6 @@ class FaithLadderPlugin(Star):
         has_perm = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
 
-        # 判断是否有明确指定目标
-        has_explicit_target = bool(args.strip())
-
         if has_perm or is_admin:
             # 诸神/管理员：必须指定目标
             target, rest = await self._parse_target_name(event, args)
@@ -396,29 +388,46 @@ class FaithLadderPlugin(Star):
                 return None, "", "请指定玩家名。"
             return target, rest, None
         else:
-            # 非诸神：只能查自己
-            if has_explicit_target:
-                return None, "", "只能查询自己。"
+            # 非诸神：只能查自己，无视后面的参数
             self_name = await self._resolve_player_name(event)
             if not self_name:
                 return None, "", "无法识别你的身份，请确认群名片格式正确。"
-            return self_name, args.strip(), None
+            return self_name, "", None
 
     async def _find_member_by_name(
         self, event: AstrMessageEvent, player_name: str
     ) -> Optional[dict]:
-        """查找群名片中包含指定玩家名的群成员。"""
+        """查找群名片中包含指定玩家名的群成员。
+        使用词级匹配：解析名片后逐词精确比较，避免子串误匹配。
+        如果匹配到多个成员，返回 None。
+        """
         try:
             members = await event.bot.get_group_member_list(
                 group_id=int(self._get_group_id(event))
             )
+            matches = []
             for member in members:
                 card = member.get("card", "") or member.get("nickname", "")
-                if player_name in card:
-                    return member
+                # 用词级匹配：解析名片后逐词比较
+                words = self._extract_card_words(card)
+                if player_name in words:
+                    matches.append(member)
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                logger.warning(
+                    f"[FindMember] 玩家名 {player_name} 匹配到 {len(matches)} 个成员，无法确定"
+                )
         except Exception:
             pass
         return None
+
+    def _extract_card_words(self, card: str) -> list:
+        """从群名片中提取所有非纯数字的词（用于匹配）。"""
+        card = card.strip()
+        match = re.match(r'^【[^】]*】\s*(.*)', card)
+        remaining = match.group(1).strip() if match else card.strip()
+        return [w for w in remaining.split() if not w.isdigit()]
 
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
@@ -1003,10 +1012,7 @@ class FaithLadderPlugin(Star):
                 return
             names = args.split()
         else:
-            # 非诸神：只能查自己
-            if args:
-                yield event.plain_result("只能查询自己。")
-                return
+            # 非诸神：只能查自己，无视后面的参数
             self_name = await self._resolve_player_name(event)
             if not self_name:
                 yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
