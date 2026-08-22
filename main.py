@@ -527,6 +527,12 @@ class FaithLadderPlugin(Star):
         target_name = None
 
         if at_user_id:
+            # @ 查询仅诸神/管理员可用
+            has_perm = await self.permission_service.check_score_permission(user_id)
+            is_admin = self._is_plugin_admin(event)
+            if not has_perm and not is_admin:
+                yield event.plain_result("权限不足：@ 查询仅供诸神使用。")
+                return
             # 获取 @ 用户的群名片并解析玩家名
             try:
                 member_info = await event.bot.get_group_member_info(
