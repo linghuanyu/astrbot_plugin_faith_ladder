@@ -429,6 +429,51 @@ class FaithLadderPlugin(Star):
         remaining = match.group(1).strip() if match else card.strip()
         return [w for w in remaining.split() if not w.isdigit()]
 
+    async def _get_at_user_id(self, event: AstrMessageEvent) -> Optional[str]:
+        """获取消息中第一个 @ 的用户 ID（排除机器人自身）。"""
+        try:
+            from astrbot.core.message.components import At
+            for seg in event.get_messages():
+                if isinstance(seg, At) and str(seg.qq) != str(event.get_self_id()):
+                    return str(seg.qq)
+        except Exception:
+            pass
+        return None
+
+    def _parse_card_info(self, card: str) -> dict:
+        """从群名片中提取信仰、职业、玩家名。
+        返回 {"faith": str|None, "class_": str|None, "player_name": str|None}
+        规则：
+        - 【标签】若在 VALID_FAITHS 中 → 信仰
+        - 第一个在 VALID_CLASSES 中的词 → 职业
+        - 第一个不在 VALID_CLASSES/VALID_FAITHS 中的非数字词 → 玩家名
+        """
+        result = {"faith": None, "class_": None, "player_name": None}
+        card = card.strip()
+
+        # 提取标签
+        tag = None
+        match = re.match(r'^【([^】]*)】\s*(.*)', card)
+        if match:
+            tag = match.group(1).strip()
+            remaining = match.group(2).strip()
+        else:
+            remaining = card.strip()
+
+        if tag and tag in VALID_FAITHS:
+            result["faith"] = tag
+
+        # 提取非数字词
+        words = [w for w in remaining.split() if not w.isdigit()]
+
+        for word in words:
+            if word in VALID_CLASSES and result["class_"] is None:
+                result["class_"] = word
+            elif word not in VALID_CLASSES and word not in VALID_FAITHS and result["player_name"] is None:
+                result["player_name"] = word
+
+        return result
+
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
         """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）"""
@@ -590,8 +635,12 @@ class FaithLadderPlugin(Star):
 
     @filter.command("录入玩家", alias={"register", "添加玩家"})
     async def cmd_register_player(self, event: AstrMessageEvent):
-        """录入新玩家。格式: 录入玩家 <姓名> <信仰> <职业> [天梯分] [觐见分]
-        需要名片对应的玩家发送祷词确认才能完成注册。"""
+        """录入新玩家。格式:
+        录入玩家 @用户 [姓名] [信仰] [职业] [登神之路分] [觐见分]
+          - @用户时自动从名片提取信仰/职业/姓名，显式参数可覆盖
+        录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]
+          - 传统方式，手动指定所有参数
+        """
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -605,23 +654,88 @@ class FaithLadderPlugin(Star):
         if not args:
             args = self._get_args(event, "register") or self._get_args(event, "添加玩家")
 
-        parts = args.split()
-        if len(parts) not in (3, 5):
+        # 检查是否有 @ 用户
+        at_user_id = await self._get_at_user_id(event)
+        auto_faith = None
+        auto_class = None
+        auto_name = None
+        target_member = None
+
+        if at_user_id:
+            # 获取 @ 用户的群名片
+            try:
+                member_info = await event.bot.get_group_member_info(
+                    group_id=int(group_id), user_id=int(at_user_id)
+                )
+                card = member_info.get("card") or member_info.get("nickname") or ""
+                if card:
+                    parsed = self._parse_card_info(card)
+                    auto_faith = parsed["faith"]
+                    auto_class = parsed["class_"]
+                    auto_name = parsed["player_name"]
+                target_member = member_info
+            except Exception:
+                pass
+
+        # 从参数文本中提取显式值
+        # 先过滤掉可能的 @ 文本（如 @xxx 或 CQ 码）
+        clean_args = re.sub(r'@\S+', '', args).strip()
+        clean_args = re.sub(r'\[CQ:[^\]]+\]', '', clean_args).strip()
+
+        parts = clean_args.split() if clean_args else []
+
+        # 分类参数：数字→分数，VALID_FAITHS→信仰，VALID_CLASSES→职业，其他→姓名
+        explicit_name = None
+        explicit_faith = None
+        explicit_class = None
+        scores = []
+        other_words = []
+
+        for p in parts:
+            if p.isdigit():
+                scores.append(int(p))
+            elif p in VALID_FAITHS:
+                explicit_faith = p
+            elif p in VALID_CLASSES:
+                explicit_class = p
+            else:
+                other_words.append(p)
+
+        # 非数字/信仰/职业的词，第一个作为玩家名
+        if other_words:
+            explicit_name = other_words[0]
+
+        # 合并：显式 > 自动提取
+        player_name = explicit_name or auto_name
+        faith_name = explicit_faith or auto_faith
+        class_name = explicit_class or auto_class
+
+        if at_user_id and target_member:
+            member_id = str(target_member.get("user_id", at_user_id))
+            target_card = target_member.get("card") or target_member.get("nickname") or member_id
+        else:
+            member_id = None
+            target_card = None
+
+        # 校验必填项
+        errors = []
+        if not player_name:
+            errors.append("玩家名（未从名片识别到，请在参数中指定）")
+        if not faith_name:
+            errors.append(f"信仰（可选: {'/'.join(VALID_FAITHS)}）")
+        if not class_name:
+            errors.append(f"职业（可选: {'/'.join(VALID_CLASSES)}）")
+
+        if errors:
+            auto_info = ""
+            if at_user_id:
+                auto_info = f"\n从名片自动提取: 姓名={auto_name or '?'}, 信仰={auto_faith or '?'}, 职业={auto_class or '?'}"
             yield event.plain_result(
-                f"用法: 录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]\n"
-                f"示例: 录入玩家 张三 文明 战士 1000 100\n"
-                f"      录入玩家 张三 文明 战士（使用默认分数）\n"
-                f"可选职业: {'/'.join(VALID_CLASSES)}\n"
-                f"可选信仰: {'/'.join(VALID_FAITHS)}"
+                f"缺少必要参数: {', '.join(errors)}\n"
+                f"用法: 录入玩家 @用户 [姓名] [信仰] [职业] [登神之路分] [觐见分]\n"
+                f"  或: 录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]{auto_info}"
             )
             return
-
-        player_name, faith_name, class_name = parts[0], parts[1], parts[2]
-        if len(parts) == 5:
-            ladder_str, pilgrimage_str = parts[3], parts[4]
-        else:
-            ladder_str = str(self.config.get("init_ladder_score", 1000))
-            pilgrimage_str = str(self.config.get("init_pilgrimage_score", 100))
 
         max_name_len = self.config.get("player_name_max_length", 20)
         if len(player_name) > max_name_len:
@@ -636,12 +750,15 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"无效的职业: {class_name}。可选: {'/'.join(VALID_CLASSES)}")
             return
 
-        try:
-            ladder_score = int(ladder_str)
-            pilgrimage_score = int(pilgrimage_str)
-        except ValueError:
-            yield event.plain_result("分数必须是整数。")
-            return
+        # 分数处理
+        if len(scores) >= 2:
+            ladder_score, pilgrimage_score = scores[0], scores[1]
+        elif len(scores) == 1:
+            ladder_score = scores[0]
+            pilgrimage_score = self.config.get("init_pilgrimage_score", 100)
+        else:
+            ladder_score = self.config.get("init_ladder_score", 1000)
+            pilgrimage_score = self.config.get("init_pilgrimage_score", 100)
 
         # 检查玩家是否已存在
         existing = await self.db_manager.get_player_by_name(group_id, player_name)
@@ -649,11 +766,13 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"玩家 {player_name} 已存在。")
             return
 
-        # 查找名片包含该玩家名的群成员（用于确认目标身份）
-        target_member = await self._find_member_by_name(event, player_name)
+        # 如果没有通过 @ 找到目标，尝试通过玩家名匹配
+        if not target_member:
+            target_member = await self._find_member_by_name(event, player_name)
+
         target_info = ""
         if target_member:
-            member_id = str(target_member["user_id"])
+            member_id = str(target_member.get("user_id", at_user_id or ""))
             target_card = target_member.get("card") or target_member.get("nickname") or member_id
             target_info = f"（对应群名片：{target_card}，QQ: {member_id}）"
 
