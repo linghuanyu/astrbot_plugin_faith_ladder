@@ -492,13 +492,16 @@ class FaithLadderPlugin(Star):
         words = [w for w in remaining.split() if not w.isdigit()]
 
         # 3. 找职业（支持职业名后紧跟数字/字母的情况）
+        # 按职业名长度降序排序，确保长的优先匹配
+        sorted_classes = sorted(self._specific_classes.items(), key=lambda x: len(x[0]), reverse=True)
+
         class_word = None
         name_parts = []  # 存储玩家名的部分
 
         for word in words:
             # 检查是否是具体职业（完全匹配或以具体职业开头）
             found_specific = False
-            for specific_name, (specific_faith, specific_path, specific_class) in self._specific_classes.items():
+            for specific_name, (specific_faith, specific_path, specific_class) in sorted_classes:
                 if word == specific_name:
                     # 完全匹配
                     result["class_"] = specific_class
