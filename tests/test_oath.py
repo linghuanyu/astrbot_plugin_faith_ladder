@@ -79,13 +79,13 @@ class TestAbandonOath:
 
     @pytest.mark.asyncio
     async def test_abandon_oath_invalid_faith(self, service):
-        """Test abandoning oath with invalid new faith."""
+        """Test abandoning oath with invalid new faith (命途)."""
         await service.db.upsert_player("g1", "u1", "Alice")
         await service.db.set_player_class("g1", "u1", "法师", "虚无")
 
-        success, msg = await service.abandon_oath("g1", "Alice", "无效信仰", self.CONFIG)
+        success, msg = await service.abandon_oath("g1", "Alice", "无效命途", self.CONFIG)
         assert success is False
-        assert "无效信仰" in msg
+        assert "无效命途" in msg
 
 
 class TestSetFaith:
@@ -130,11 +130,11 @@ class TestSetFaith:
 
     @pytest.mark.asyncio
     async def test_set_faith_invalid(self, service):
-        """Test setting invalid faith."""
+        """Test setting invalid faith (命途)."""
         await service.db.upsert_player("g1", "u1", "Alice")
         success, msg = await service.set_faith("g1", "Alice", "无效")
         assert success is False
-        assert "无效信仰" in msg
+        assert "无效命途" in msg
 
 
 class TestClearOathbreaker:

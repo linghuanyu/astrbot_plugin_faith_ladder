@@ -3,7 +3,7 @@ Message formatting utilities for the faith ladder plugin.
 """
 
 from typing import List, Optional
-from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_FAITHS
+from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 
 
 def _name_with_tag(player: Player) -> str:
@@ -144,7 +144,7 @@ def format_help(config: dict) -> str:
     output_mode = config.get("output_mode", "text")
 
     classes_str = "/".join(VALID_CLASSES)
-    faiths_str = "/".join(VALID_FAITHS)
+    faiths_str = "/".join(VALID_PATHS)
 
     return (
         f"=== 信仰游戏排行榜 ===\n"
@@ -164,7 +164,7 @@ def format_help(config: dict) -> str:
         f"  名片支持具体职业（如 酋长/织命师），系统自动识别对应信仰和普通职业\n"
         f"{cmd_class} <玩家名> <职业> - 修改职业\n"
         f"立誓 <玩家名> <信仰> - 设置信仰\n"
-        f"  职业: {classes_str} | 信仰: {faiths_str}\n"
+        f"  职业: {classes_str} | 命途: {faiths_str}\n"
         f"\n"
         f"[积分管理] (诸神权限)\n"
         f"{cmd_add} <玩家名> <登神之路分变化> <觐见梯变化>\n"

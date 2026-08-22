@@ -26,7 +26,7 @@ from astrbot_plugin_faith_ladder.ladder_service import LadderService
 from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help
-from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS
+from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS
 from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 
@@ -90,17 +90,18 @@ class FaithLadderPlugin(Star):
         return data_path / "astrbot_plugin_faith_ladder"
 
     def _load_specific_classes(self):
-        """加载具体职业映射文件，构建 具体职业 -> (信仰, 普通职业) 的反向映射。"""
+        """加载具体职业映射文件，构建 具体职业 -> (信仰, 命途, 普通职业) 的反向映射。"""
+        from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
         json_path = _plugin_dir / "specific_classes.json"
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for faith, stages in data.items():
-                for stage_name, classes in stages.items():
-                    for basic_class, specific_name in classes.items():
-                        if basic_class == "祷词":
-                            continue  # 跳过祷词
-                        self._specific_classes[specific_name] = (faith, basic_class)
+            for faith, classes in data.items():
+                path = FAITH_TO_PATH.get(faith)
+                for basic_class, specific_name in classes.items():
+                    if basic_class == "祷词":
+                        continue  # 跳过祷词
+                    self._specific_classes[specific_name] = (faith, path, basic_class)
             logger.info(f"[SpecificClasses] 加载 {len(self._specific_classes)} 个具体职业映射")
         except Exception as e:
             logger.warning(f"[SpecificClasses] 加载具体职业映射失败: {e}")
@@ -462,14 +463,16 @@ class FaithLadderPlugin(Star):
         return None
 
     def _parse_card_info(self, card: str) -> dict:
-        """从群名片中提取信仰、职业、玩家名。
+        """从群名片中提取命途、职业、玩家名。
         返回 {"faith": str|None, "class_": str|None, "player_name": str|None}
+        注意：faith 字段存储的是命途（如"生命"），不是具体信仰（如"繁荣"）
         规则：
-        - 【标签】若在 VALID_FAITHS 中 → 信仰
+        - 【标签】若在 VALID_FAITHS（16个具体信仰）中 → 映射到命途
         - 第一个在 VALID_CLASSES 中的词 → 普通职业
-        - 第一个在具体职业映射中的词 → 从映射获取 (信仰, 普通职业)
+        - 第一个在具体职业映射中的词 → 从映射获取 (信仰, 命途, 普通职业)
         - 第一个不在上述集合中的非数字词 → 玩家名
         """
+        from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, VALID_FAITHS as SPECIFIC_FAITHS
         result = {"faith": None, "class_": None, "player_name": None}
         card = card.strip()
 
@@ -482,8 +485,9 @@ class FaithLadderPlugin(Star):
         else:
             remaining = card.strip()
 
-        if tag and tag in VALID_FAITHS:
-            result["faith"] = tag
+        # 标签是具体信仰（如"繁荣"），映射到命途（如"生命"）
+        if tag and tag in SPECIFIC_FAITHS:
+            result["faith"] = FAITH_TO_PATH.get(tag)
 
         # 提取非数字词
         words = [w for w in remaining.split() if not w.isdigit()]
@@ -493,13 +497,14 @@ class FaithLadderPlugin(Star):
                 # 直接匹配普通职业
                 result["class_"] = word
             elif word in self._specific_classes and result["class_"] is None:
-                # 匹配具体职业 → 获取 (信仰, 普通职业)
-                specific_faith, specific_class = self._specific_classes[word]
+                # 匹配具体职业 → 获取 (信仰, 命途, 普通职业)
+                specific_faith, specific_path, specific_class = self._specific_classes[word]
                 result["class_"] = specific_class
                 if result["faith"] is None:
-                    result["faith"] = specific_faith
-            elif (word not in VALID_CLASSES and word not in VALID_FAITHS
-                  and word not in self._specific_classes and result["player_name"] is None):
+                    result["faith"] = specific_path
+            elif (word not in VALID_CLASSES and word not in SPECIFIC_FAITHS
+                  and word not in VALID_PATHS and word not in self._specific_classes
+                  and result["player_name"] is None):
                 result["player_name"] = word
 
         return result
@@ -735,7 +740,7 @@ class FaithLadderPlugin(Star):
 
         parts = clean_args.split() if clean_args else []
 
-        # 分类参数：数字→分数，VALID_FAITHS→信仰，VALID_CLASSES→职业，其他→姓名
+        # 分类参数：数字→分数，VALID_PATHS→命途，VALID_CLASSES→职业，其他→姓名
         explicit_name = None
         explicit_faith = None
         explicit_class = None
@@ -745,7 +750,7 @@ class FaithLadderPlugin(Star):
         for p in parts:
             if p.isdigit():
                 scores.append(int(p))
-            elif p in VALID_FAITHS:
+            elif p in VALID_PATHS:
                 explicit_faith = p
             elif p in VALID_CLASSES:
                 explicit_class = p
@@ -773,7 +778,7 @@ class FaithLadderPlugin(Star):
         if not player_name:
             errors.append("玩家名（未从名片识别到，请在参数中指定）")
         if not faith_name:
-            errors.append(f"信仰（可选: {'/'.join(VALID_FAITHS)}）")
+            errors.append(f"命途（可选: {'/'.join(VALID_PATHS)}）")
         if not class_name:
             errors.append(f"职业（可选: {'/'.join(VALID_CLASSES)}）")
 
@@ -793,8 +798,8 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
             return
 
-        if faith_name not in VALID_FAITHS:
-            yield event.plain_result(f"无效的信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}")
+        if faith_name not in VALID_PATHS:
+            yield event.plain_result(f"无效的命途: {faith_name}。可选: {'/'.join(VALID_PATHS)}")
             return
 
         if class_name not in VALID_CLASSES:
@@ -900,8 +905,8 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if len(parts) != 2:
             yield event.plain_result(
-                f"用法: 立誓 <玩家名> <信仰>\n"
-                f"可选信仰: {'/'.join(VALID_FAITHS)}"
+                f"用法: 立誓 <玩家名> <命途>\n"
+                f"可选命途: {'/'.join(VALID_PATHS)}"
             )
             return
 

@@ -4,7 +4,7 @@ Ladder service - core business logic for score management.
 
 import re
 from typing import Optional, List, Dict, Any, Tuple
-from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_FAITHS
+from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.message_formatter import (
     format_leaderboard,
@@ -221,7 +221,7 @@ class LadderService:
         """
         # Validate faith
         if not Player.validate_faith(faith_name):
-            return False, f"无效信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}"
+            return False, f"无效命途: {faith_name}。可选: {'/'.join(VALID_PATHS)}"
 
         # Check player exists
         player = await self.db.get_player_by_name(group_id, player_name)
@@ -263,7 +263,7 @@ class LadderService:
 
         # Validate new faith if provided
         if new_faith and not Player.validate_faith(new_faith):
-            return False, f"无效信仰: {new_faith}。可选: {'/'.join(VALID_FAITHS)}"
+            return False, f"无效命途: {new_faith}。可选: {'/'.join(VALID_PATHS)}"
 
         # Set oathbreaker + optional faith change
         await self.db.set_oathbreaker(group_id, player.player_id, new_faith)
@@ -297,7 +297,7 @@ class LadderService:
 
         # Validate faith
         if not Player.validate_faith(faith_name):
-            return False, f"无效信仰: {faith_name}。可选: {'/'.join(VALID_FAITHS)}"
+            return False, f"无效命途: {faith_name}。可选: {'/'.join(VALID_PATHS)}"
 
         # Check if player already exists
         existing = await self.db.get_player_by_name(group_id, player_name)
