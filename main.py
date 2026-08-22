@@ -511,7 +511,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
-        """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户"""
+        """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户（诸神专用）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -522,37 +522,42 @@ class FaithLadderPlugin(Star):
                 if args:
                     break
 
-        # 检查是否有 @ 用户
-        at_user_id = await self._get_at_user_id(event)
+        # 先检测权限
+        has_perm = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
         target_name = None
 
-        if at_user_id:
-            # @ 查询仅诸神/管理员可用
-            has_perm = await self.permission_service.check_score_permission(user_id)
-            is_admin = self._is_plugin_admin(event)
-            if not has_perm and not is_admin:
-                yield event.plain_result("权限不足：@ 查询仅供诸神使用。")
-                return
-            # 获取 @ 用户的群名片并解析玩家名
-            try:
-                member_info = await event.bot.get_group_member_info(
-                    group_id=int(group_id), user_id=int(at_user_id)
-                )
-                card = member_info.get("card") or member_info.get("nickname") or ""
-                if card:
-                    target_name = await self._resolve_name_from_card(card, group_id)
-                if not target_name:
-                    yield event.plain_result("无法从该用户的名片识别到玩家。")
+        if has_perm or is_admin:
+            # 诸神/管理员：处理 @ 或玩家名参数
+            at_user_id = await self._get_at_user_id(event)
+            if at_user_id:
+                # @ 查询：从名片识别玩家
+                try:
+                    member_info = await event.bot.get_group_member_info(
+                        group_id=int(group_id), user_id=int(at_user_id)
+                    )
+                    card = member_info.get("card") or member_info.get("nickname") or ""
+                    if card:
+                        target_name = await self._resolve_name_from_card(card, group_id)
+                    if not target_name:
+                        yield event.plain_result("无法从该用户的名片识别到玩家。")
+                        return
+                except Exception:
+                    yield event.plain_result("获取用户信息失败。")
                     return
-            except Exception:
-                yield event.plain_result("获取用户信息失败。")
-                return
+            else:
+                # 解析玩家名参数
+                target_name, _, error = await self._resolve_target_or_self(event, args or "")
+                if error:
+                    yield event.plain_result(error)
+                    return
         else:
-            # 原有逻辑：解析参数或自动识别自己
-            target_name, _, error = await self._resolve_target_or_self(event, args or "")
-            if error:
-                yield event.plain_result(error)
+            # 非诸神：无视所有参数，直接查自己
+            self_name = await self._resolve_player_name(event)
+            if not self_name:
+                yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
                 return
+            target_name = self_name
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
         if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
