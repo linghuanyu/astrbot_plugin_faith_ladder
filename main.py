@@ -467,16 +467,16 @@ class FaithLadderPlugin(Star):
         返回 {"faith": str|None, "class_": str|None, "player_name": str|None}
         注意：faith 字段存储的是命途（如"生命"），不是具体信仰（如"繁荣"）
         规则：
-        - 【标签】若在 VALID_FAITHS（16个具体信仰）中 → 映射到命途
-        - 第一个在 VALID_CLASSES 中的词 → 普通职业
-        - 第一个在具体职业映射中的词 → 从映射获取 (信仰, 命途, 普通职业)
-        - 第一个不在上述集合中的非数字词 → 玩家名
+        1. 【标签】若在 VALID_FAITHS（16个具体信仰）中 → 映射到命途
+        2. 在具体职业映射中的词 → 职业 + 玩家名（具体职业即玩家名）
+        3. 在 VALID_CLASSES 中的词 → 普通职业
+        4. 若没有具体职业，剩余非数字词拼接为玩家名
         """
         from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, VALID_FAITHS as SPECIFIC_FAITHS
         result = {"faith": None, "class_": None, "player_name": None}
         card = card.strip()
 
-        # 提取标签
+        # 1. 提取标签
         tag = None
         match = re.match(r'^【([^】]*)】\s*(.*)', card)
         if match:
@@ -489,23 +489,32 @@ class FaithLadderPlugin(Star):
         if tag and tag in SPECIFIC_FAITHS:
             result["faith"] = FAITH_TO_PATH.get(tag)
 
-        # 提取非数字词
+        # 2. 提取所有词（过滤纯数字）
         words = [w for w in remaining.split() if not w.isdigit()]
 
+        # 3. 先找具体职业（具体职业即玩家名）
         for word in words:
-            if word in VALID_CLASSES and result["class_"] is None:
-                # 直接匹配普通职业
-                result["class_"] = word
-            elif word in self._specific_classes and result["class_"] is None:
-                # 匹配具体职业 → 获取 (信仰, 命途, 普通职业)
+            if word in self._specific_classes:
                 specific_faith, specific_path, specific_class = self._specific_classes[word]
                 result["class_"] = specific_class
+                result["player_name"] = word  # 具体职业就是玩家名
                 if result["faith"] is None:
                     result["faith"] = specific_path
-            elif (word not in VALID_CLASSES and word not in SPECIFIC_FAITHS
-                  and word not in VALID_PATHS and word not in self._specific_classes
-                  and result["player_name"] is None):
-                result["player_name"] = word
+                return result
+
+        # 4. 没有具体职业，找普通职业
+        for word in words:
+            if word in VALID_CLASSES:
+                result["class_"] = word
+                break
+
+        # 5. 剩余非职业词拼接为玩家名
+        name_words = []
+        for word in words:
+            if word not in VALID_CLASSES and word not in SPECIFIC_FAITHS and word not in VALID_PATHS:
+                name_words.append(word)
+        if name_words:
+            result["player_name"] = "".join(name_words)
 
         return result
 
