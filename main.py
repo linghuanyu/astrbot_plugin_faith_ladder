@@ -468,8 +468,8 @@ class FaithLadderPlugin(Star):
         注意：faith 字段存储的是命途（如"生命"），不是具体信仰（如"繁荣"）
         规则：
         1. 【标签】若在 VALID_FAITHS（16个具体信仰）中 → 映射到命途
-        2. 找到具体职业或普通职业
-        3. 剩余非关键词拼接为玩家名（支持玩家名和职业名位置互换）
+        2. 找到具体职业或普通职业（支持职业名后紧跟数字的情况，如"魔术师1218"）
+        3. 剩余非关键词拼接为玩家名
         """
         from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, VALID_FAITHS as SPECIFIC_FAITHS
         result = {"faith": None, "class_": None, "player_name": None}
@@ -491,31 +491,50 @@ class FaithLadderPlugin(Star):
         # 2. 提取非数字词
         words = [w for w in remaining.split() if not w.isdigit()]
 
-        # 3. 先找职业（具体职业或普通职业）
+        # 3. 找职业（支持职业名后紧跟数字/字母的情况）
         class_word = None
+        name_parts = []  # 存储玩家名的部分
+
         for word in words:
-            if word in self._specific_classes:
-                specific_faith, specific_path, specific_class = self._specific_classes[word]
-                result["class_"] = specific_class
-                if result["faith"] is None:
-                    result["faith"] = specific_path
-                class_word = word
-                break
-            elif word in VALID_CLASSES:
+            # 检查是否是具体职业（完全匹配或以具体职业开头）
+            found_specific = False
+            for specific_name, (specific_faith, specific_path, specific_class) in self._specific_classes.items():
+                if word == specific_name:
+                    # 完全匹配
+                    result["class_"] = specific_class
+                    if result["faith"] is None:
+                        result["faith"] = specific_path
+                    class_word = word
+                    found_specific = True
+                    break
+                elif word.startswith(specific_name) and len(word) > len(specific_name):
+                    # 以具体职业开头（如"魔术师1218"）
+                    result["class_"] = specific_class
+                    if result["faith"] is None:
+                        result["faith"] = specific_path
+                    class_word = word
+                    # 剩余部分加入玩家名
+                    remainder = word[len(specific_name):]
+                    if remainder and not remainder.isdigit():
+                        name_parts.append(remainder)
+                    found_specific = True
+                    break
+
+            if found_specific:
+                continue
+
+            # 检查是否是普通职业
+            if word in VALID_CLASSES:
                 result["class_"] = word
                 class_word = word
-                break
+                continue
 
-        # 4. 剩余非关键词拼接为玩家名
-        name_words = []
-        for word in words:
-            if word == class_word:
-                continue  # 跳过职业词
+            # 其他非关键词加入玩家名
             if word not in SPECIFIC_FAITHS and word not in VALID_PATHS:
-                name_words.append(word)
+                name_parts.append(word)
 
-        if name_words:
-            result["player_name"] = "".join(name_words)
+        if name_parts:
+            result["player_name"] = "".join(name_parts)
 
         return result
 
