@@ -5,6 +5,7 @@ A dual-ladder ranking system with class/faith customization for group chats.
 
 import sys
 import re
+import json
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -64,6 +65,10 @@ class FaithLadderPlugin(Star):
         self._qq_admin = QQAdminHandler(self)
         self._pending_gifts_receive = None  # 当前待确认的赠送（接收阶段）
 
+        # 加载具体职业映射
+        self._specific_classes = {}  # specific_class_name -> (faith, basic_class)
+        self._load_specific_classes()
+
     def _get_data_dir(self) -> Path:
         data_path = None
         for method_name in ("get_data_path", "get_astrbot_data_path"):
@@ -83,6 +88,22 @@ class FaithLadderPlugin(Star):
             else:
                 data_path = Path("data") / "plugin_data"
         return data_path / "astrbot_plugin_faith_ladder"
+
+    def _load_specific_classes(self):
+        """加载具体职业映射文件，构建 具体职业 -> (信仰, 普通职业) 的反向映射。"""
+        json_path = _plugin_dir / "specific_classes.json"
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for faith, stages in data.items():
+                for stage_name, classes in stages.items():
+                    for basic_class, specific_name in classes.items():
+                        if basic_class == "祷词":
+                            continue  # 跳过祷词
+                        self._specific_classes[specific_name] = (faith, basic_class)
+            logger.info(f"[SpecificClasses] 加载 {len(self._specific_classes)} 个具体职业映射")
+        except Exception as e:
+            logger.warning(f"[SpecificClasses] 加载具体职业映射失败: {e}")
 
     async def initialize(self):
         await self.db_manager.initialize()
@@ -445,8 +466,9 @@ class FaithLadderPlugin(Star):
         返回 {"faith": str|None, "class_": str|None, "player_name": str|None}
         规则：
         - 【标签】若在 VALID_FAITHS 中 → 信仰
-        - 第一个在 VALID_CLASSES 中的词 → 职业
-        - 第一个不在 VALID_CLASSES/VALID_FAITHS 中的非数字词 → 玩家名
+        - 第一个在 VALID_CLASSES 中的词 → 普通职业
+        - 第一个在具体职业映射中的词 → 从映射获取 (信仰, 普通职业)
+        - 第一个不在上述集合中的非数字词 → 玩家名
         """
         result = {"faith": None, "class_": None, "player_name": None}
         card = card.strip()
@@ -468,8 +490,16 @@ class FaithLadderPlugin(Star):
 
         for word in words:
             if word in VALID_CLASSES and result["class_"] is None:
+                # 直接匹配普通职业
                 result["class_"] = word
-            elif word not in VALID_CLASSES and word not in VALID_FAITHS and result["player_name"] is None:
+            elif word in self._specific_classes and result["class_"] is None:
+                # 匹配具体职业 → 获取 (信仰, 普通职业)
+                specific_faith, specific_class = self._specific_classes[word]
+                result["class_"] = specific_class
+                if result["faith"] is None:
+                    result["faith"] = specific_faith
+            elif (word not in VALID_CLASSES and word not in VALID_FAITHS
+                  and word not in self._specific_classes and result["player_name"] is None):
                 result["player_name"] = word
 
         return result
