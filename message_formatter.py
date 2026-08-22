@@ -152,6 +152,7 @@ def format_help(config: dict) -> str:
         f"[查询]\n"
         f"{cmd_query} - 查询自己的积分（自动识别群名片，冷却 {query_cd}s）\n"
         f"{cmd_query} <玩家名> - 查询指定玩家（诸神专用）\n"
+        f"{cmd_query} @用户 - 查询 @ 的用户（从名片识别玩家）\n"
         f"\n"
         f"[排行榜] (诸神权限)\n"
         f"{cmd_sb} - 登神之路排行榜（冷却 {ladder_cd}s）\n"
