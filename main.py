@@ -1613,6 +1613,15 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("不能赠送给自己。")
             return
 
+        # 检查接收方是否已有待处理的赠送
+        gift_key = (group_id, str(receiver_player.player_id))
+        existing_gift = self._pending_gifts_receive.get(gift_key)
+        if not existing_gift:
+            existing_gift = await self.db_manager.get_pending_gift(group_id, str(receiver_player.player_id))
+        if existing_gift:
+            yield event.plain_result(f"{receiver_name} 有未处理的赠送，请先接受或拒绝后再发起新的赠送。")
+            return
+
         # 直接扣除发送方道具
         success, msg, base_name, grade = await self.ladder_service.deduct_item(
             group_id, sender_player.player_id, sender_name, item_raw, quantity
