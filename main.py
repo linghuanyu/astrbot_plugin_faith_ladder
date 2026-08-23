@@ -884,7 +884,15 @@ class FaithLadderPlugin(Star):
             ladder_score, pilgrimage_score, user_id
         )
 
-        yield event.plain_result(message + target_info)
+        # 注册成功时，如果使用了@，则@被录入玩家并提醒
+        if success and at_user_id:
+            from astrbot.core.message.components import At, Plain
+            yield event.chain_result([
+                At(qq=int(at_user_id)),
+                Plain(text=" 请及时说出祷词，否则将取消录入")
+            ])
+        else:
+            yield event.plain_result(message + target_info)
 
     # === 设置职业（仅职业） ===
 
