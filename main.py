@@ -777,32 +777,35 @@ class FaithLadderPlugin(Star):
                 pass
 
         # 从参数文本中提取显式值
-        # 先过滤掉可能的 @ 文本（如 @xxx 或 CQ 码）
-        clean_args = re.sub(r'@\S+', '', args).strip()
-        clean_args = re.sub(r'\[CQ:[^\]]+\]', '', clean_args).strip()
-
-        parts = clean_args.split() if clean_args else []
-
-        # 分类参数：数字→分数，VALID_PATHS→命途，VALID_CLASSES→职业，其他→姓名
+        # 当使用 @ 且名片解析成功时，不再从 args 提取参数（避免名片内容被误识别为显式参数）
         explicit_name = None
         explicit_faith = None
         explicit_class = None
         scores = []
-        other_words = []
 
-        for p in parts:
-            if p.isdigit():
-                scores.append(int(p))
-            elif p in VALID_PATHS:
-                explicit_faith = p
-            elif p in VALID_CLASSES:
-                explicit_class = p
-            else:
-                other_words.append(p)
+        if not (at_user_id and auto_name):
+            # 只有非 @ 模式，或名片解析失败时，才从 args 提取显式参数
+            clean_args = re.sub(r'@\S+', '', args).strip()
+            clean_args = re.sub(r'\[CQ:[^\]]+\]', '', clean_args).strip()
 
-        # 非数字/信仰/职业的词，第一个作为玩家名
-        if other_words:
-            explicit_name = other_words[0]
+            parts = clean_args.split() if clean_args else []
+
+            # 分类参数：数字→分数，VALID_PATHS→命途，VALID_CLASSES→职业，其他→姓名
+            other_words = []
+
+            for p in parts:
+                if p.isdigit():
+                    scores.append(int(p))
+                elif p in VALID_PATHS:
+                    explicit_faith = p
+                elif p in VALID_CLASSES:
+                    explicit_class = p
+                else:
+                    other_words.append(p)
+
+            # 非数字/信仰/职业的词，第一个作为玩家名
+            if other_words:
+                explicit_name = other_words[0]
 
         # 合并：显式 > 自动提取
         player_name = explicit_name or auto_name
