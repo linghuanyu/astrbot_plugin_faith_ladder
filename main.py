@@ -1164,7 +1164,7 @@ class FaithLadderPlugin(Star):
 
     # === 帮助 ===
 
-    @filter.command("天梯榜帮助", alias={"ladderhelp", "帮助"})
+    @filter.command("天梯榜帮助", alias={"ladderhelp"})
     async def cmd_help(self, event: AstrMessageEvent):
         """显示帮助信息"""
         text = format_help(dict(self.config))
