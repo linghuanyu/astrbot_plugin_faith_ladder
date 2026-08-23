@@ -1670,17 +1670,41 @@ class FaithLadderPlugin(Star):
 
     @filter.command("接受道具")
     async def cmd_accept_gift(self, event: AstrMessageEvent):
-        """接收方接受赠送（诸神权限），无需参数。"""
+        """接收方接受赠送，无需参数。诸神可带参数指定接收玩家（跳过名片检测）。"""
         group_id = self._get_group_id(event)
-        if not await self._check_perm(event):
-            yield event.plain_result("权限不足：只有诸神才能接受赠送。")
-            return
+        is_god = await self._check_perm(event)
+        args = self._get_args(event, "接受道具")
 
-        # 通过群名片识别玩家名，再查找 player_id（与 cmd_gift_item 存储键一致）
-        receiver_name = await self._resolve_player_name(event)
-        if not receiver_name:
-            yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
-            return
+        if is_god and args:
+            # 诸神可指定接收方（跳过名片检测）
+            receiver_name = None
+            at_user_id = await self._get_at_user_id(event)
+            if at_user_id:
+                try:
+                    info = await event.bot.get_group_member_info(
+                        group_id=int(group_id), user_id=int(at_user_id)
+                    )
+                    card = info.get("card") or info.get("nickname") or ""
+                    if card:
+                        parsed = self._parse_card_info(card)
+                        receiver_name = parsed.get("player_name")
+                except Exception:
+                    pass
+            if not receiver_name:
+                # 没 @ 或 @ 解析失败，从参数文本取第一个词
+                cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip()
+                parts = cleaned.split()
+                receiver_name = parts[0] if parts else None
+            if not receiver_name:
+                yield event.plain_result("无法识别接收方，请指定玩家名或 @ 玩家。")
+                return
+        else:
+            # 所有人默认通过群名片识别
+            receiver_name = await self._resolve_player_name(event)
+            if not receiver_name:
+                yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+                return
+
         receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
         if not receiver_player:
             yield event.plain_result(f"玩家 {receiver_name} 不存在。")
