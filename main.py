@@ -145,6 +145,7 @@ class FaithLadderPlugin(Star):
             get_active_groups=self.db_manager.get_active_groups,
             purge_score_history=self.db_manager.purge_old_score_history,
             purge_expired_statuses=self.db_manager.purge_expired_statuses,
+            cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
         )
         await self._scheduler.start()
 
@@ -202,48 +203,40 @@ class FaithLadderPlugin(Star):
                                        max_age_seconds: int = 240) -> Optional[dict]:
         """获取有效的待处理赠送（未超时）。超时则自动退回发送方并返回 None。"""
         gift_key = (group_id, receiver_id)
-        gift = self._pending_gifts_receive.get(gift_key)
 
-        # 内存缓存未命中，从 DB 恢复
-        if not gift:
-            db_gift = await self.db_manager.get_pending_gift(group_id, receiver_id)
-            if not db_gift:
-                return None
-            gift = {
-                "group_id": group_id,
-                "sender_id": db_gift["sender_id"],
-                "sender_name": db_gift["sender_name"],
-                "receiver_id": receiver_id,
-                "receiver_name": db_gift["receiver_name"],
-                "item_name": db_gift["items"]["item_name"],
-                "grade": db_gift["items"].get("grade"),
-                "quantity": db_gift["items"]["quantity"],
-            }
-            self._pending_gifts_receive[gift_key] = gift
-
-        # 检查超时（通过 DB 的 created_at 字段）
-        # 内存缓存无时间戳，直接查 DB 判断
+        # 从 DB 获取（含 created_at）
         db_gift = await self.db_manager.get_pending_gift(group_id, receiver_id)
-        if db_gift:
-            from datetime import datetime, timezone, timedelta
-            # 重新查 DB 获取 created_at
-            async with self.db_manager._db.execute(
-                "SELECT created_at FROM pending_gifts WHERE group_id = ? AND receiver_id = ?",
-                (group_id, receiver_id)
-            ) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    created_at = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                    if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
-                        # 超时，退回发送方
-                        await self.ladder_service.receive_item(
-                            gift["group_id"], gift["sender_id"], gift["sender_name"],
-                            gift["item_name"], gift["quantity"], grade=gift.get("grade")
-                        )
-                        self._pending_gifts_receive.pop(gift_key, None)
-                        await self.db_manager.delete_pending_gift(group_id, receiver_id)
-                        return None  # 返回 None 表示已超时
+        if not db_gift:
+            self._pending_gifts_receive.pop(gift_key, None)
+            return None
 
+        # 检查超时
+        from datetime import datetime, timezone
+        created_at = datetime.strptime(db_gift["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
+            # 超时，退回发送方
+            items = db_gift["items"]
+            await self.ladder_service.receive_item(
+                group_id, db_gift["sender_id"], db_gift["sender_name"],
+                items["item_name"], items["quantity"], grade=items.get("grade")
+            )
+            self._pending_gifts_receive.pop(gift_key, None)
+            await self.db_manager.delete_pending_gift(group_id, receiver_id)
+            logger.info(f"[Gift] 赠送超时自动退回：{db_gift['sender_name']} -> {db_gift['receiver_name']}")
+            return None
+
+        # 未超时，构造 gift 并缓存到内存
+        gift = {
+            "group_id": group_id,
+            "sender_id": db_gift["sender_id"],
+            "sender_name": db_gift["sender_name"],
+            "receiver_id": receiver_id,
+            "receiver_name": db_gift["receiver_name"],
+            "item_name": db_gift["items"]["item_name"],
+            "grade": db_gift["items"].get("grade"),
+            "quantity": db_gift["items"]["quantity"],
+        }
+        self._pending_gifts_receive[gift_key] = gift
         return gift
 
     # === 图片渲染已暂时禁用 ===

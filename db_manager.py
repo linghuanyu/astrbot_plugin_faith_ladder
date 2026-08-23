@@ -952,9 +952,9 @@ class DatabaseManager:
         await self._db.commit()
 
     async def get_pending_gift(self, group_id: str, receiver_id: str) -> Optional[dict]:
-        """获取待处理赠送记录。返回 dict 或 None。"""
+        """获取待处理赠送记录。返回 dict（含 created_at）或 None。"""
         async with self._db.execute(
-            "SELECT sender_id, sender_name, receiver_name, items_json FROM pending_gifts "
+            "SELECT sender_id, sender_name, receiver_name, items_json, created_at FROM pending_gifts "
             "WHERE group_id = ? AND receiver_id = ?",
             (group_id, receiver_id)
         ) as cursor:
@@ -967,6 +967,7 @@ class DatabaseManager:
                 "sender_name": row[1],
                 "receiver_name": row[2],
                 "items": json.loads(row[3]),
+                "created_at": row[4],
             }
 
     async def delete_pending_gift(self, group_id: str, receiver_id: str) -> None:

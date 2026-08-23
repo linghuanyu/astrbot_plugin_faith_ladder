@@ -27,6 +27,7 @@ class SchedulerService:
         get_output_mode: Optional[Callable[[str], Awaitable[str]]] = None,
         purge_score_history: Optional[Callable[[int], Awaitable[int]]] = None,
         purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
+        cleanup_expired_gifts: Optional[Callable[[], Awaitable[int]]] = None,
     ):
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
@@ -38,11 +39,13 @@ class SchedulerService:
         self._get_output_mode = get_output_mode
         self._purge_score_history = purge_score_history
         self._purge_expired_statuses = purge_expired_statuses
+        self._cleanup_expired_gifts = cleanup_expired_gifts
         self._get_config = get_config
         self._send_to_group = send_to_group
         self._get_active_groups = get_active_groups
         self._daily_push_task: Optional[asyncio.Task] = None
         self._backup_task: Optional[asyncio.Task] = None
+        self._gift_cleanup_task: Optional[asyncio.Task] = None
         self._running = False
         self._last_push_date: Optional[datetime] = None  # Track last push date to prevent double-fire
 
@@ -51,23 +54,19 @@ class SchedulerService:
         self._running = True
         self._daily_push_task = asyncio.create_task(self._daily_push_loop())
         self._backup_task = asyncio.create_task(self._backup_loop())
+        self._gift_cleanup_task = asyncio.create_task(self._gift_cleanup_loop())
         logger.info("SchedulerService: tasks started")
 
     async def stop(self):
         """Stop all scheduler tasks gracefully."""
         self._running = False
-        if self._daily_push_task:
-            self._daily_push_task.cancel()
-            try:
-                await self._daily_push_task
-            except asyncio.CancelledError:
-                pass
-        if self._backup_task:
-            self._backup_task.cancel()
-            try:
-                await self._backup_task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._daily_push_task, self._backup_task, self._gift_cleanup_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         logger.info("SchedulerService: tasks stopped")
 
     async def _daily_push_loop(self):
@@ -141,6 +140,26 @@ class SchedulerService:
             except Exception as e:
                 logger.error(f"SchedulerService backup error: {e}")
                 await asyncio.sleep(3600)
+
+    async def _gift_cleanup_loop(self):
+        """Loop that cleans up expired pending gifts every 60 seconds."""
+        while self._running:
+            try:
+                if self._cleanup_expired_gifts:
+                    try:
+                        refunded = await self._cleanup_expired_gifts()
+                        if refunded > 0:
+                            logger.info(f"Cleaned up {refunded} expired pending gifts")
+                    except Exception as e:
+                        logger.error(f"Gift cleanup error: {e}")
+
+                await asyncio.sleep(60)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"SchedulerService gift cleanup error: {e}")
+                await asyncio.sleep(60)
 
     async def _get_effective_output_mode(self, group_id: str, config: dict) -> str:
         """Get effective output mode for a group (DB override or global default)."""

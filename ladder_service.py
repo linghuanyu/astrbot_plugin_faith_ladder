@@ -607,6 +607,27 @@ class LadderService:
         await self.db.commit()
         return True, f"已收到 {format_item_display(item_name, grade, quantity)}"
 
+    async def cleanup_expired_gifts(self, max_age_seconds: int = 240) -> int:
+        """清理超时的待处理赠送，退回道具给发送方。返回退回数量。"""
+        expired = await self.db.get_expired_pending_gifts(max_age_seconds)
+        refunded = 0
+        for gift in expired:
+            try:
+                items = gift["items"]
+                await self.receive_item(
+                    gift["group_id"], gift["sender_id"], gift["sender_name"],
+                    items["item_name"], items["quantity"], grade=items.get("grade")
+                )
+                await self.db.delete_pending_gift(gift["group_id"], gift["receiver_id"])
+                refunded += 1
+                logger.info(
+                    f"[GiftCleanup] 超时退回：{gift['sender_name']} -> {gift['receiver_name']} "
+                    f"({items['item_name']} x{items['quantity']})"
+                )
+            except Exception as e:
+                logger.error(f"[GiftCleanup] 退回失败（{gift['sender_name']} -> {gift['receiver_name']}）: {e}")
+        return refunded
+
     async def clear_items(self, group_id: str, player_name: str, raw_name: Optional[str] = None) -> Tuple[bool, str]:
         """清除储物空间。raw_name=None → 清空全部；指定道具名 → 清除该道具（可含等级）。"""
         player = await self.db.get_player_by_name(group_id, player_name)
