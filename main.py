@@ -1672,24 +1672,34 @@ class FaithLadderPlugin(Star):
     async def cmd_accept_gift(self, event: AstrMessageEvent):
         """接收方接受赠送（诸神权限），无需参数。"""
         group_id = self._get_group_id(event)
-        user_id = str(event.get_sender_id())
         if not await self._check_perm(event):
             yield event.plain_result("权限不足：只有诸神才能接受赠送。")
             return
 
-        gift = await self._get_valid_pending_gift(group_id, user_id)
+        # 通过群名片识别玩家名，再查找 player_id（与 cmd_gift_item 存储键一致）
+        receiver_name = await self._resolve_player_name(event)
+        if not receiver_name:
+            yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+            return
+        receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
+        if not receiver_player:
+            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
+            return
+        receiver_id = str(receiver_player.player_id)
+
+        gift = await self._get_valid_pending_gift(group_id, receiver_id)
         if not gift:
             yield event.plain_result("没有待接受的赠送（或赠送已超时退回）。")
             return
 
-        gift_key = (group_id, user_id)
+        gift_key = (group_id, receiver_id)
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         success, msg = await self.ladder_service.receive_item(
             gift["group_id"], gift["receiver_id"], gift["receiver_name"],
             gift["item_name"], gift["quantity"], grade=gift.get("grade")
         )
         self._pending_gifts_receive.pop(gift_key, None)
-        await self.db_manager.delete_pending_gift(group_id, user_id)
+        await self.db_manager.delete_pending_gift(group_id, receiver_id)
 
         if success:
             display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
@@ -1703,17 +1713,27 @@ class FaithLadderPlugin(Star):
     async def cmd_reject_gift(self, event: AstrMessageEvent):
         """接收方拒绝赠送（诸神权限），无需参数。"""
         group_id = self._get_group_id(event)
-        user_id = str(event.get_sender_id())
         if not await self._check_perm(event):
             yield event.plain_result("权限不足：只有诸神才能拒绝赠送。")
             return
 
-        gift = await self._get_valid_pending_gift(group_id, user_id)
+        # 通过群名片识别玩家名，再查找 player_id（与 cmd_gift_item 存储键一致）
+        receiver_name = await self._resolve_player_name(event)
+        if not receiver_name:
+            yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+            return
+        receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
+        if not receiver_player:
+            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
+            return
+        receiver_id = str(receiver_player.player_id)
+
+        gift = await self._get_valid_pending_gift(group_id, receiver_id)
         if not gift:
             yield event.plain_result("没有待拒绝的赠送（或赠送已超时退回）。")
             return
 
-        gift_key = (group_id, user_id)
+        gift_key = (group_id, receiver_id)
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         # 退回赠送方道具
         await self.ladder_service.receive_item(
@@ -1721,7 +1741,7 @@ class FaithLadderPlugin(Star):
             gift["item_name"], gift["quantity"], grade=gift.get("grade")
         )
         self._pending_gifts_receive.pop(gift_key, None)
-        await self.db_manager.delete_pending_gift(group_id, user_id)
+        await self.db_manager.delete_pending_gift(group_id, receiver_id)
 
         display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
         yield event.plain_result(
