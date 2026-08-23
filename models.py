@@ -52,6 +52,7 @@ class Player:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     oathbreaker: bool = False
+    qq_id: Optional[str] = None  # 绑定的 QQ 号（唯一鉴权凭据）
 
     @staticmethod
     def validate_class(class_name: str) -> bool:

@@ -6,6 +6,7 @@ A dual-ladder ranking system with class/faith customization for group chats.
 import sys
 import re
 import json
+import asyncio
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -26,7 +27,7 @@ from astrbot_plugin_faith_ladder.ladder_service import LadderService
 from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help
-from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS
+from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, Player
 # from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer  # 暂时禁用图片渲染
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 
@@ -146,8 +147,13 @@ class FaithLadderPlugin(Star):
             purge_score_history=self.db_manager.purge_old_score_history,
             purge_expired_statuses=self.db_manager.purge_expired_statuses,
             cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
+            notify_gift_timeout=send_to_group,
         )
         await self._scheduler.start()
+
+        # QQ 绑定自动迁移：延迟到首次事件时触发（需要 bot API 引用）
+        self._qq_migration_attempted = False
+        self._qq_migration_lock = asyncio.Lock()
 
         # 注册群成员变动监听（白名单自动同步）
         try:
@@ -198,6 +204,118 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         return has_permission or is_admin
+
+    async def _resolve_self_player(self, event: AstrMessageEvent) -> Optional[Player]:
+        """通过发送者的 QQ 号查找绑定的玩家记录（强鉴权，不可伪造）。"""
+        group_id = self._get_group_id(event)
+        qq_id = str(event.get_sender_id())
+        return await self.db_manager.get_player_by_qq(group_id, qq_id)
+
+    async def _resolve_self_player_lenient(self, event: AstrMessageEvent) -> Optional[Player]:
+        """优先 QQ 绑定查找；失败则回退名片识别（兼容未绑定的老玩家）。
+        仅用于只读命令（查询/查储物空间）。"""
+        player = await self._resolve_self_player(event)
+        if player:
+            return player
+        name = await self._resolve_player_name(event)
+        if not name:
+            return None
+        group_id = self._get_group_id(event)
+        return await self.db_manager.get_player_by_name(group_id, name)
+
+    async def _maybe_trigger_qq_migration(self, event: AstrMessageEvent):
+        """首次事件时触发后台 QQ 绑定迁移；只运行一次。"""
+        if self._qq_migration_attempted:
+            return
+        async with self._qq_migration_lock:
+            if self._qq_migration_attempted:
+                return
+            self._qq_migration_attempted = True
+        try:
+            bot = getattr(event, 'bot', None)
+            if bot:
+                asyncio.create_task(self._do_auto_migrate_qq(bot))
+            else:
+                logger.warning("[QQMigration] 无法获取 bot 引用，迁移跳过")
+        except Exception as e:
+            logger.error(f"[QQMigration] 触发失败: {e}")
+
+    async def _do_auto_migrate_qq(self, bot):
+        """后台迁移：扫描各活跃群，为未绑定 QQ 的玩家找到唯一匹配的名片 → 自动绑定。"""
+        try:
+            groups = await self.db_manager.get_active_groups()
+            total_bound = 0
+            for group_id in groups:
+                try:
+                    members = await bot.get_group_member_list(group_id=int(group_id))
+                except Exception as e:
+                    logger.warning(f"[QQMigration] 拉取群 {group_id} 成员失败（跳过）: {e}")
+                    continue
+
+                unbound = await self.db_manager.list_unbound_players(group_id)
+                if not unbound:
+                    continue
+
+                for player in unbound:
+                    matches = []
+                    for m in members:
+                        card = m.get("card") or m.get("nickname") or ""
+                        if not card:
+                            continue
+                        words = self._extract_card_words(card)
+                        if player.player_name in words:
+                            matches.append(m)
+                    if len(matches) == 1:
+                        qq = str(matches[0].get("user_id"))
+                        ok = await self.db_manager.set_player_qq(group_id, player.player_id, qq)
+                        if ok:
+                            total_bound += 1
+                            logger.info(
+                                f"[QQMigration] 自动绑定：群 {group_id} 玩家 {player.player_name} ↔ QQ {qq}"
+                            )
+                        else:
+                            logger.info(
+                                f"[QQMigration] 绑定冲突：群 {group_id} 玩家 {player.player_name} ↔ QQ {qq}"
+                            )
+                    elif len(matches) > 1:
+                        logger.info(
+                            f"[QQMigration] 玩家 {player.player_name} 在群 {group_id} 匹配到多个名片，跳过"
+                        )
+            if total_bound > 0:
+                logger.info(f"[QQMigration] 自动绑定完成：共绑定 {total_bound} 个玩家")
+        except Exception as e:
+            logger.error(f"[QQMigration] 自动迁移失败: {e}")
+
+    async def _resolve_player_by_at(
+        self, group_id: str, at_user_id: Optional[str], event: AstrMessageEvent
+    ) -> Tuple[Optional[Player], Optional[str]]:
+        """通过 @用户 → 名片词 → DB 匹配，解析出目标玩家。
+        返回 (player, error_message)。成功时 error_message=None；
+        失败或歧义时 player=None 且 error_message 已给出。
+        """
+        if not at_user_id:
+            return None, None
+        try:
+            info = await event.bot.get_group_member_info(
+                group_id=int(group_id), user_id=int(at_user_id)
+            )
+            card = info.get("card") or info.get("nickname") or ""
+        except Exception:
+            return None, None
+        if not card:
+            return None, None
+        words = self._extract_card_words(card)
+        matched = []
+        for w in words:
+            p = await self.db_manager.get_player_by_name(group_id, w)
+            if p:
+                matched.append(p)
+        if len(matched) == 1:
+            return matched[0], None
+        if len(matched) > 1:
+            names = "、".join(p.player_name for p in matched)
+            return None, f"名片匹配到多个玩家（{names}），请直接指定玩家名。"
+        return None, None
 
     async def _get_valid_pending_gift(self, group_id: str, receiver_id: str,
                                        max_age_seconds: int = 240) -> Optional[dict]:
@@ -429,11 +547,11 @@ class FaithLadderPlugin(Star):
                 return None, "", "请指定玩家名。"
             return target, rest, None
         else:
-            # 非诸神：只能查自己，无视后面的参数
-            self_name = await self._resolve_player_name(event)
-            if not self_name:
-                return None, "", "无法识别你的身份，请确认群名片格式正确。"
-            return self_name, "", None
+            # 非诸神：只能查自己，无视后面的参数（优先 QQ 绑定，回退名片识别）
+            self_player = await self._resolve_self_player_lenient(event)
+            if not self_player:
+                return None, "", "无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。"
+            return self_player.player_name, "", None
 
     async def _find_member_by_name(
         self, event: AstrMessageEvent, player_name: str
@@ -565,6 +683,7 @@ class FaithLadderPlugin(Star):
         """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户（诸神专用）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
+        await self._maybe_trigger_qq_migration(event)
 
         args = self._get_args(event, "查询")
         if not args:
@@ -603,12 +722,14 @@ class FaithLadderPlugin(Star):
                     yield event.plain_result(error)
                     return
         else:
-            # 非诸神：无视所有参数，直接查自己
-            self_name = await self._resolve_player_name(event)
-            if not self_name:
-                yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+            # 非诸神：无视所有参数，直接查自己（优先 QQ 绑定，回退名片识别）
+            self_player = await self._resolve_self_player_lenient(event)
+            if not self_player:
+                yield event.plain_result(
+                    "无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。"
+                )
                 return
-            target_name = self_name
+            target_name = self_player.player_name
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
         cd_key = f"{user_id}:query"
@@ -894,9 +1015,11 @@ class FaithLadderPlugin(Star):
             target_info = f"（对应群名片：{target_card}，QQ: {member_id}）"
 
         # 直接注册玩家
+        # @ 路径：绑定被录入者的 QQ；无 @ 路径：不自动绑定（避免诸神录入者自己的 QQ 被占用）
+        qq_to_bind = at_user_id if at_user_id else None
         success, message = await self.ladder_service.register_player(
             group_id, player_name, faith_name, class_name,
-            ladder_score, pilgrimage_score, user_id
+            ladder_score, pilgrimage_score, user_id, qq_id=qq_to_bind
         )
 
         # 注册成功时，如果使用了@，则@被录入玩家并提醒
@@ -904,10 +1027,152 @@ class FaithLadderPlugin(Star):
             from astrbot.core.message.components import At, Plain
             yield event.chain_result([
                 At(qq=int(at_user_id)),
-                Plain(text=" 请及时进行谕行（或说出祷词），否则将取消录入")
+                Plain(text=" 请及时进行谕行（或说出祷词），否则将取消录入\n已自动绑定你的 QQ，后续可使用需鉴权的指令。")
             ])
         else:
             yield event.plain_result(message + target_info)
+
+    # === 绑定 QQ ===
+
+    @filter.command("绑定QQ", alias={"bindqq", "绑定qq"})
+    async def cmd_bind_qq(self, event: AstrMessageEvent):
+        """为指定玩家绑定 QQ（诸神权限）。
+        格式：绑定QQ @用户 或 绑定QQ <玩家名>
+        一个 QQ 在同一群只能绑定一个玩家。"""
+        group_id = self._get_group_id(event)
+        if not await self._check_perm(event):
+            yield event.plain_result("只有诸神才能为玩家绑定 QQ。")
+            return
+
+        at_user_id = await self._get_at_user_id(event)
+        args = self._get_args(event, "绑定QQ")
+
+        # 解析目标 QQ 和目标玩家
+        target_qq = None
+        player = None
+
+        # 提取参数中的第一个词作为候选玩家名（用于 @ 解析失败时回退）
+        cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip() if args else ""
+        parts = cleaned.split()
+        player_name_arg = parts[0] if parts else None
+
+        if at_user_id:
+            target_qq = str(at_user_id)
+            player, err = await self._resolve_player_by_at(group_id, at_user_id, event)
+            if err:
+                yield event.plain_result(err)
+                return
+        if not player and player_name_arg:
+            # @ 解析不出 → 尝试参数里的玩家名
+            player = await self.db_manager.get_player_by_name(group_id, player_name_arg)
+            if not player:
+                yield event.plain_result(f"玩家 {player_name_arg} 不存在。")
+                return
+            if not target_qq:
+                # 没 @ 走的是玩家名路径 → 反查其 QQ
+                member = await self._find_member_by_name(event, player.player_name)
+                if not member:
+                    yield event.plain_result(
+                        f"无法在群成员中找到 {player.player_name}，请改用「绑定QQ @用户」格式。"
+                    )
+                    return
+                target_qq = str(member.get("user_id"))
+
+        if not player or not target_qq:
+            yield event.plain_result(
+                "用法：绑定QQ @用户\n"
+                "   或：绑定QQ <玩家名>"
+            )
+            return
+
+        # 检查 QQ 唯一约束
+        existing = await self.db_manager.get_player_by_qq(group_id, target_qq)
+        if existing and existing.player_id != player.player_id:
+            yield event.plain_result(
+                f"QQ {target_qq} 已绑定到玩家 {existing.player_name}，"
+                "一个 QQ 在同一群只能绑定一个玩家。"
+            )
+            return
+
+        if player.qq_id == target_qq:
+            yield event.plain_result(f"玩家 {player.player_name} 已绑定 QQ {target_qq}，无需重复绑定。")
+            return
+
+        ok = await self.db_manager.set_player_qq(group_id, player.player_id, target_qq)
+        if not ok:
+            yield event.plain_result("绑定失败：QQ 已被其他玩家绑定。")
+            return
+
+        yield event.plain_result(
+            f"已绑定：玩家 {player.player_name} ↔ QQ {target_qq}\n"
+            "后续该玩家可使用需鉴权的指令（赠送/接受/拒绝道具等）。"
+        )
+
+    # === 换绑 QQ ===
+
+    @filter.command("换绑QQ", alias={"rebindqq", "换绑qq"})
+    async def cmd_rebind_qq(self, event: AstrMessageEvent):
+        """为玩家换绑 QQ（诸神权限）。
+        格式：
+          换绑QQ @新QQ所属用户 <玩家名>    — 把玩家绑到 @ 用户的 QQ
+          换绑QQ <玩家名> <新QQ号>          — 直接指定新 QQ 号
+        若新 QQ 已绑其他玩家，提示先解绑/换绑。"""
+        group_id = self._get_group_id(event)
+        if not await self._check_perm(event):
+            yield event.plain_result("只有诸神才能为玩家换绑 QQ。")
+            return
+
+        args = self._get_args(event, "换绑QQ")
+        cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip() if args else ""
+        parts = cleaned.split()
+        at_user_id = await self._get_at_user_id(event)
+
+        new_qq = None
+        player = None
+
+        if at_user_id:
+            # 路径 1：@ 指定新 QQ 所属用户，参数里给玩家名
+            new_qq = str(at_user_id)
+            if not parts:
+                yield event.plain_result(
+                    "用法：换绑QQ @新QQ用户 <玩家名>\n"
+                    "请指定要换绑的玩家名（@ 的 QQ 将成为新绑定）。"
+                )
+                return
+            player = await self.db_manager.get_player_by_name(group_id, parts[0])
+            if not player:
+                yield event.plain_result(f"玩家 {parts[0]} 不存在。")
+                return
+        else:
+            # 路径 2：<玩家名> <新QQ号>
+            if len(parts) < 2:
+                yield event.plain_result(
+                    "用法：换绑QQ @新QQ用户 <玩家名>\n"
+                    "   或：换绑QQ <玩家名> <新QQ号>"
+                )
+                return
+            player = await self.db_manager.get_player_by_name(group_id, parts[0])
+            if not player:
+                yield event.plain_result(f"玩家 {parts[0]} 不存在。")
+                return
+            new_qq = parts[1]
+
+        # 执行换绑
+        ok, msg, old_qq = await self.db_manager.rebind_player_qq(
+            group_id, player.player_id, new_qq
+        )
+        if not ok:
+            yield event.plain_result(msg)
+            return
+
+        if old_qq:
+            yield event.plain_result(
+                f"已换绑：玩家 {player.player_name} 的 QQ {old_qq} → {new_qq}"
+            )
+        else:
+            yield event.plain_result(
+                f"已绑定：玩家 {player.player_name} 首次绑定 QQ {new_qq}"
+            )
 
     # === 设置职业（仅职业） ===
 
@@ -1249,12 +1514,14 @@ class FaithLadderPlugin(Star):
                 return
             names = args.split()
         else:
-            # 非诸神：只能查自己，无视后面的参数
-            self_name = await self._resolve_player_name(event)
-            if not self_name:
-                yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+            # 非诸神：只能查自己，无视后面的参数（优先 QQ 绑定，回退名片识别）
+            self_player = await self._resolve_self_player_lenient(event)
+            if not self_player:
+                yield event.plain_result(
+                    "无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。"
+                )
                 return
-            names = [self_name]
+            names = [self_player.player_name]
 
         results = []
         not_found = []
@@ -1579,14 +1846,26 @@ class FaithLadderPlugin(Star):
     @filter.command("赠送道具")
     async def cmd_gift_item(self, event: AstrMessageEvent):
         """赠送道具。格式: 赠送道具 <接收方名> <道具*数量>
-        发送方自动为命令发送者（从群名片识别），直接扣除道具，等待接收方接受/拒绝。"""
+        发送方由发送者 QQ 绑定鉴权（防名片冒充），接收方仍按玩家名查找。"""
         group_id = self._get_group_id(event)
+        await self._maybe_trigger_qq_migration(event)
 
-        # 发送方 = 自己（从群名片识别）
-        sender_name = await self._resolve_player_name(event)
-        if not sender_name:
-            yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+        # 发送方 = 自己（QQ 绑定鉴权）
+        sender_player = await self._resolve_self_player(event)
+        if not sender_player:
+            name = await self._resolve_player_name(event)
+            if name:
+                yield event.plain_result(
+                    f"玩家 {name} 尚未绑定 QQ，无法赠送道具。\n"
+                    "请让诸神使用「绑定QQ @你」完成绑定。"
+                )
+            else:
+                yield event.plain_result(
+                    "你尚未绑定 QQ，无法赠送道具。\n"
+                    "请让诸神使用「绑定QQ @你」完成绑定。"
+                )
             return
+        sender_name = sender_player.player_name
 
         args = self._get_args(event, "赠送道具")
         if not args:
@@ -1608,12 +1887,7 @@ class FaithLadderPlugin(Star):
 
         item_raw, quantity = items[0]
 
-        # 查找发送方和接收方
-        sender_player = await self.db_manager.get_player_by_name(group_id, sender_name)
-        if not sender_player:
-            yield event.plain_result(f"玩家 {sender_name} 不存在。")
-            return
-
+        # 查找接收方
         receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
         if not receiver_player:
             yield event.plain_result(f"玩家 {receiver_name} 不存在。")
@@ -1677,39 +1951,40 @@ class FaithLadderPlugin(Star):
 
         if is_god and args:
             # 诸神可指定接收方（跳过名片检测）
-            receiver_name = None
             at_user_id = await self._get_at_user_id(event)
+            receiver_player = None
             if at_user_id:
-                try:
-                    info = await event.bot.get_group_member_info(
-                        group_id=int(group_id), user_id=int(at_user_id)
-                    )
-                    card = info.get("card") or info.get("nickname") or ""
-                    if card:
-                        parsed = self._parse_card_info(card)
-                        receiver_name = parsed.get("player_name")
-                except Exception:
-                    pass
-            if not receiver_name:
+                receiver_player, err = await self._resolve_player_by_at(group_id, at_user_id, event)
+                if err:
+                    yield event.plain_result(err)
+                    return
+            if not receiver_player:
                 # 没 @ 或 @ 解析失败，从参数文本取第一个词
                 cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip()
                 parts = cleaned.split()
-                receiver_name = parts[0] if parts else None
-            if not receiver_name:
+                if parts:
+                    receiver_player = await self.db_manager.get_player_by_name(group_id, parts[0])
+            if not receiver_player:
                 yield event.plain_result("无法识别接收方，请指定玩家名或 @ 玩家。")
                 return
+            receiver_id = str(receiver_player.player_id)
         else:
-            # 所有人默认通过群名片识别
-            receiver_name = await self._resolve_player_name(event)
-            if not receiver_name:
-                yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
+            # 所有人默认通过 QQ 绑定鉴权（防名片冒充）
+            receiver_player = await self._resolve_self_player(event)
+            if not receiver_player:
+                name = await self._resolve_player_name(event)
+                if name:
+                    yield event.plain_result(
+                        f"玩家 {name} 尚未绑定 QQ，无法接受道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                else:
+                    yield event.plain_result(
+                        "你尚未绑定 QQ，无法接受道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
                 return
-
-        receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
-        if not receiver_player:
-            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
-            return
-        receiver_id = str(receiver_player.player_id)
+            receiver_id = str(receiver_player.player_id)
 
         gift = await self._get_valid_pending_gift(group_id, receiver_id)
         if not gift:
@@ -1735,22 +2010,46 @@ class FaithLadderPlugin(Star):
 
     @filter.command("拒绝道具")
     async def cmd_reject_gift(self, event: AstrMessageEvent):
-        """接收方拒绝赠送（诸神权限），无需参数。"""
+        """接收方拒绝赠送，无需参数。诸神可带参数指定接收玩家（跳过 QQ 绑定检测）。"""
         group_id = self._get_group_id(event)
-        if not await self._check_perm(event):
-            yield event.plain_result("权限不足：只有诸神才能拒绝赠送。")
-            return
+        is_god = await self._check_perm(event)
+        args = self._get_args(event, "拒绝道具")
 
-        # 通过群名片识别玩家名，再查找 player_id（与 cmd_gift_item 存储键一致）
-        receiver_name = await self._resolve_player_name(event)
-        if not receiver_name:
-            yield event.plain_result("无法识别你的身份，请确认群名片格式正确。")
-            return
-        receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
-        if not receiver_player:
-            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
-            return
-        receiver_id = str(receiver_player.player_id)
+        if is_god and args:
+            # 诸神可指定接收方（跳过 QQ 绑定检测）
+            at_user_id = await self._get_at_user_id(event)
+            receiver_player = None
+            if at_user_id:
+                receiver_player, err = await self._resolve_player_by_at(group_id, at_user_id, event)
+                if err:
+                    yield event.plain_result(err)
+                    return
+            if not receiver_player:
+                cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip()
+                parts = cleaned.split()
+                if parts:
+                    receiver_player = await self.db_manager.get_player_by_name(group_id, parts[0])
+            if not receiver_player:
+                yield event.plain_result("无法识别接收方，请指定玩家名或 @ 玩家。")
+                return
+            receiver_id = str(receiver_player.player_id)
+        else:
+            # 所有人默认通过 QQ 绑定鉴权（防名片冒充）
+            receiver_player = await self._resolve_self_player(event)
+            if not receiver_player:
+                name = await self._resolve_player_name(event)
+                if name:
+                    yield event.plain_result(
+                        f"玩家 {name} 尚未绑定 QQ，无法拒绝道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                else:
+                    yield event.plain_result(
+                        "你尚未绑定 QQ，无法拒绝道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                return
+            receiver_id = str(receiver_player.player_id)
 
         gift = await self._get_valid_pending_gift(group_id, receiver_id)
         if not gift:

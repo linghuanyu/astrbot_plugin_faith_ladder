@@ -3,7 +3,7 @@ Ladder service - core business logic for score management.
 """
 
 import re
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable, Awaitable
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.message_formatter import (
@@ -285,11 +285,13 @@ class LadderService:
         ladder_score: int,
         pilgrimage_score: int,
         operator_id: str,
+        qq_id: Optional[str] = None,
     ) -> tuple[bool, str]:
         """
         Register a new player with class, faith, and initial scores.
+        Optionally bind a QQ ID to the new player (one QQ ↔ one player per group).
         Returns (success, message).
-        All 3 DB operations are committed atomically.
+        All operations are committed atomically.
         """
         # Validate class
         if not Player.validate_class(class_name):
@@ -303,6 +305,15 @@ class LadderService:
         existing = await self.db.get_player_by_name(group_id, player_name)
         if existing:
             return False, f"玩家 {player_name} 已存在，无法重复录入。"
+
+        # Check QQ uniqueness up-front (friendly error before inserting)
+        if qq_id:
+            existing_qq = await self.db.get_player_by_qq(group_id, str(qq_id))
+            if existing_qq:
+                return False, (
+                    f"QQ {qq_id} 已被玩家 {existing_qq.player_name} 绑定，"
+                    "一个 QQ 在同一群只能绑定一个玩家。"
+                )
 
         # Create player with specified scores (atomic: 3 operations in one transaction)
         player_id = f"name:{player_name}"
@@ -321,9 +332,19 @@ class LadderService:
             operator_id, f"录入玩家: {player_name}"
         )
 
-        # Commit all 3 operations atomically
+        # Bind QQ if provided
+        qq_binding_ok = False
+        if qq_id:
+            qq_binding_ok = await self.db.set_player_qq(group_id, player_id, str(qq_id))
+            if not qq_binding_ok:
+                # Race: another player bound this QQ between our check and now
+                await self.db.rollback()
+                return False, f"QQ {qq_id} 已被其他玩家绑定，注册回滚。"
+
+        # Commit all operations atomically
         await self.db.commit()
 
+        qq_line = f"\n绑定 QQ: {qq_id}" if qq_id and qq_binding_ok else ""
         return True, (
             f"=== 玩家信息 ===\n"
             f"姓名: {player_name}\n"
@@ -331,6 +352,7 @@ class LadderService:
             f"信仰: {faith_name}\n"
             f"登神之路: {ladder_score}\n"
             f"觐见之梯: {pilgrimage_score}"
+            f"{qq_line}"
         )
 
     # === 批量录入 ===
@@ -607,8 +629,12 @@ class LadderService:
         await self.db.commit()
         return True, f"已收到 {format_item_display(item_name, grade, quantity)}"
 
-    async def cleanup_expired_gifts(self, max_age_seconds: int = 240) -> int:
-        """清理超时的待处理赠送，退回道具给发送方。返回退回数量。"""
+    async def cleanup_expired_gifts(
+        self, max_age_seconds: int = 240,
+        notify: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    ) -> int:
+        """清理超时的待处理赠送，退回道具给发送方。返回退回数量。
+        notify(group_id, text) 用于向原群发送超时通知，可选。"""
         expired = await self.db.get_expired_pending_gifts(max_age_seconds)
         refunded = 0
         for gift in expired:
@@ -620,10 +646,19 @@ class LadderService:
                 )
                 await self.db.delete_pending_gift(gift["group_id"], gift["receiver_id"])
                 refunded += 1
+                display = format_item_display(items["item_name"], items.get("grade"), items["quantity"])
                 logger.info(
                     f"[GiftCleanup] 超时退回：{gift['sender_name']} -> {gift['receiver_name']} "
-                    f"({items['item_name']} x{items['quantity']})"
+                    f"({display})"
                 )
+                if notify:
+                    try:
+                        await notify(
+                            gift["group_id"],
+                            f"⏰ 赠送超时自动退回：{gift['sender_name']} → {gift['receiver_name']} 的 {display} 已退回发送方"
+                        )
+                    except Exception as e:
+                        logger.error(f"[GiftCleanup] 通知发送失败: {e}")
             except Exception as e:
                 logger.error(f"[GiftCleanup] 退回失败（{gift['sender_name']} -> {gift['receiver_name']}）: {e}")
         return refunded

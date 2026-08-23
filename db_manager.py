@@ -7,7 +7,7 @@ import asyncio
 import aiosqlite
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 
 from astrbot_plugin_faith_ladder.models import Player
@@ -21,6 +21,13 @@ except ImportError:
 
 class DatabaseManager:
     """Manages all database operations for the faith ladder plugin."""
+
+    # Column list for players SELECT queries (kept in one place so schema changes
+    # only need to be updated here + in _row_to_player).
+    _PLAYER_COLUMNS = (
+        "player_id, group_id, player_name, class, faith, "
+        "ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id"
+    )
 
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -142,6 +149,9 @@ class DatabaseManager:
 
         # Migrate: add grade column to player_items
         await self._migrate_items_add_grade()
+
+        # Migrate: add qq_id column to players (QQ binding for anti-impersonation)
+        await self._migrate_qq_id()
 
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
@@ -287,6 +297,22 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"[Migration] Item grade migration failed (will retry on next startup): {e}")
 
+    async def _migrate_qq_id(self):
+        """Add qq_id column + unique-per-group index to players table.
+        SQLite UNIQUE allows multiple NULLs, so unbound rows don't violate the index.
+        """
+        async with self._db.execute("PRAGMA table_info(players)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if "qq_id" not in columns:
+            await self._db.execute("ALTER TABLE players ADD COLUMN qq_id TEXT")
+            await self._db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_qq "
+                "ON players(group_id, qq_id)"
+            )
+            await self._db.commit()
+            logger.info("[Migration] Added qq_id column + idx_players_qq to players")
+
     async def _migrate_whitelist(self):
         """Migrate whitelist table from per-group to global if needed."""
         async with self._db.execute("PRAGMA table_info(whitelist)") as cursor:
@@ -319,7 +345,8 @@ class DatabaseManager:
             player_id=row[0], group_id=row[1], player_name=row[2],
             class_=row[3], faith=row[4], ladder_score=row[5],
             pilgrimage_score=row[6], created_at=row[7], updated_at=row[8],
-            oathbreaker=bool(row[9]) if len(row) > 9 else False
+            oathbreaker=bool(row[9]) if len(row) > 9 else False,
+            qq_id=row[10] if len(row) > 10 else None,
         )
 
     async def upsert_player(
@@ -328,7 +355,7 @@ class DatabaseManager:
     ) -> Player:
         """Create or update a player record. New players get initial scores."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker FROM players WHERE player_id = ? AND group_id = ?",
+            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -342,7 +369,7 @@ class DatabaseManager:
                 )
                 await self._db.commit()
                 async with self._db.execute(
-                    "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker FROM players WHERE player_id = ? AND group_id = ?",
+                    "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
                     (player_id, group_id)
                 ) as cursor:
                     updated_row = await cursor.fetchone()
@@ -363,7 +390,7 @@ class DatabaseManager:
     async def get_player(self, group_id: str, player_id: str) -> Optional[Player]:
         """Get a player by ID and group."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker FROM players WHERE player_id = ? AND group_id = ?",
+            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -374,7 +401,7 @@ class DatabaseManager:
     async def get_player_by_name(self, group_id: str, player_name: str) -> Optional[Player]:
         """Get a player by name and group (case-sensitive)."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker FROM players WHERE group_id = ? AND player_name = ?",
+            f"SELECT {self._PLAYER_COLUMNS} FROM players WHERE group_id = ? AND player_name = ?",
             (group_id, player_name)
         ) as cursor:
             row = await cursor.fetchone()
@@ -382,10 +409,83 @@ class DatabaseManager:
                 return None
             return self._row_to_player(row)
 
+    async def get_player_by_qq(self, group_id: str, qq_id: str) -> Optional[Player]:
+        """Get a player by bound QQ ID and group. Returns None if no binding."""
+        async with self._db.execute(
+            f"SELECT {self._PLAYER_COLUMNS} FROM players WHERE group_id = ? AND qq_id = ?",
+            (group_id, str(qq_id))
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_player(row)
+
+    async def set_player_qq(self, group_id: str, player_id: str, qq_id: str) -> bool:
+        """Bind a QQ ID to a player. Returns True on success, False on unique conflict."""
+        qq_id = str(qq_id)
+        # Check existing binding for this QQ (same or different player)
+        async with self._db.execute(
+            "SELECT player_id FROM players WHERE group_id = ? AND qq_id = ?",
+            (group_id, qq_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0] != player_id:
+                return False  # QQ already bound to another player in this group
+        await self._db.execute(
+            "UPDATE players SET qq_id = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE group_id = ? AND player_id = ?",
+            (qq_id, group_id, player_id)
+        )
+        await self._db.commit()
+        return True
+
+    async def rebind_player_qq(
+        self, group_id: str, player_id: str, new_qq: str
+    ) -> Tuple[bool, str, Optional[str]]:
+        """换绑玩家 QQ：先清除该玩家旧绑定，再绑定到新 QQ。
+        返回 (success, message, old_qq)。若 new_qq 已被其他玩家占用，返回冲突错误。
+        """
+        new_qq = str(new_qq)
+        # 1) 查旧绑定
+        async with self._db.execute(
+            "SELECT qq_id FROM players WHERE group_id = ? AND player_id = ?",
+            (group_id, player_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            old_qq = row[0] if row else None
+
+        # 2) 若新 QQ 已被其他玩家占用 → 拒绝
+        async with self._db.execute(
+            "SELECT player_id, player_name FROM players WHERE group_id = ? AND qq_id = ?",
+            (group_id, new_qq)
+        ) as cursor:
+            conflict = await cursor.fetchone()
+            if conflict and conflict[0] != player_id:
+                return False, f"QQ {new_qq} 已被玩家 {conflict[1]} 绑定，请先让其换绑或解绑。", old_qq
+
+        # 3) 更新为新 QQ
+        await self._db.execute(
+            "UPDATE players SET qq_id = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE group_id = ? AND player_id = ?",
+            (new_qq, group_id, player_id)
+        )
+        await self._db.commit()
+        return True, "换绑成功", old_qq
+
+    async def list_unbound_players(self, group_id: str) -> List[Player]:
+        """List players in a group that have no QQ binding yet."""
+        async with self._db.execute(
+            f"SELECT {self._PLAYER_COLUMNS} FROM players "
+            "WHERE group_id = ? AND qq_id IS NULL",
+            (group_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [self._row_to_player(r) for r in rows]
+
     async def get_top_players(self, group_id: str, limit: int = 10) -> List[Player]:
         """Get top players by ladder score for a group."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker FROM players WHERE group_id = ? ORDER BY ladder_score DESC LIMIT ?",
+            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY ladder_score DESC LIMIT ?",
             (group_id, limit)
         ) as cursor:
             rows = await cursor.fetchall()
@@ -394,7 +494,7 @@ class DatabaseManager:
     async def get_top_players_by_pilgrimage(self, group_id: str, limit: int = 10) -> List[Player]:
         """Get top players by pilgrimage score for a group."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker FROM players WHERE group_id = ? ORDER BY pilgrimage_score DESC LIMIT ?",
+            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY pilgrimage_score DESC LIMIT ?",
             (group_id, limit)
         ) as cursor:
             rows = await cursor.fetchall()

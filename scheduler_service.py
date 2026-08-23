@@ -27,7 +27,8 @@ class SchedulerService:
         get_output_mode: Optional[Callable[[str], Awaitable[str]]] = None,
         purge_score_history: Optional[Callable[[int], Awaitable[int]]] = None,
         purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
-        cleanup_expired_gifts: Optional[Callable[[], Awaitable[int]]] = None,
+        cleanup_expired_gifts: Optional[Callable[..., Awaitable[int]]] = None,
+        notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ):
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
@@ -40,6 +41,7 @@ class SchedulerService:
         self._purge_score_history = purge_score_history
         self._purge_expired_statuses = purge_expired_statuses
         self._cleanup_expired_gifts = cleanup_expired_gifts
+        self._notify_gift_timeout = notify_gift_timeout
         self._get_config = get_config
         self._send_to_group = send_to_group
         self._get_active_groups = get_active_groups
@@ -147,7 +149,9 @@ class SchedulerService:
             try:
                 if self._cleanup_expired_gifts:
                     try:
-                        refunded = await self._cleanup_expired_gifts()
+                        refunded = await self._cleanup_expired_gifts(
+                            notify=self._notify_gift_timeout
+                        )
                         if refunded > 0:
                             logger.info(f"Cleaned up {refunded} expired pending gifts")
                     except Exception as e:
