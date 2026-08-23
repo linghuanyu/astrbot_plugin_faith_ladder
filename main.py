@@ -199,7 +199,7 @@ class FaithLadderPlugin(Star):
         return has_permission or is_admin
 
     async def _get_valid_pending_gift(self, group_id: str, receiver_id: str,
-                                       max_age_seconds: int = 86400) -> Optional[dict]:
+                                       max_age_seconds: int = 240) -> Optional[dict]:
         """获取有效的待处理赠送（未超时）。超时则自动退回发送方并返回 None。"""
         gift_key = (group_id, receiver_id)
         gift = self._pending_gifts_receive.get(gift_key)

@@ -977,7 +977,7 @@ class DatabaseManager:
         )
         await self._db.commit()
 
-    async def get_expired_pending_gifts(self, max_age_seconds: int = 86400) -> list:
+    async def get_expired_pending_gifts(self, max_age_seconds: int = 240) -> list:
         """获取所有超过 max_age_seconds 秒的待处理赠送记录。"""
         from datetime import datetime, timezone, timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).strftime("%Y-%m-%d %H:%M:%S")
