@@ -481,6 +481,7 @@ class LadderService:
 
         except Exception as e:
             logger.error(f"Batch update failed, rolling back: {e}")
+            await self.db.rollback()
             return 0, [], [entry["name"] for entry in parsed_list]
 
         return success_count, success_details, skipped

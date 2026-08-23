@@ -117,6 +117,17 @@ class DatabaseManager:
                 ON player_statuses(group_id, player_id);
             CREATE INDEX IF NOT EXISTS idx_statuses_expire
                 ON player_statuses(expire_at);
+
+            CREATE TABLE IF NOT EXISTS pending_gifts (
+                group_id TEXT NOT NULL,
+                receiver_id TEXT NOT NULL,
+                sender_id TEXT NOT NULL,
+                sender_name TEXT NOT NULL,
+                receiver_name TEXT NOT NULL,
+                items_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, receiver_id)
+            );
         """)
         await self._db.commit()
 
@@ -846,8 +857,8 @@ class DatabaseManager:
         """添加状态。从当前时间开始持续 days 天。"""
         if days <= 0:
             return
-        from datetime import datetime, timedelta
-        expire_at = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        from datetime import datetime, timedelta, timezone
+        expire_at = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
         await self._db.execute(
             "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at) "
             "VALUES (?, ?, ?, ?) "
@@ -874,8 +885,8 @@ class DatabaseManager:
 
     async def get_player_statuses(self, group_id: str, player_id: str) -> list:
         """获取玩家未过期的状态列表。返回 [{"status_name": str, "expire_at": str, "remaining_days": int}, ...]"""
-        from datetime import datetime
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         async with self._db.execute(
             "SELECT status_name, expire_at FROM player_statuses "
             "WHERE group_id = ? AND player_id = ? AND expire_at > ? "
@@ -884,9 +895,9 @@ class DatabaseManager:
         ) as cursor:
             rows = await cursor.fetchall()
             result = []
-            now_dt = datetime.now()
+            now_dt = datetime.now(timezone.utc)
             for r in rows:
-                expire_dt = datetime.strptime(r[1], "%Y-%m-%d %H:%M:%S")
+                expire_dt = datetime.strptime(r[1], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 delta = expire_dt - now_dt
                 # 按日历天计算：向上取整（不足一天算一天）
                 remaining = max(0, delta.days + (1 if delta.seconds > 0 else 0))
@@ -899,8 +910,8 @@ class DatabaseManager:
 
     async def purge_expired_statuses(self) -> int:
         """清理所有过期状态记录。返回删除数量。"""
-        from datetime import datetime
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         cursor = await self._db.execute(
             "DELETE FROM player_statuses WHERE expire_at <= ?",
             (now,)
@@ -917,3 +928,51 @@ class DatabaseManager:
         """Commit the current transaction. Exposed for multi-step atomic operations."""
         if self._db:
             await self._db.commit()
+
+    async def rollback(self):
+        """Rollback the current transaction. Used on error to discard uncommitted writes."""
+        if self._db:
+            try:
+                await self._db.execute("ROLLBACK")
+            except Exception:
+                pass
+
+    # === 待处理赠送 ===
+
+    async def save_pending_gift(self, group_id: str, receiver_id: str,
+                                 sender_id: str, sender_name: str,
+                                 receiver_name: str, items_json: str) -> None:
+        """保存待处理赠送记录。"""
+        await self._db.execute(
+            "INSERT OR REPLACE INTO pending_gifts "
+            "(group_id, receiver_id, sender_id, sender_name, receiver_name, items_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (group_id, receiver_id, sender_id, sender_name, receiver_name, items_json)
+        )
+        await self._db.commit()
+
+    async def get_pending_gift(self, group_id: str, receiver_id: str) -> Optional[dict]:
+        """获取待处理赠送记录。返回 dict 或 None。"""
+        async with self._db.execute(
+            "SELECT sender_id, sender_name, receiver_name, items_json FROM pending_gifts "
+            "WHERE group_id = ? AND receiver_id = ?",
+            (group_id, receiver_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            import json
+            return {
+                "sender_id": row[0],
+                "sender_name": row[1],
+                "receiver_name": row[2],
+                "items": json.loads(row[3]),
+            }
+
+    async def delete_pending_gift(self, group_id: str, receiver_id: str) -> None:
+        """删除待处理赠送记录。"""
+        await self._db.execute(
+            "DELETE FROM pending_gifts WHERE group_id = ? AND receiver_id = ?",
+            (group_id, receiver_id)
+        )
+        await self._db.commit()

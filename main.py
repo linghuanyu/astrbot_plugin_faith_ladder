@@ -27,7 +27,7 @@ from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS
-from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer
+# from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer  # 暂时禁用图片渲染
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 
 
@@ -47,7 +47,7 @@ class FaithLadderPlugin(Star):
         self.db_manager = DatabaseManager(self.data_dir)
         self.ladder_service = LadderService(self.db_manager)
         self.cooldown_manager = CooldownManager()
-        self.image_renderer = ImageRenderer(self)
+        # self.image_renderer = ImageRenderer(self)  # 暂时禁用图片渲染
 
         try:
             self.permission_service = PermissionService(
@@ -63,7 +63,7 @@ class FaithLadderPlugin(Star):
 
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
-        self._pending_gifts_receive = None  # 当前待确认的赠送（接收阶段）
+        self._pending_gifts_receive = {}  # (group_id, receiver_id) -> gift_dict（内存缓存）
 
         # 加载具体职业映射
         self._specific_classes = {}  # specific_class_name -> (faith, basic_class)
@@ -138,7 +138,7 @@ class FaithLadderPlugin(Star):
             get_pilgrimage_text=self.ladder_service.get_pilgrimage_leaderboard_text,
             get_leaderboard_players=self.ladder_service.get_leaderboard_players,
             get_pilgrimage_players=self.ladder_service.get_pilgrimage_leaderboard_players,
-            image_renderer=self.image_renderer,
+            image_renderer=None,  # 暂时禁用图片渲染
             get_output_mode=get_output_mode,
             get_config=lambda: dict(self.config),
             send_to_group=send_to_group,
@@ -191,41 +191,49 @@ class FaithLadderPlugin(Star):
             pass
         return False
 
-    async def _render_and_send(
-        self,
-        event: AstrMessageEvent,
-        group_id: str,
-        is_ladder: bool,
-        render_func,
-        get_text_func,
-        limit: int
-    ):
-        """Render image and send, with fallback to text on failure."""
-        players = await render_func(group_id, limit)
-        if not players:
-            yield event.plain_result("暂无排名数据。")
-            return
+    async def _check_perm(self, event: AstrMessageEvent) -> bool:
+        """检查诸神/管理员权限。返回 True 表示有权限，False 表示无权限。"""
+        user_id = str(event.get_sender_id())
+        has_permission = await self.permission_service.check_score_permission(user_id)
+        is_admin = self._is_plugin_admin(event)
+        return has_permission or is_admin
 
-        image_format = self.config.get("image_format", "PNG")
-        image_quality = self.config.get("image_quality", 90)
-
-        # Try image rendering (returns bytes)
-        if is_ladder:
-            image_bytes = await self.image_renderer.render_leaderboard_image(
-                players, limit, image_format=image_format, quality=image_quality
-            )
-        else:
-            image_bytes = await self.image_renderer.render_pilgrimage_image(
-                players, limit, image_format=image_format, quality=image_quality
-            )
-
-        if image_bytes:
-            from astrbot.api.message_components import Image
-            yield event.chain_result([Image.fromBytes(image_bytes)])
-        else:
-            # Fallback to text
-            text = await get_text_func(group_id, limit)
-            yield event.plain_result(text + "\n[图片渲染失败，已降级为文本]")
+    # === 图片渲染已暂时禁用 ===
+    # async def _render_and_send(
+    #     self,
+    #     event: AstrMessageEvent,
+    #     group_id: str,
+    #     is_ladder: bool,
+    #     render_func,
+    #     get_text_func,
+    #     limit: int
+    # ):
+    #     """Render image and send, with fallback to text on failure."""
+    #     players = await render_func(group_id, limit)
+    #     if not players:
+    #         yield event.plain_result("暂无排名数据。")
+    #         return
+    #
+    #     image_format = self.config.get("image_format", "PNG")
+    #     image_quality = self.config.get("image_quality", 90)
+    #
+    #     # Try image rendering (returns bytes)
+    #     if is_ladder:
+    #         image_bytes = await self.image_renderer.render_leaderboard_image(
+    #             players, limit, image_format=image_format, quality=image_quality
+    #         )
+    #     else:
+    #         image_bytes = await self.image_renderer.render_pilgrimage_image(
+    #             players, limit, image_format=image_format, quality=image_quality
+    #         )
+    #
+    #     if image_bytes:
+    #         from astrbot.api.message_components import Image
+    #         yield event.chain_result([Image.fromBytes(image_bytes)])
+    #     else:
+    #         # Fallback to text
+    #         text = await get_text_func(group_id, limit)
+    #         yield event.plain_result(text + "\n[图片渲染失败，已降级为文本]")
 
     # === 排行榜 ===
 
@@ -243,30 +251,17 @@ class FaithLadderPlugin(Star):
 
         # Cooldown check
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
-        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
-            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+        cd_key = f"{user_id}:ladder"
+        if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
             yield event.plain_result(f"排行榜冷却中，请 {remaining:.0f} 秒后再试。")
             return
-        self.cooldown_manager.set_cooldown(user_id)
+        self.cooldown_manager.set_cooldown(cd_key)
 
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
-        output_mode = await self.ladder_service.get_effective_output_mode(
-            group_id, self.config.get("output_mode", "text")
-        )
-
-        if output_mode == "image":
-            async for result in self._render_and_send(
-                event, group_id,
-                is_ladder=True,
-                render_func=self.ladder_service.get_leaderboard_players,
-                get_text_func=self.ladder_service.get_leaderboard_text,
-                limit=limit
-            ):
-                yield result
-        else:
-            text = await self.ladder_service.get_leaderboard_text(group_id, limit)
-            yield event.plain_result(text)
+        text = await self.ladder_service.get_leaderboard_text(group_id, limit)
+        yield event.plain_result(text)
 
     # === 觐见榜 ===
 
@@ -279,68 +274,55 @@ class FaithLadderPlugin(Star):
         # Permission check
         has_permission = await self.permission_service.check_score_permission(user_id)
         if not has_permission and not is_admin:
-            yield event.plain_result("权限不足: 区区凡人")
+            yield event.plain_result("权限不足：区区凡人")
             return
 
-        # Cooldown check (shared with 天梯榜)
+        # Cooldown check
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
-        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
-            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+        cd_key = f"{user_id}:pilgrimage"
+        if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
             yield event.plain_result(f"排行榜冷却中，请 {remaining:.0f} 秒后再试。")
             return
-        self.cooldown_manager.set_cooldown(user_id)
+        self.cooldown_manager.set_cooldown(cd_key)
 
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
-        output_mode = await self.ladder_service.get_effective_output_mode(
-            group_id, self.config.get("output_mode", "text")
-        )
+        text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
+        yield event.plain_result(text)
 
-        if output_mode == "image":
-            async for result in self._render_and_send(
-                event, group_id,
-                is_ladder=False,
-                render_func=self.ladder_service.get_pilgrimage_leaderboard_players,
-                get_text_func=self.ladder_service.get_pilgrimage_leaderboard_text,
-                limit=limit
-            ):
-                yield result
-        else:
-            text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
-            yield event.plain_result(text)
+    # === 输出模式切换（已暂时禁用） ===
 
-    # === 输出模式切换 ===
-
-    @filter.command("输出模式", alias={"outputmode", "模式切换"})
-    async def cmd_output_mode(self, event: AstrMessageEvent):
-        """切换输出模式（仅管理员）。格式: 输出模式 <text|image>"""
-        if not self._is_plugin_admin(event):
-            yield event.plain_result("权限不足：仅管理员可切换输出模式。")
-            return
-
-        group_id = self._get_group_id(event)
-
-        # Get argument
-        args = self._get_args(event, "输出模式")
-        if not args:
-            args = self._get_args(event, "outputmode") or self._get_args(event, "模式切换")
-
-        if not args or args not in ("text", "image"):
-            current_mode = await self.ladder_service.get_effective_output_mode(
-                group_id, self.config.get("output_mode", "text")
-            )
-            yield event.plain_result(
-                f"当前群输出模式: {current_mode}\n"
-                f"全局默认模式: {self.config.get('output_mode', 'text')}\n\n"
-                f"用法: 输出模式 <text|image>\n"
-                f"  text  - 纯文本输出\n"
-                f"  image - 图片输出"
-            )
-            return
-
-        # Store per-group mode in DB
-        await self.db_manager.set_group_output_mode(group_id, args)
-        yield event.plain_result(f"本群输出模式已切换为: {args}")
+    # @filter.command("输出模式", alias={"outputmode", "模式切换"})
+    # async def cmd_output_mode(self, event: AstrMessageEvent):
+    #     """切换输出模式（仅管理员）。格式: 输出模式 <text|image>"""
+    #     if not self._is_plugin_admin(event):
+    #         yield event.plain_result("权限不足：仅管理员可切换输出模式。")
+    #         return
+    #
+    #     group_id = self._get_group_id(event)
+    #
+    #     # Get argument
+    #     args = self._get_args(event, "输出模式")
+    #     if not args:
+    #         args = self._get_args(event, "outputmode") or self._get_args(event, "模式切换")
+    #
+    #     if not args or args not in ("text", "image"):
+    #         current_mode = await self.ladder_service.get_effective_output_mode(
+    #             group_id, self.config.get("output_mode", "text")
+    #         )
+    #         yield event.plain_result(
+    #             f"当前群输出模式: {current_mode}\n"
+    #             f"全局默认模式: {self.config.get('output_mode', 'text')}\n\n"
+    #             f"用法：输出模式 <text|image>\n"
+    #             f"  text  - 纯文本输出\n"
+    #             f"  image - 图片输出"
+    #         )
+    #         return
+    #
+    #     # Store per-group mode in DB
+    #     await self.db_manager.set_group_output_mode(group_id, args)
+    #     yield event.plain_result(f"本群输出模式已切换为: {args}")
 
     # === 群名片解析与玩家识别 ===
 
@@ -592,11 +574,12 @@ class FaithLadderPlugin(Star):
             target_name = self_name
 
         cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
-        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
-            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+        cd_key = f"{user_id}:query"
+        if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
             yield event.plain_result(f"查询冷却中，请 {remaining:.0f} 秒后再试。")
             return
-        self.cooldown_manager.set_cooldown(user_id)
+        self.cooldown_manager.set_cooldown(cd_key)
 
         text = await self.ladder_service.get_player_card_by_name(
             group_id, target_name,
@@ -629,8 +612,8 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if len(parts) != 3:
             yield event.plain_result(
-                f"用法: 录入积分 <玩家名> <天梯分变化> <觐见梯变化>\n"
-                f"示例: 录入积分 张三 100 50"
+                f"用法：录入积分 <玩家名> <天梯分变化> <觐见梯变化>\n"
+                f"示例：录入积分 张三 100 50"
             )
             return
 
@@ -645,7 +628,7 @@ class FaithLadderPlugin(Star):
             ladder_delta = int(ladder_str)
             pilgrimage_delta = int(pilgrimage_str)
         except ValueError:
-            yield event.plain_result("分数必须是整数。示例: 100 50 或 -20 10")
+            yield event.plain_result("分数必须是整数。示例：100 50 或 -20 10")
             return
 
         allow_negative = self.config.get("allow_negative_scores", True)
@@ -675,13 +658,14 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
-        # Cooldown check (shared with 天梯榜)
+        # Cooldown check
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
-        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
-            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+        cd_key = f"{user_id}:batch"
+        if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
             yield event.plain_result(f"批量录入冷却中，请 {remaining:.0f} 秒后再试。")
             return
-        self.cooldown_manager.set_cooldown(user_id)
+        self.cooldown_manager.set_cooldown(cd_key)
 
         # Extract text after command name
         args = self._get_args(event, "批量录入")
@@ -690,15 +674,15 @@ class FaithLadderPlugin(Star):
 
         if not args or not args.strip():
             yield event.plain_result(
-                "用法: 批量录入 后粘贴结算文本\n"
-                "示例: 批量录入 【玩家：XXX ...】【登神之路+16】【觐见之梯+2】..."
+                "用法：批量录入 后粘贴结算文本\n"
+                "示例：批量录入 【玩家：XXX ...】【登神之路+16】【觐见之梯+2】..."
             )
             return
 
         # Parse the text
         parsed_list, parse_err = self.ladder_service.parse_batch_scores(args.strip())
         if parse_err:
-            yield event.plain_result(f"解析失败: {parse_err}")
+            yield event.plain_result(f"解析失败：{parse_err}")
             return
 
         # Execute batch update
@@ -834,7 +818,7 @@ class FaithLadderPlugin(Star):
                 auto_info = f"\n从名片自动提取: 姓名={auto_name or '?'}, 信仰={auto_faith or '?'}, 职业={auto_class or '?'}"
             yield event.plain_result(
                 f"缺少必要参数: {', '.join(errors)}\n"
-                f"用法: 录入玩家 @用户 [姓名] [信仰] [职业] [登神之路分] [觐见分]\n"
+                f"用法：录入玩家 @用户 [姓名] [信仰] [职业] [登神之路分] [觐见分]\n"
                 f"  或: 录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]{auto_info}"
             )
             return
@@ -889,7 +873,7 @@ class FaithLadderPlugin(Star):
             from astrbot.core.message.components import At, Plain
             yield event.chain_result([
                 At(qq=int(at_user_id)),
-                Plain(text=" 请及时说出祷词，否则将取消录入")
+                Plain(text=" 请及时进行谕行（或说出祷词），否则将取消录入")
             ])
         else:
             yield event.plain_result(message + target_info)
@@ -914,7 +898,7 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if len(parts) != 2:
             yield event.plain_result(
-                f"用法: 设置职业 <玩家名> <职业>\n"
+                f"用法：设置职业 <玩家名> <职业>\n"
                 f"可选职业: {'/'.join(VALID_CLASSES)}"
             )
             return
@@ -946,11 +930,12 @@ class FaithLadderPlugin(Star):
         # Cooldown
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
         user_id = str(event.get_sender_id())
-        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
-            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+        cd_key = f"{user_id}:oath"
+        if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
             yield event.plain_result(f"冷却中，请 {remaining:.0f} 秒后再试。")
             return
-        self.cooldown_manager.set_cooldown(user_id)
+        self.cooldown_manager.set_cooldown(cd_key)
 
         args = self._get_args(event, "立誓")
         if not args:
@@ -959,7 +944,7 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if len(parts) != 2:
             yield event.plain_result(
-                f"用法: 立誓 <玩家名> <命途>\n"
+                f"用法：立誓 <玩家名> <命途>\n"
                 f"可选命途: {'/'.join(VALID_PATHS)}"
             )
             return
@@ -984,11 +969,12 @@ class FaithLadderPlugin(Star):
 
         # Cooldown
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
-        if not self.cooldown_manager.check_cooldown(user_id, cooldown_seconds):
-            remaining = self.cooldown_manager.get_remaining(user_id, cooldown_seconds)
+        cd_key = f"{user_id}:oath"
+        if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
+            remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
             yield event.plain_result(f"冷却中，请 {remaining:.0f} 秒后再试。")
             return
-        self.cooldown_manager.set_cooldown(user_id)
+        self.cooldown_manager.set_cooldown(cd_key)
 
         args = self._get_args(event, "弃誓")
         if not args:
@@ -997,8 +983,8 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if not parts or len(parts) > 2:
             yield event.plain_result(
-                f"用法: 弃誓 <玩家名> [新信仰]\n"
-                f"示例: 弃誓 张三\n"
+                f"用法：弃誓 <玩家名> [新信仰]\n"
+                f"示例：弃誓 张三\n"
                 f"      弃誓 张三 文明"
             )
             return
@@ -1063,7 +1049,7 @@ class FaithLadderPlugin(Star):
                 yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 2:
-                yield event.plain_result("用法: 天梯榜管理 删除 <玩家名>")
+                yield event.plain_result("用法：天梯榜管理 删除 <玩家名>")
                 return
             target_name = parts[1]
             deleted = await self.db_manager.delete_player_by_name(group_id, target_name)
@@ -1080,7 +1066,7 @@ class FaithLadderPlugin(Star):
                 yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 3:
-                yield event.plain_result("用法: 天梯榜管理 改名 <旧名> <新名>")
+                yield event.plain_result("用法：天梯榜管理 改名 <旧名> <新名>")
                 return
             old_name, new_name = parts[1], parts[2]
             max_name_len = self.config.get("player_name_max_length", 20)
@@ -1141,7 +1127,7 @@ class FaithLadderPlugin(Star):
     async def cmd_whitelist(self, event: AstrMessageEvent):
         """白名单管理。格式: 白名单 <add/remove/list> [类型] [ID]"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result( "权限不足: 仅管理员可管理诸神列表。")
+            yield event.plain_result( "权限不足：仅管理员可管理诸神列表。")
             return
 
         user_id = str(event.get_sender_id())
@@ -1152,7 +1138,7 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if not parts:
             yield event.plain_result(
-                f"用法: 白名单 <add/remove/list> [类型] [ID]\n"
+                f"用法：白名单 <add/remove/list> [类型] [ID]\n"
                 f"类型: user (用户) 或 group (群)"
             )
             return
@@ -1168,7 +1154,7 @@ class FaithLadderPlugin(Star):
             _, message = await self.permission_service.remove_from_whitelist(parts[1], parts[2])
             yield event.plain_result( message)
         else:
-            yield event.plain_result(f"用法: 白名单 <add/remove/list> [类型] [ID]")
+            yield event.plain_result(f"用法：白名单 <add/remove/list> [类型] [ID]")
 
     # === 帮助 ===
 
@@ -1237,7 +1223,7 @@ class FaithLadderPlugin(Star):
         if has_permission or is_admin:
             # 诸神/管理员：必须指定目标
             if not args:
-                yield event.plain_result("用法: 查询储物空间 <玩家名> [玩家名2 ...]")
+                yield event.plain_result("用法：查询储物空间 <玩家名> [玩家名2 ...]")
                 return
             names = args.split()
         else:
@@ -1307,12 +1293,12 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "赐予道具")
         if not args:
-            yield event.plain_result("用法: 赐予道具 <玩家名> <道具*数量> ...\n示例: 赐予道具 张三 铁剑*2 生命药水*3")
+            yield event.plain_result("用法：赐予道具 <玩家名> <道具*数量> ...\n示例：赐予道具 张三 铁剑*2 生命药水*3")
             return
 
         parts = args.split(None, 1)  # 分割为玩家名 + 剩余
         if len(parts) < 2:
-            yield event.plain_result("用法: 赐予道具 <玩家名> <道具*数量> ...")
+            yield event.plain_result("用法：赐予道具 <玩家名> <道具*数量> ...")
             return
 
         player_name = parts[0]
@@ -1338,12 +1324,12 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "收回道具")
         if not args:
-            yield event.plain_result("用法: 收回道具 <玩家名> <道具*数量> ...\n示例: 收回道具 张三 铁剑*2 生命药水")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n示例：收回道具 张三 铁剑*2 生命药水")
             return
 
         parts = args.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法: 收回道具 <玩家名> <道具*数量> ...")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...")
             return
 
         player_name = parts[0]
@@ -1389,8 +1375,8 @@ class FaithLadderPlugin(Star):
         args = self._get_args(event, "清除储物空间")
         if not args or not args.strip():
             yield event.plain_result(
-                "用法: 清除储物空间 <玩家名> [道具名|全部]\n"
-                "示例: 清除储物空间 Alice 全部        — 清空所有道具\n"
+                "用法：清除储物空间 <玩家名> [道具名|全部]\n"
+                "示例：清除储物空间 Alice 全部        — 清空所有道具\n"
                 "      清除储物空间 Alice 共生噬刃     — 清除指定道具\n"
                 "      清除储物空间 Alice 共生噬刃（C级）— 清除指定等级"
             )
@@ -1503,12 +1489,12 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "添加状态")
         if not args:
-            yield event.plain_result("用法: 添加状态 <玩家名> <状态名> <天数>\n示例: 添加状态 繁荣 虚弱 3")
+            yield event.plain_result("用法：添加状态 <玩家名> <状态名> <天数>\n示例：添加状态 繁荣 虚弱 3")
             return
 
         parts = args.split()
         if len(parts) < 3:
-            yield event.plain_result("用法: 添加状态 <玩家名> <状态名> <天数>")
+            yield event.plain_result("用法：添加状态 <玩家名> <状态名> <天数>")
             return
 
         player_name = parts[0]
@@ -1543,12 +1529,12 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "移除状态")
         if not args:
-            yield event.plain_result("用法: 移除状态 <玩家名> <状态名>")
+            yield event.plain_result("用法：移除状态 <玩家名> <状态名>")
             return
 
         parts = args.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法: 移除状态 <玩家名> <状态名>")
+            yield event.plain_result("用法：移除状态 <玩家名> <状态名>")
             return
 
         player_name = parts[0]
@@ -1571,7 +1557,7 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "清除状态")
         if not args or not args.strip():
-            yield event.plain_result("用法: 清除状态 <玩家名>")
+            yield event.plain_result("用法：清除状态 <玩家名>")
             return
 
         player_name = args.strip()
@@ -1594,12 +1580,12 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "赠送道具")
         if not args:
-            yield event.plain_result("用法: 赠送道具 <接收方名> <道具*数量>\n示例: 赠送道具 Bob 铁剑*3")
+            yield event.plain_result("用法：赠送道具 <接收方名> <道具*数量>\n示例：赠送道具 Bob 铁剑*3")
             return
 
         parts = args.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法: 赠送道具 <接收方名> <道具*数量>")
+            yield event.plain_result("用法：赠送道具 <接收方名> <道具*数量>")
             return
 
         receiver_name, item_args = parts[0], parts[1].strip()
@@ -1635,8 +1621,10 @@ class FaithLadderPlugin(Star):
             yield event.plain_result(msg)
             return
 
-        # 存入接收方待确认
-        self._pending_gifts_receive = {
+        # 存入接收方待确认（内存 + DB 双写）
+        import json
+        gift_key = (group_id, str(receiver_player.player_id))
+        gift_data = {
             "group_id": group_id,
             "sender_id": sender_player.player_id,
             "sender_name": sender_name,
@@ -1646,6 +1634,12 @@ class FaithLadderPlugin(Star):
             "grade": grade,
             "quantity": quantity,
         }
+        self._pending_gifts_receive[gift_key] = gift_data
+        await self.db_manager.save_pending_gift(
+            group_id, str(receiver_player.player_id),
+            str(sender_player.player_id), sender_name, receiver_name,
+            json.dumps({"item_name": base_name, "grade": grade, "quantity": quantity})
+        )
 
         from astrbot_plugin_faith_ladder.message_formatter import format_gift_request
         notification = format_gift_request(
@@ -1658,6 +1652,7 @@ class FaithLadderPlugin(Star):
     @filter.command("接受道具")
     async def cmd_accept_gift(self, event: AstrMessageEvent):
         """接收方接受赠送（诸神权限），无需参数。"""
+        group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
@@ -1665,17 +1660,34 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("权限不足：只有诸神才能接受赠送。")
             return
 
-        gift = self._pending_gifts_receive
+        # 先查内存缓存，再查 DB
+        gift_key = (group_id, user_id)
+        gift = self._pending_gifts_receive.get(gift_key)
         if not gift:
-            yield event.plain_result("没有待接受的赠送。")
-            return
+            db_gift = await self.db_manager.get_pending_gift(group_id, user_id)
+            if not db_gift:
+                yield event.plain_result("没有待接受的赠送。")
+                return
+            # 从 DB 恢复内存缓存
+            gift = {
+                "group_id": group_id,
+                "sender_id": db_gift["sender_id"],
+                "sender_name": db_gift["sender_name"],
+                "receiver_id": user_id,
+                "receiver_name": db_gift["receiver_name"],
+                "item_name": db_gift["items"]["item_name"],
+                "grade": db_gift["items"].get("grade"),
+                "quantity": db_gift["items"]["quantity"],
+            }
+            self._pending_gifts_receive[gift_key] = gift
 
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         success, msg = await self.ladder_service.receive_item(
             gift["group_id"], gift["receiver_id"], gift["receiver_name"],
             gift["item_name"], gift["quantity"], grade=gift.get("grade")
         )
-        self._pending_gifts_receive = None
+        self._pending_gifts_receive.pop(gift_key, None)
+        await self.db_manager.delete_pending_gift(group_id, user_id)
 
         if success:
             display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
@@ -1683,11 +1695,12 @@ class FaithLadderPlugin(Star):
                 f"已接受 {gift['sender_name']} 赠送的 {display}"
             )
         else:
-            yield event.plain_result(f"接受失败: {msg}")
+            yield event.plain_result(f"接受失败：{msg}")
 
     @filter.command("拒绝道具")
     async def cmd_reject_gift(self, event: AstrMessageEvent):
         """接收方拒绝赠送（诸神权限），无需参数。"""
+        group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
@@ -1695,10 +1708,26 @@ class FaithLadderPlugin(Star):
             yield event.plain_result("权限不足：只有诸神才能拒绝赠送。")
             return
 
-        gift = self._pending_gifts_receive
+        # 先查内存缓存，再查 DB
+        gift_key = (group_id, user_id)
+        gift = self._pending_gifts_receive.get(gift_key)
         if not gift:
-            yield event.plain_result("没有待拒绝的赠送。")
-            return
+            db_gift = await self.db_manager.get_pending_gift(group_id, user_id)
+            if not db_gift:
+                yield event.plain_result("没有待拒绝的赠送。")
+                return
+            # 从 DB 恢复内存缓存
+            gift = {
+                "group_id": group_id,
+                "sender_id": db_gift["sender_id"],
+                "sender_name": db_gift["sender_name"],
+                "receiver_id": user_id,
+                "receiver_name": db_gift["receiver_name"],
+                "item_name": db_gift["items"]["item_name"],
+                "grade": db_gift["items"].get("grade"),
+                "quantity": db_gift["items"]["quantity"],
+            }
+            self._pending_gifts_receive[gift_key] = gift
 
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         # 退回赠送方道具
@@ -1706,7 +1735,8 @@ class FaithLadderPlugin(Star):
             gift["group_id"], gift["sender_id"], gift["sender_name"],
             gift["item_name"], gift["quantity"], grade=gift.get("grade")
         )
-        self._pending_gifts_receive = None
+        self._pending_gifts_receive.pop(gift_key, None)
+        await self.db_manager.delete_pending_gift(group_id, user_id)
 
         display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
         yield event.plain_result(
