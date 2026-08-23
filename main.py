@@ -198,6 +198,54 @@ class FaithLadderPlugin(Star):
         is_admin = self._is_plugin_admin(event)
         return has_permission or is_admin
 
+    async def _get_valid_pending_gift(self, group_id: str, receiver_id: str,
+                                       max_age_seconds: int = 86400) -> Optional[dict]:
+        """获取有效的待处理赠送（未超时）。超时则自动退回发送方并返回 None。"""
+        gift_key = (group_id, receiver_id)
+        gift = self._pending_gifts_receive.get(gift_key)
+
+        # 内存缓存未命中，从 DB 恢复
+        if not gift:
+            db_gift = await self.db_manager.get_pending_gift(group_id, receiver_id)
+            if not db_gift:
+                return None
+            gift = {
+                "group_id": group_id,
+                "sender_id": db_gift["sender_id"],
+                "sender_name": db_gift["sender_name"],
+                "receiver_id": receiver_id,
+                "receiver_name": db_gift["receiver_name"],
+                "item_name": db_gift["items"]["item_name"],
+                "grade": db_gift["items"].get("grade"),
+                "quantity": db_gift["items"]["quantity"],
+            }
+            self._pending_gifts_receive[gift_key] = gift
+
+        # 检查超时（通过 DB 的 created_at 字段）
+        # 内存缓存无时间戳，直接查 DB 判断
+        db_gift = await self.db_manager.get_pending_gift(group_id, receiver_id)
+        if db_gift:
+            from datetime import datetime, timezone, timedelta
+            # 重新查 DB 获取 created_at
+            async with self.db_manager._db.execute(
+                "SELECT created_at FROM pending_gifts WHERE group_id = ? AND receiver_id = ?",
+                (group_id, receiver_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    created_at = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
+                        # 超时，退回发送方
+                        await self.ladder_service.receive_item(
+                            gift["group_id"], gift["sender_id"], gift["sender_name"],
+                            gift["item_name"], gift["quantity"], grade=gift.get("grade")
+                        )
+                        self._pending_gifts_receive.pop(gift_key, None)
+                        await self.db_manager.delete_pending_gift(group_id, receiver_id)
+                        return None  # 返回 None 表示已超时
+
+        return gift
+
     # === 图片渲染已暂时禁用 ===
     # async def _render_and_send(
     #     self,
@@ -241,11 +289,9 @@ class FaithLadderPlugin(Star):
     async def cmd_ladder(self, event: AstrMessageEvent):
         """显示天梯排行榜（需要诸神权限）"""
         user_id = str(event.get_sender_id())
-        is_admin = self._is_plugin_admin(event)
 
         # Permission check
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足：区区凡人")
             return
 
@@ -269,11 +315,9 @@ class FaithLadderPlugin(Star):
     async def cmd_pilgrimage(self, event: AstrMessageEvent):
         """显示觐见之梯排行榜（需要诸神权限）"""
         user_id = str(event.get_sender_id())
-        is_admin = self._is_plugin_admin(event)
 
         # Permission check
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足：区区凡人")
             return
 
@@ -599,9 +643,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
@@ -652,9 +694,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
@@ -727,9 +767,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
@@ -885,9 +923,7 @@ class FaithLadderPlugin(Star):
         """修改玩家职业。格式: 设置职业 <玩家名> <职业>"""
         group_id = self._get_group_id(event)
 
-        has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
@@ -921,9 +957,7 @@ class FaithLadderPlugin(Star):
         """设置信仰。格式: 立誓 <玩家名> <信仰>"""
         group_id = self._get_group_id(event)
 
-        has_permission = await self.permission_service.check_score_permission(str(event.get_sender_id()))
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
@@ -961,9 +995,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("凡人也胆敢染指神明的权柄？")
             return
 
@@ -1044,8 +1076,7 @@ class FaithLadderPlugin(Star):
 
         # delete: whitelist or admin
         if action == "delete":
-            has_permission = await self.permission_service.check_score_permission(user_id)
-            if not has_permission and not is_admin:
+            if not await self._check_perm(event):
                 yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 2:
@@ -1061,8 +1092,7 @@ class FaithLadderPlugin(Star):
 
         # rename: whitelist or admin
         if action == "rename":
-            has_permission = await self.permission_service.check_score_permission(user_id)
-            if not has_permission and not is_admin:
+            if not await self._check_perm(event):
                 yield event.plain_result("仅供诸神使用")
                 return
             if len(parts) < 3:
@@ -1214,13 +1244,12 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
+        has_perm = await self._check_perm(event)
 
         args = self._get_args(event, "查询储物空间")
         args = args.strip() if args else ""
 
-        if has_permission or is_admin:
+        if has_perm:
             # 诸神/管理员：必须指定目标
             if not args:
                 yield event.plain_result("用法：查询储物空间 <玩家名> [玩家名2 ...]")
@@ -1285,9 +1314,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足。")
             return
 
@@ -1316,9 +1343,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足。")
             return
 
@@ -1366,9 +1391,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足。")
             return
 
@@ -1481,9 +1504,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足。")
             return
 
@@ -1521,9 +1542,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足。")
             return
 
@@ -1549,9 +1568,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足。")
             return
 
@@ -1663,33 +1680,16 @@ class FaithLadderPlugin(Star):
         """接收方接受赠送（诸神权限），无需参数。"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足：只有诸神才能接受赠送。")
             return
 
-        # 先查内存缓存，再查 DB
-        gift_key = (group_id, user_id)
-        gift = self._pending_gifts_receive.get(gift_key)
+        gift = await self._get_valid_pending_gift(group_id, user_id)
         if not gift:
-            db_gift = await self.db_manager.get_pending_gift(group_id, user_id)
-            if not db_gift:
-                yield event.plain_result("没有待接受的赠送。")
-                return
-            # 从 DB 恢复内存缓存
-            gift = {
-                "group_id": group_id,
-                "sender_id": db_gift["sender_id"],
-                "sender_name": db_gift["sender_name"],
-                "receiver_id": user_id,
-                "receiver_name": db_gift["receiver_name"],
-                "item_name": db_gift["items"]["item_name"],
-                "grade": db_gift["items"].get("grade"),
-                "quantity": db_gift["items"]["quantity"],
-            }
-            self._pending_gifts_receive[gift_key] = gift
+            yield event.plain_result("没有待接受的赠送（或赠送已超时退回）。")
+            return
 
+        gift_key = (group_id, user_id)
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         success, msg = await self.ladder_service.receive_item(
             gift["group_id"], gift["receiver_id"], gift["receiver_name"],
@@ -1711,33 +1711,16 @@ class FaithLadderPlugin(Star):
         """接收方拒绝赠送（诸神权限），无需参数。"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        if not has_permission and not is_admin:
+        if not await self._check_perm(event):
             yield event.plain_result("权限不足：只有诸神才能拒绝赠送。")
             return
 
-        # 先查内存缓存，再查 DB
-        gift_key = (group_id, user_id)
-        gift = self._pending_gifts_receive.get(gift_key)
+        gift = await self._get_valid_pending_gift(group_id, user_id)
         if not gift:
-            db_gift = await self.db_manager.get_pending_gift(group_id, user_id)
-            if not db_gift:
-                yield event.plain_result("没有待拒绝的赠送。")
-                return
-            # 从 DB 恢复内存缓存
-            gift = {
-                "group_id": group_id,
-                "sender_id": db_gift["sender_id"],
-                "sender_name": db_gift["sender_name"],
-                "receiver_id": user_id,
-                "receiver_name": db_gift["receiver_name"],
-                "item_name": db_gift["items"]["item_name"],
-                "grade": db_gift["items"].get("grade"),
-                "quantity": db_gift["items"]["quantity"],
-            }
-            self._pending_gifts_receive[gift_key] = gift
+            yield event.plain_result("没有待拒绝的赠送（或赠送已超时退回）。")
+            return
 
+        gift_key = (group_id, user_id)
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
         # 退回赠送方道具
         await self.ladder_service.receive_item(

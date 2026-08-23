@@ -976,3 +976,26 @@ class DatabaseManager:
             (group_id, receiver_id)
         )
         await self._db.commit()
+
+    async def get_expired_pending_gifts(self, max_age_seconds: int = 86400) -> list:
+        """获取所有超过 max_age_seconds 秒的待处理赠送记录。"""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+        async with self._db.execute(
+            "SELECT group_id, receiver_id, sender_id, sender_name, receiver_name, items_json "
+            "FROM pending_gifts WHERE created_at <= ?",
+            (cutoff,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            result = []
+            import json
+            for row in rows:
+                result.append({
+                    "group_id": row[0],
+                    "receiver_id": row[1],
+                    "sender_id": row[2],
+                    "sender_name": row[3],
+                    "receiver_name": row[4],
+                    "items": json.loads(row[5]),
+                })
+            return result
