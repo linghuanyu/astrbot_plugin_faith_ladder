@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 
+# 北京时间 UTC+8
+BEIJING_TZ = timezone(timedelta(hours=8))
+
 from astrbot_plugin_faith_ladder.models import Player
 
 try:
@@ -1003,7 +1006,7 @@ class DatabaseManager:
     async def get_player_statuses(self, group_id: str, player_id: str) -> list:
         """获取玩家未过期的状态列表。返回 [{"status_name": str, "expire_at": str, "remaining_days": int}, ...]"""
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
         async with self._db.execute(
             "SELECT status_name, expire_at FROM player_statuses "
             "WHERE group_id = ? AND player_id = ? AND expire_at > ? "
@@ -1028,7 +1031,7 @@ class DatabaseManager:
     async def purge_expired_statuses(self) -> int:
         """清理所有过期状态记录。返回删除数量。"""
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
         cursor = await self._db.execute(
             "DELETE FROM player_statuses WHERE expire_at <= ?",
             (now,)
@@ -1122,7 +1125,7 @@ class DatabaseManager:
 
     async def has_prayer_hit_today(self, group_id: str, player_id: str) -> bool:
         """检查玩家今日是否已触发过祷词。"""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
         async with self._db.execute(
             "SELECT 1 FROM prayer_daily_hits WHERE group_id=? AND player_id=? AND hit_date=?",
             (group_id, player_id, today)
@@ -1131,7 +1134,7 @@ class DatabaseManager:
 
     async def record_prayer_hit(self, group_id: str, player_id: str, delta: int) -> bool:
         """记录祷词触发。唯一约束防并发重复。返回 True 表示成功记录。"""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
         try:
             await self._db.execute(
                 "INSERT INTO prayer_daily_hits (group_id, player_id, hit_date, delta) VALUES (?, ?, ?, ?)",
@@ -1146,7 +1149,7 @@ class DatabaseManager:
 
     async def has_gift_accept_today(self, group_id: str, receiver_id: str) -> bool:
         """检查玩家今日是否已接受过道具。"""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
         async with self._db.execute(
             "SELECT 1 FROM gift_daily_accepts WHERE group_id=? AND receiver_id=? AND accept_date=?",
             (group_id, receiver_id, today)
@@ -1155,7 +1158,7 @@ class DatabaseManager:
 
     async def count_gift_accepts_today(self, group_id: str, receiver_id: str) -> int:
         """统计玩家今日已接受道具次数。"""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
         async with self._db.execute(
             "SELECT COUNT(*) FROM gift_daily_accepts WHERE group_id=? AND receiver_id=? AND accept_date=?",
             (group_id, receiver_id, today)
@@ -1165,7 +1168,7 @@ class DatabaseManager:
 
     async def record_gift_accept(self, group_id: str, receiver_id: str) -> bool:
         """记录道具接受。返回 True 表示成功记录。"""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
         try:
             await self._db.execute(
                 "INSERT INTO gift_daily_accepts (group_id, receiver_id, accept_date) VALUES (?, ?, ?)",
