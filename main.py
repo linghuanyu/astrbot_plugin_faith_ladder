@@ -1376,6 +1376,7 @@ class FaithLadderPlugin(Star):
             target_name = parts[1]
             deleted = await self.db_manager.delete_player_by_name(group_id, target_name)
             if deleted:
+                self.ladder_service.invalidate_leaderboard_cache(group_id)
                 yield event.plain_result(f"已将玩家 {target_name} 数据在本宇宙删除。")
             else:
                 yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
@@ -1433,10 +1434,12 @@ class FaithLadderPlugin(Star):
             init_ladder = self.config.get("init_ladder_score", 1000)
             init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
             count = await self.db_manager.reset_all_scores(group_id)
+            self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已重置本群 {count} 名玩家的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")
 
         elif action == "clear":
             count = await self.db_manager.delete_all_players(group_id)
+            self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已清空本群所有数据，共删除 {count} 名玩家。")
 
         else:
@@ -1470,9 +1473,13 @@ class FaithLadderPlugin(Star):
             yield event.plain_result( text)
         elif action == "add" and len(parts) >= 3:
             _, message = await self.permission_service.add_to_whitelist(parts[1], parts[2], user_id)
+            # 白名单变更后失效权限缓存（让新权限立即生效）
+            self.permission_service.invalidate_cache()
             yield event.plain_result( message)
         elif action == "remove" and len(parts) >= 3:
             _, message = await self.permission_service.remove_from_whitelist(parts[1], parts[2])
+            # 白名单变更后失效权限缓存（让权限移除立即生效）
+            self.permission_service.invalidate_cache()
             yield event.plain_result( message)
         else:
             yield event.plain_result(f"用法：白名单 <add/remove/list> [类型] [ID]")
@@ -1746,6 +1753,10 @@ class FaithLadderPlugin(Star):
             if success:
                 added += 1
 
+        # 同步完成后失效权限缓存
+        if added > 0:
+            self.permission_service.invalidate_cache()
+
         yield event.plain_result(f"诸神列表同步完成: 新增 {added} 人（群 {target_group} 共 {len(members)} 名成员）")
 
     async def _handle_auto_whitelist(self, user_id: str, action: str):
@@ -1758,10 +1769,12 @@ class FaithLadderPlugin(Star):
             success, msg = await self.permission_service.add_to_whitelist("user", user_id, "auto")
             if success:
                 logger.info(f"[AutoWhitelist] 自动添加白名单: {user_id}")
+                self.permission_service.invalidate_cache(user_id)
         elif action == "leave":
             success, msg = await self.permission_service.remove_from_whitelist("user", user_id)
             if success:
                 logger.info(f"[AutoWhitelist] 自动移除白名单: {user_id}")
+                self.permission_service.invalidate_cache(user_id)
 
     async def on_group_member_change(self, event: AstrMessageEvent):
         """监听群成员变动事件，自动同步白名单。

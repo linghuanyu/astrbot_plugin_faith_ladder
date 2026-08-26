@@ -2,6 +2,7 @@
 Ladder service - core business logic for score management.
 """
 
+import asyncio
 import re
 import time
 from typing import Optional, List, Dict, Any, Tuple, Callable, Awaitable
@@ -197,6 +198,7 @@ class LadderService:
     ) -> tuple:
         """批量查询玩家信息。返回 (cards_text, not_found_names)。
         cards_text 是合并后的文本，not_found_names 是不存在的玩家名列表。
+        使用 asyncio.gather 并行查询排名和状态，减少 N+1 查询问题。
         """
         if not player_names:
             return "", []
@@ -208,21 +210,26 @@ class LadderService:
         if not players_dict:
             return "", not_found
 
-        # 为每个玩家查询排名和状态（并行查询以提升性能）
-        cards = []
-        for name in player_names:
-            if name not in players_dict:
-                continue
-            player = players_dict[name]
-            ladder_rank = await self.db.get_player_ladder_rank(
-                group_id, player.ladder_score, player.pilgrimage_score
+        # 按原始顺序获取玩家列表
+        players = [players_dict[name] for name in player_names if name in players_dict]
+
+        # 并行查询所有玩家的排名和状态
+        async def fetch_player_data(player):
+            ladder_rank, pilgrimage_rank, statuses = await asyncio.gather(
+                self.db.get_player_ladder_rank(group_id, player.ladder_score, player.pilgrimage_score),
+                self.db.get_player_pilgrimage_rank(group_id, player.pilgrimage_score, player.ladder_score),
+                self.db.get_player_statuses(group_id, player.player_id)
             )
-            pilgrimage_rank = await self.db.get_player_pilgrimage_rank(
-                group_id, player.pilgrimage_score, player.ladder_score
-            )
-            statuses = await self.db.get_player_statuses(group_id, player.player_id)
-            card = format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
-            cards.append(card)
+            return player, ladder_rank, pilgrimage_rank, statuses
+
+        # 并行执行所有玩家的数据查询
+        results = await asyncio.gather(*[fetch_player_data(p) for p in players])
+
+        # 格式化所有玩家卡片
+        cards = [
+            format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
+            for player, ladder_rank, pilgrimage_rank, statuses in results
+        ]
 
         # 合并所有玩家信息
         combined = "\n\n".join(cards)
