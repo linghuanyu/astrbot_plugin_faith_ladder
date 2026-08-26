@@ -26,37 +26,23 @@ class TestPermissionService:
     async def test_add_whitelist_user(self, db_manager):
         """Test adding user to global whitelist."""
         service = PermissionService(db_manager)
-        success, msg = await service.add_to_whitelist("user", "u123", "admin")
+        success, msg = await service.add_to_whitelist("u123", "admin")
         assert success is True
         assert "u123" in msg
         assert "诸神" in msg
 
-    async def test_add_whitelist_group(self, db_manager):
-        """Test adding group to whitelist."""
-        service = PermissionService(db_manager)
-        success, msg = await service.add_to_whitelist("group", "g456", "admin")
-        assert success is True
-        assert "g456" in msg
-
-    async def test_add_whitelist_invalid_type(self, db_manager):
-        """Test adding with invalid entry type."""
-        service = PermissionService(db_manager)
-        success, msg = await service.add_to_whitelist("invalid", "u123", "admin")
-        assert success is False
-        assert "无效的类型" in msg
-
     async def test_add_whitelist_empty_id(self, db_manager):
         """Test adding with empty ID."""
         service = PermissionService(db_manager)
-        success, msg = await service.add_to_whitelist("user", "  ", "admin")
+        success, msg = await service.add_to_whitelist("  ", "admin")
         assert success is False
         assert "不能为空" in msg
 
     async def test_add_whitelist_duplicate(self, db_manager):
         """Test adding duplicate entry."""
         service = PermissionService(db_manager)
-        await service.add_to_whitelist("user", "u123", "admin")
-        success, msg = await service.add_to_whitelist("user", "u123", "admin")
+        await service.add_to_whitelist("u123", "admin")
+        success, msg = await service.add_to_whitelist("u123", "admin")
         assert success is False
         assert "已是诸神" in msg
 
@@ -64,23 +50,16 @@ class TestPermissionService:
         """Test removing from whitelist."""
         await db_manager.add_to_whitelist("user", "u123", "admin")
         service = PermissionService(db_manager)
-        success, msg = await service.remove_from_whitelist("user", "u123")
+        success, msg = await service.remove_from_whitelist("u123")
         assert success is True
         assert "移除" in msg
 
     async def test_remove_whitelist_not_found(self, db_manager):
         """Test removing non-existent entry."""
         service = PermissionService(db_manager)
-        success, msg = await service.remove_from_whitelist("user", "u999")
+        success, msg = await service.remove_from_whitelist("u999")
         assert success is False
         assert "未找到" in msg
-
-    async def test_remove_whitelist_invalid_type(self, db_manager):
-        """Test removing with invalid type."""
-        service = PermissionService(db_manager)
-        success, msg = await service.remove_from_whitelist("invalid", "u123")
-        assert success is False
-        assert "无效的类型" in msg
 
     async def test_get_whitelist_text_empty(self, db_manager):
         """Test getting whitelist text when empty."""

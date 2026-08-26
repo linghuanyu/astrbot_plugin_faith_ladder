@@ -97,33 +97,27 @@ class PermissionService:
         return result
 
     async def add_to_whitelist(
-        self, entry_type: str, entry_id: str, added_by: str
+        self, user_id: str, added_by: str
     ) -> tuple[bool, str]:
-        """Add an entry to the global DB whitelist. Returns (success, message)."""
-        if entry_type not in ("user", "group"):
-            return False, f"无效的类型: {entry_type}。可选: user, group"
-
-        if not entry_id.strip():
+        """添加用户到诸神列表。返回 (success, message)。"""
+        if not user_id.strip():
             return False, "ID 不能为空。"
 
-        added = await self.db.add_to_whitelist(entry_type, entry_id, added_by)
+        added = await self.db.add_to_whitelist("user", user_id, added_by)
         if added:
-            return True, f"已添加 [{entry_type}] {entry_id} 到诸神列表。"
+            return True, f"已添加 {user_id} 到诸神列表。"
         else:
-            return False, f"[{entry_type}] {entry_id} 已是诸神。"
+            return False, f"{user_id} 已是诸神。"
 
     async def remove_from_whitelist(
-        self, entry_type: str, entry_id: str
+        self, user_id: str
     ) -> tuple[bool, str]:
-        """Remove an entry from the global DB whitelist. Returns (success, message)."""
-        if entry_type not in ("user", "group"):
-            return False, f"无效的类型: {entry_type}。可选: user, group"
-
-        removed = await self.db.remove_from_whitelist(entry_type, entry_id)
+        """从诸神列表移除用户。返回 (success, message)。"""
+        removed = await self.db.remove_from_whitelist("user", user_id)
         if removed:
-            return True, f"已从诸神列表移除 [{entry_type}] {entry_id}。"
+            return True, f"已从诸神列表移除 {user_id}。"
         else:
-            return False, f"未找到 [{entry_type}] {entry_id}。"
+            return False, f"未找到 {user_id}。"
 
     async def get_whitelist_text(self) -> str:
         """Get formatted whitelist text combining config and DB sources."""

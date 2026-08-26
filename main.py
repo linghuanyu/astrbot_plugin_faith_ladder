@@ -1462,8 +1462,8 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if not parts:
             yield event.plain_result(
-                f"用法：白名单 <add/remove/list> [类型] [ID]\n"
-                f"类型: user (用户) 或 group (群)"
+                f"用法：白名单 <add/remove/list> [用户ID]\n"
+                f"示例：白名单 add 123456789"
             )
             return
 
@@ -1471,18 +1471,20 @@ class FaithLadderPlugin(Star):
         if action == "list":
             text = await self.permission_service.get_whitelist_text()
             yield event.plain_result( text)
-        elif action == "add" and len(parts) >= 3:
-            _, message = await self.permission_service.add_to_whitelist(parts[1], parts[2], user_id)
+        elif action == "add" and len(parts) >= 2:
+            target_id = parts[1]
+            _, message = await self.permission_service.add_to_whitelist(target_id, user_id)
             # 白名单变更后失效权限缓存（让新权限立即生效）
             self.permission_service.invalidate_cache()
             yield event.plain_result( message)
-        elif action == "remove" and len(parts) >= 3:
-            _, message = await self.permission_service.remove_from_whitelist(parts[1], parts[2])
+        elif action == "remove" and len(parts) >= 2:
+            target_id = parts[1]
+            _, message = await self.permission_service.remove_from_whitelist(target_id)
             # 白名单变更后失效权限缓存（让权限移除立即生效）
             self.permission_service.invalidate_cache()
             yield event.plain_result( message)
         else:
-            yield event.plain_result(f"用法：白名单 <add/remove/list> [类型] [ID]")
+            yield event.plain_result(f"用法：白名单 <add/remove/list> [用户ID]")
 
     # === 帮助 ===
 
@@ -1749,7 +1751,7 @@ class FaithLadderPlugin(Star):
             uid = str(member.get("user_id", ""))
             if not uid or uid == bot_id:
                 continue
-            success, _ = await self.permission_service.add_to_whitelist("user", uid, "sync")
+            success, _ = await self.permission_service.add_to_whitelist(uid, "sync")
             if success:
                 added += 1
 
@@ -1766,12 +1768,12 @@ class FaithLadderPlugin(Star):
             return
 
         if action == "join":
-            success, msg = await self.permission_service.add_to_whitelist("user", user_id, "auto")
+            success, msg = await self.permission_service.add_to_whitelist(user_id, "auto")
             if success:
                 logger.info(f"[AutoWhitelist] 自动添加白名单: {user_id}")
                 self.permission_service.invalidate_cache(user_id)
         elif action == "leave":
-            success, msg = await self.permission_service.remove_from_whitelist("user", user_id)
+            success, msg = await self.permission_service.remove_from_whitelist(user_id)
             if success:
                 logger.info(f"[AutoWhitelist] 自动移除白名单: {user_id}")
                 self.permission_service.invalidate_cache(user_id)
