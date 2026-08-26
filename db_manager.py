@@ -173,6 +173,9 @@ class DatabaseManager:
         # Migrate: add qq_id column to players (QQ binding for anti-impersonation)
         await self._migrate_qq_id()
 
+        # Migrate: remove deprecated group entries from whitelist
+        await self._migrate_whitelist_remove_groups()
+
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
         async with self._db.execute("PRAGMA table_info(players)") as cursor:
@@ -358,6 +361,14 @@ class DatabaseManager:
             await self._db.execute("ALTER TABLE whitelist_new RENAME TO whitelist")
             await self._db.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist(entry_type, entry_id)")
             await self._db.commit()
+
+    async def _migrate_whitelist_remove_groups(self):
+        """移除白名单中已废弃的 group 类型条目。"""
+        cursor = await self._db.execute("DELETE FROM whitelist WHERE entry_type = 'group'")
+        if cursor.rowcount > 0:
+            from astrbot.api import logger
+            logger.info(f"[Migration] 移除 {cursor.rowcount} 条已废弃的 group 白名单")
+        await self._db.commit()
 
     def _row_to_player(self, row) -> Player:
         """Convert a database row tuple to a Player object."""
