@@ -138,9 +138,6 @@ def format_help(config: dict) -> str:
 
     ladder_cd = config.get("ladder_cooldown_seconds", 600)
     query_cd = config.get("query_cooldown_seconds", 600)
-    push_time = config.get("daily_push_time", "07:00")
-    push_enabled = config.get("daily_push_enabled", True)
-    push_info = f"每日 {push_time} 自动推送" if push_enabled else "未开启"
     output_mode = config.get("output_mode", "text")
 
     classes_str = "/".join(VALID_CLASSES)
@@ -205,7 +202,7 @@ def format_help(config: dict) -> str:
         f"同步白名单 — 同步指定群成员到诸神列表\n"
         f"{cmd_admin} 重置/删除/改名/清空/清除弃誓\n"
         f"\n"
-        f"推送: {push_info} | 初始积分: 登神之路1000 觐见100\n"
+        f"初始积分: 登神之路1000 觐见100\n"
         f"{cmd_help} - 显示本帮助"
     )
 
@@ -293,3 +290,43 @@ def format_inventory(player_name: str, items: list) -> str:
     for item in items:
         lines.append(format_item_display(item["item_name"], item["grade"], item["quantity"]))
     return "\n".join(lines)
+
+
+def format_prayer_trigger(player_name: str, path: str, delta: int, config: dict = None) -> str:
+    """格式化祷词触发回复。根据 delta 正负零选择文案池，随机选取一条。
+
+    Args:
+        player_name: 玩家名
+        path: 命途名（如"虚无"、"存在"等，player.faith 字段实际存储的是命途）
+        delta: 觐见分变化值
+        config: 插件配置（用于获取自定义文案）
+    """
+    import random
+
+    # 确定文案池配置键
+    if delta > 0:
+        config_key = "prayer_trigger_messages_positive"
+        default_msgs = ["{god}今日心情不错，觐见+{delta}"]
+        template_vars = {"god": path, "delta": f"+{delta}"}
+    elif delta < 0:
+        config_key = "prayer_trigger_messages_negative"
+        default_msgs = ["{god}今日心情不佳，觐见{delta}"]
+        template_vars = {"god": path, "delta": str(delta)}
+    else:
+        config_key = "prayer_trigger_messages_neutral"
+        default_msgs = ["{god}听到了你的祈祷，但未起波澜"]
+        template_vars = {"god": path}
+
+    # 从配置或默认值获取文案池
+    messages = default_msgs
+    if config:
+        messages = config.get(config_key, default_msgs)
+        if not messages:  # 空列表保护
+            messages = default_msgs
+
+    # 随机选取一条并格式化
+    template = random.choice(messages)
+    result = template.format(**template_vars)
+
+    # 前缀固定文案
+    return f"神明看到了你的祈祷\n{result}"

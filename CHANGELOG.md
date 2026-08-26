@@ -1,5 +1,52 @@
 # 更新日志
 
+## [3.4.0] - 2026-08-26
+
+### 变更
+- **每日接受道具上限可配置** — 新增 `gift_daily_accept_limit` 配置项（默认 1，0 为不限制）
+  - `gift_daily_accepts` 表改为自增主键（支持多条记录/天）
+  - `has_gift_accept_today` / `count_gift_accepts_today` 方法配合可配置限制
+
+### 移除
+- **移除每日推送功能** — 该功能因 AstrBot `send_to_group` API 格式问题从未正常工作
+  - 移除 `scheduler_service.py` 中 `_daily_push_loop` / `_do_daily_push` / `_push_text_mode` / `_push_image_mode` / `_get_effective_output_mode`
+  - 移除 `_conf_schema.json` 中 `daily_push_time` / `daily_push_enabled` / `daily_push_groups`
+  - 移除 `message_formatter.py` 中 `format_daily_push_*` 函数和 `get_output_mode` 函数
+  - 移除 `main.py` 中 `SchedulerService` 构造函数的每日推送参数
+  - 移除 README 中每日推送相关文档和配置表条目
+
+### 测试
+- 全量 304 测试通过
+
+## [3.3.0] - 2026-08-24
+
+### 新增
+- **每日接受道具限制** — 每位玩家每天只能接受一次道具（防止刷道具）
+  - 新增 `gift_daily_accepts` 数据库表记录每日接受情况
+  - DB 唯一约束防并发重复接受
+  - 超过限制时提示「今日已接受过道具，每天限一次」
+- 新增 5 个每日接受限制测试
+
+### 测试
+- 全量 304 测试通过
+
+## [3.2.0] - 2026-08-24
+
+### 新增
+- **祷词触发觐见分变动** — 玩家每天第一次发送命中自己命途祷词的消息时，随机获得 -2 到 +2 的觐见分变化
+  - 精确匹配（归一化后 8 个汉字完全相等）
+  - 通过 `prayer_trigger_groups` 配置指定生效的群列表（留空不启用）
+  - 回复文案可配置（正/负/零三组文案池，随机选取）
+  - 回复格式：「神明看到了你的祈祷」+ 命途神名 + 心情描述 + 觐见变化
+  - 性能优化：祷词缓存 O(1) 查找、预编译正则、先匹配祷词再解析玩家身份
+  - 尊重 `allow_negative_scores` 配置（不允许负分时 clamp 到 0）
+  - DB 唯一约束防并发重复触发
+- **新增 `prayer_daily_hits` 数据库表** — 记录每日祷词触发，防止重复
+- 新增 30 个祷词触发测试
+
+### 测试
+- 全量 299 测试通过
+
 ## [3.1.0] - 2026-08-23
 
 ### 新增

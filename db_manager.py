@@ -135,6 +135,23 @@ class DatabaseManager:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, receiver_id)
             );
+
+            CREATE TABLE IF NOT EXISTS prayer_daily_hits (
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                hit_date TEXT NOT NULL,
+                delta INTEGER NOT NULL,
+                PRIMARY KEY (group_id, player_id, hit_date)
+            );
+
+            CREATE TABLE IF NOT EXISTS gift_daily_accepts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT NOT NULL,
+                receiver_id TEXT NOT NULL,
+                accept_date TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_gift_accepts_lookup
+                ON gift_daily_accepts(group_id, receiver_id, accept_date);
         """)
         await self._db.commit()
 
@@ -1100,3 +1117,61 @@ class DatabaseManager:
                     "items": json.loads(row[5]),
                 })
             return result
+
+    # ── Prayer Daily Hits ──
+
+    async def has_prayer_hit_today(self, group_id: str, player_id: str) -> bool:
+        """检查玩家今日是否已触发过祷词。"""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        async with self._db.execute(
+            "SELECT 1 FROM prayer_daily_hits WHERE group_id=? AND player_id=? AND hit_date=?",
+            (group_id, player_id, today)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def record_prayer_hit(self, group_id: str, player_id: str, delta: int) -> bool:
+        """记录祷词触发。唯一约束防并发重复。返回 True 表示成功记录。"""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            await self._db.execute(
+                "INSERT INTO prayer_daily_hits (group_id, player_id, hit_date, delta) VALUES (?, ?, ?, ?)",
+                (group_id, player_id, today, delta)
+            )
+            await self._db.commit()
+            return True
+        except Exception:
+            return False  # 并发重复触发
+
+    # ── Gift Daily Accepts ──
+
+    async def has_gift_accept_today(self, group_id: str, receiver_id: str) -> bool:
+        """检查玩家今日是否已接受过道具。"""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        async with self._db.execute(
+            "SELECT 1 FROM gift_daily_accepts WHERE group_id=? AND receiver_id=? AND accept_date=?",
+            (group_id, receiver_id, today)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def count_gift_accepts_today(self, group_id: str, receiver_id: str) -> int:
+        """统计玩家今日已接受道具次数。"""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM gift_daily_accepts WHERE group_id=? AND receiver_id=? AND accept_date=?",
+            (group_id, receiver_id, today)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def record_gift_accept(self, group_id: str, receiver_id: str) -> bool:
+        """记录道具接受。返回 True 表示成功记录。"""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            await self._db.execute(
+                "INSERT INTO gift_daily_accepts (group_id, receiver_id, accept_date) VALUES (?, ?, ?)",
+                (group_id, receiver_id, today)
+            )
+            await self._db.commit()
+            return True
+        except Exception:
+            return False

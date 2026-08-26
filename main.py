@@ -26,10 +26,14 @@ from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.ladder_service import LadderService
 from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
-from astrbot_plugin_faith_ladder.message_formatter import format_help
+from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, Player
 # from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer  # 暂时禁用图片渲染
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+# 预编译正则（祷词触发用）
+_PRAYER_NORMALIZE_RE = re.compile(r'[^\w]')
+_PRAYER_CHINESE_RE = re.compile(r'[一-鿿]')
 
 
 @register(
@@ -65,6 +69,11 @@ class FaithLadderPlugin(Star):
         self._scheduler = None
         self._qq_admin = QQAdminHandler(self)
         self._pending_gifts_receive = {}  # (group_id, receiver_id) -> gift_dict（内存缓存）
+
+        # 祷词触发缓存
+        self._prayer_cache = {}  # {normalized_prayer: faith}
+        self._command_prefixes = set()
+        self._build_prayer_cache()
 
         # 加载具体职业映射
         self._specific_classes = {}  # specific_class_name -> (faith, basic_class)
@@ -128,22 +137,9 @@ class FaithLadderPlugin(Star):
             except Exception as e:
                 logger.error(f"Failed to send to group {group_id}: {e}")
 
-        async def get_output_mode(group_id: str) -> str:
-            """Get effective output mode for a group from DB."""
-            mode = await self.db_manager.get_group_output_mode(group_id)
-            return mode if mode in ("text", "image") else self.config.get("output_mode", "text")
-
         self._scheduler = SchedulerService(
             data_dir=self.data_dir,
-            get_leaderboard_text=self.ladder_service.get_leaderboard_text,
-            get_pilgrimage_text=self.ladder_service.get_pilgrimage_leaderboard_text,
-            get_leaderboard_players=self.ladder_service.get_leaderboard_players,
-            get_pilgrimage_players=self.ladder_service.get_pilgrimage_leaderboard_players,
-            image_renderer=None,  # 暂时禁用图片渲染
-            get_output_mode=get_output_mode,
             get_config=lambda: dict(self.config),
-            send_to_group=send_to_group,
-            get_active_groups=self.db_manager.get_active_groups,
             purge_score_history=self.db_manager.purge_old_score_history,
             purge_expired_statuses=self.db_manager.purge_expired_statuses,
             cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
@@ -1986,10 +1982,21 @@ class FaithLadderPlugin(Star):
                 return
             receiver_id = str(receiver_player.player_id)
 
+        # 检查今日接受道具次数（可配置上限，0 为不限制）
+        daily_limit = self.config.get("gift_daily_accept_limit", 1)
+        if daily_limit > 0:
+            accept_count = await self.db_manager.count_gift_accepts_today(group_id, receiver_id)
+            if accept_count >= daily_limit:
+                yield event.plain_result(f"今日接受道具次数已达上限（{daily_limit} 次/天）。")
+                return
+
         gift = await self._get_valid_pending_gift(group_id, receiver_id)
         if not gift:
             yield event.plain_result("没有待接受的赠送（或赠送已超时退回）。")
             return
+
+        # 记录今日已接受道具（用于计数）
+        await self.db_manager.record_gift_accept(group_id, receiver_id)
 
         gift_key = (group_id, receiver_id)
         from astrbot_plugin_faith_ladder.ladder_service import format_item_display
@@ -2070,3 +2077,130 @@ class FaithLadderPlugin(Star):
         yield event.plain_result(
             f"已拒绝 {gift['sender_name']} 的赠送，{display} 已退回"
         )
+
+    # ── 祷词触发 ──
+
+    def _build_prayer_cache(self):
+        """构建祷词缓存：{归一化祷词: 命途名}。启动时和配置变更时调用。"""
+        self._prayer_cache = {}
+        # 祷词配置按命途（path）存储，不是按信仰（faith）
+        for path in VALID_PATHS:
+            key = f"prayer_text_{path}"
+            prayers = self.config.get(key, [])
+            for prayer in prayers:
+                normalized = self._normalize_prayer_text(prayer)
+                if normalized:
+                    self._prayer_cache[normalized] = path
+
+        # 缓存命令前缀
+        cmd_keys = [
+            "cmd_ladder", "cmd_pilgrimage", "cmd_query", "cmd_add_score",
+            "cmd_set_class", "cmd_register_player", "cmd_admin", "cmd_whitelist",
+            "cmd_help", "cmd_batch_add_score", "cmd_abandon_oath", "cmd_take_oath"
+        ]
+        self._command_prefixes = {
+            self.config.get(key, "") for key in cmd_keys if self.config.get(key)
+        }
+
+    def _normalize_prayer_text(self, text: str) -> str:
+        """去除所有标点和空格，仅保留中文字符和字母数字。"""
+        return _PRAYER_NORMALIZE_RE.sub('', text).strip()
+
+    def _is_valid_prayer_length(self, text: str) -> bool:
+        """检查是否为恰好 8 个汉字（祷词固定长度，快速过滤非祷词消息）。"""
+        chinese_chars = _PRAYER_CHINESE_RE.findall(text)
+        return len(chinese_chars) == 8
+
+    def _is_command_message(self, text: str) -> bool:
+        """检查消息是否以已注册的命令前缀开头。"""
+        text_stripped = text.strip()
+        return any(text_stripped.startswith(prefix) for prefix in self._command_prefixes if prefix)
+
+    @filter.regex(r".*")
+    async def on_prayer_message(self, event: AstrMessageEvent, matched=None):
+        """监听所有消息，检测祷词触发。"""
+        logger.debug(f"[PrayerTrigger] Message received: {event.message_str}")
+
+        # 1. 快速过滤：必须是群消息（非私聊）
+        if not hasattr(event.message_obj, 'group_id') or not event.message_obj.group_id:
+            logger.debug("[PrayerTrigger] Not a group message")
+            return
+
+        group_id = self._get_group_id(event)
+        logger.debug(f"[PrayerTrigger] Group: {group_id}")
+
+        # 2. 快速过滤：群是否在配置列表中
+        trigger_groups = self.config.get("prayer_trigger_groups", [])
+        logger.debug(f"[PrayerTrigger] Trigger groups: {trigger_groups}")
+        if group_id not in trigger_groups:
+            logger.debug(f"[PrayerTrigger] Group {group_id} not in trigger list")
+            return
+
+        # 3. 获取消息纯文本
+        text = event.message_str
+        if not text:
+            return
+
+        # 4. 快速过滤：不是命令才处理（避免与命令冲突）
+        if self._is_command_message(text):
+            return
+
+        # 5. 归一化 + 长度校验
+        normalized = self._normalize_prayer_text(text)
+        logger.debug(f"[PrayerTrigger] Normalized: '{normalized}', valid length: {self._is_valid_prayer_length(normalized) if normalized else False}")
+        if not normalized or not self._is_valid_prayer_length(normalized):
+            logger.debug("[PrayerTrigger] Normalization failed or invalid length")
+            return
+
+        # 6. 快速匹配：是否匹配任何祷词（缓存查找，O(1)）
+        matched_faith = self._prayer_cache.get(normalized)
+        logger.debug(f"[PrayerTrigger] Matched faith: {matched_faith}, cache size: {len(self._prayer_cache)}")
+        if not matched_faith:
+            logger.debug("[PrayerTrigger] No prayer match")
+            return
+
+        # 7. 现在才解析玩家身份（昂贵操作，仅对潜在祷词消息执行）
+        player = await self._resolve_self_player_lenient(event)
+        logger.debug(f"[PrayerTrigger] Player resolved: {player.player_name if player else None}, faith: {player.faith if player else None}")
+        if not player or not player.faith:
+            logger.debug("[PrayerTrigger] Player not found or no faith")
+            return
+
+        # 8. 检查是否匹配玩家自己的命途（发送其他命途的祷词不触发）
+        if player.faith != matched_faith:
+            logger.debug(f"[PrayerTrigger] Player faith {player.faith} != matched {matched_faith}")
+            return
+
+        # 9. 检查今日是否已触发（DB 查询）
+        if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
+            return
+
+        # 10. 随机 -2 到 +2（暂时禁用，固定为 0，后续可能启用）
+        # import random
+        # delta = random.randint(-2, 2)
+        # # 如果配置不允许负分，则 clamp 到 [0, 2]
+        # if not self.config.get("allow_negative_scores", True):
+        #     delta = max(0, delta)
+        delta = 0  # 暂时不加分也不扣分
+
+        # 11. 记录今日已触发（DB 写入，唯一约束防并发）
+        recorded = await self.db_manager.record_prayer_hit(group_id, player.player_id, delta)
+        if not recorded:
+            return  # 并发情况，已被其他请求抢先
+
+        # 12. 加分（ladder_delta=0, pilgrimage_delta=delta）
+        # 暂时 delta=0，不会实际改变分数，但仍记录触发
+        if delta != 0:
+            ok, _ = await self.ladder_service.add_score(
+                group_id, player.player_id, player.player_name,
+                ladder_delta=0, pilgrimage_delta=delta,
+                operator_id="prayer_trigger",
+                reason="祷词触发"
+            )
+            if not ok:
+                return
+
+        # 13. 回复群消息 + 阻止 AI 也响应祷词
+        msg = format_prayer_trigger(player.player_name, player.faith, delta, self.config)
+        yield event.plain_result(msg)
+        event.stop_event()

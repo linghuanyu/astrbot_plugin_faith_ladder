@@ -87,24 +87,6 @@
     "type": "int",
     "default": 10
   },
-  "daily_push_time": {
-    "description": "每日推送时间（HH:MM，24小时制）",
-    "type": "string",
-    "default": "07:00"
-  },
-  "daily_push_enabled": {
-    "description": "是否启用每日推送",
-    "type": "bool",
-    "default": true
-  },
-  "daily_push_groups": {
-    "description": "每日推送目标群号列表（留空则不推送）",
-    "type": "list",
-    "default": [],
-    "items": {
-      "type": "string"
-    }
-  },
   "query_cooldown_seconds": {
     "description": "查询指令冷却时间（秒）",
     "type": "int",
@@ -239,5 +221,39 @@
     "description": "自动白名单群号（该群成员加入时自动加入白名单，退群时自动移除）",
     "type": "string",
     "default": ""
+  },
+  "prayer_trigger_groups": {
+    "description": "启用祷词触发觐见分变动的群号列表（留空则不启用此功能）",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    }
+  },
+  "prayer_trigger_messages_positive": {
+    "description": "祷词触发正分时的随机文案列表（{god}=信仰名, {delta}=变化值）",
+    "type": "list",
+    "default": [
+      "{god}今日心情不错，觐见+{delta}"
+    ]
+  },
+  "prayer_trigger_messages_negative": {
+    "description": "祷词触发负分时的随机文案列表（{god}=信仰名, {delta}=变化值）",
+    "type": "list",
+    "default": [
+      "{god}今日心情不佳，觐见{delta}"
+    ]
+  },
+  "prayer_trigger_messages_neutral": {
+    "description": "祷词触发零分时的随机文案列表（{god}=信仰名）",
+    "type": "list",
+    "default": [
+      "{god}听到了你的祈祷，但未起波澜"
+    ]
+  },
+  "gift_daily_accept_limit": {
+    "description": "每日接受道具上限（0 为不限制）",
+    "type": "int",
+    "default": 1
   }
 }
