@@ -329,4 +329,10 @@ def format_prayer_trigger(player_name: str, path: str, delta: int, config: dict 
     result = template.format(**template_vars)
 
     # 前缀固定文案
-    return f"神明看到了你的祈祷\n{result}"
+    msg = f"神明看到了你的祈祷\n{result}"
+
+    # 当 delta=0 时，附加说明（临时状态）
+    if delta == 0:
+        msg += "\n（本次结果暂时不会影响实际分数）"
+
+    return msg

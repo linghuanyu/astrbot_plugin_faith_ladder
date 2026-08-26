@@ -170,6 +170,7 @@ class TestFormatPrayerTrigger:
         assert "神明看到了你的祈祷" in msg
         assert "虚无" in msg
         assert "+2" in msg
+        assert "本次结果暂时不会影响实际分数" not in msg
 
     def test_negative_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
@@ -177,6 +178,7 @@ class TestFormatPrayerTrigger:
         assert "神明看到了你的祈祷" in msg
         assert "存在" in msg
         assert "-1" in msg
+        assert "本次结果暂时不会影响实际分数" not in msg
 
     def test_zero_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
@@ -184,6 +186,7 @@ class TestFormatPrayerTrigger:
         assert "神明看到了你的祈祷" in msg
         assert "文明" in msg
         assert "未起波澜" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
 
     def test_custom_config_messages(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
