@@ -2106,6 +2106,10 @@ class FaithLadderPlugin(Star):
         """去除所有标点和空格，仅保留中文字符和字母数字。"""
         return _PRAYER_NORMALIZE_RE.sub('', text).strip()
 
+    def _quick_chinese_count(self, text: str) -> int:
+        """快速统计汉字数量（不做完整归一化）。"""
+        return sum(1 for c in text if '一' <= c <= '鿿')
+
     def _is_valid_prayer_length(self, text: str) -> bool:
         """检查是否为恰好 8 个汉字（祷词固定长度，快速过滤非祷词消息）。"""
         chinese_chars = _PRAYER_CHINESE_RE.findall(text)
@@ -2145,37 +2149,46 @@ class FaithLadderPlugin(Star):
         if self._is_command_message(text):
             return
 
-        # 5. 归一化 + 长度校验
-        normalized = self._normalize_prayer_text(text)
-        logger.debug(f"[PrayerTrigger] Normalized: '{normalized}', valid length: {self._is_valid_prayer_length(normalized) if normalized else False}")
-        if not normalized or not self._is_valid_prayer_length(normalized):
-            logger.debug("[PrayerTrigger] Normalization failed or invalid length")
+        # 5. 快速长度预过滤（含标点空格，祷词 8 字 + 最多 12 个标点 = 20）
+        text_len = len(text)
+        if text_len < 8 or text_len > 20:
+            logger.debug(f"[PrayerTrigger] Length pre-filter: {text_len} chars, skipped")
             return
 
-        # 6. 快速匹配：是否匹配任何祷词（缓存查找，O(1)）
+        # 6. 快速汉字计数（恰好 8 个汉字才继续）
+        if self._quick_chinese_count(text) != 8:
+            logger.debug("[PrayerTrigger] Chinese count != 8, skipped")
+            return
+
+        # 7. 现在才做完整归一化（仅对潜在祷词消息）
+        normalized = self._normalize_prayer_text(text)
+        if not normalized:
+            return
+
+        # 8. 快速匹配：是否匹配任何祷词（缓存查找，O(1)）
         matched_faith = self._prayer_cache.get(normalized)
         logger.debug(f"[PrayerTrigger] Matched faith: {matched_faith}, cache size: {len(self._prayer_cache)}")
         if not matched_faith:
             logger.debug("[PrayerTrigger] No prayer match")
             return
 
-        # 7. 现在才解析玩家身份（昂贵操作，仅对潜在祷词消息执行）
+        # 9. 现在才解析玩家身份（昂贵操作，仅对潜在祷词消息执行）
         player = await self._resolve_self_player_lenient(event)
         logger.debug(f"[PrayerTrigger] Player resolved: {player.player_name if player else None}, faith: {player.faith if player else None}")
         if not player or not player.faith:
             logger.debug("[PrayerTrigger] Player not found or no faith")
             return
 
-        # 8. 检查是否匹配玩家自己的命途（发送其他命途的祷词不触发）
+        # 10. 检查是否匹配玩家自己的命途（发送其他命途的祷词不触发）
         if player.faith != matched_faith:
             logger.debug(f"[PrayerTrigger] Player faith {player.faith} != matched {matched_faith}")
             return
 
-        # 9. 检查今日是否已触发（DB 查询）
+        # 11. 检查今日是否已触发（DB 查询）
         if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
             return
 
-        # 10. 随机 -2 到 +2（暂时禁用，固定为 0，后续可能启用）
+        # 12. 随机 -2 到 +2（暂时禁用，固定为 0，后续可能启用）
         # import random
         # delta = random.randint(-2, 2)
         # # 如果配置不允许负分，则 clamp 到 [0, 2]
@@ -2183,12 +2196,12 @@ class FaithLadderPlugin(Star):
         #     delta = max(0, delta)
         delta = 0  # 暂时不加分也不扣分
 
-        # 11. 记录今日已触发（DB 写入，唯一约束防并发）
+        # 13. 记录今日已触发（DB 写入，唯一约束防并发）
         recorded = await self.db_manager.record_prayer_hit(group_id, player.player_id, delta)
         if not recorded:
             return  # 并发情况，已被其他请求抢先
 
-        # 12. 加分（ladder_delta=0, pilgrimage_delta=delta）
+        # 14. 加分（ladder_delta=0, pilgrimage_delta=delta）
         # 暂时 delta=0，不会实际改变分数，但仍记录触发
         if delta != 0:
             ok, _ = await self.ladder_service.add_score(
@@ -2200,7 +2213,7 @@ class FaithLadderPlugin(Star):
             if not ok:
                 return
 
-        # 13. 回复群消息 + 阻止 AI 也响应祷词
+        # 15. 回复群消息 + 阻止 AI 也响应祷词
         msg = format_prayer_trigger(player.player_name, player.faith, delta, self.config)
         yield event.plain_result(msg)
         event.stop_event()
