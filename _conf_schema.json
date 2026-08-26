@@ -50,19 +50,19 @@
     "default": "批量录入"
   },
   "whitelist": {
-    "description": "积分录入白名单（可在 WebUI 直接配置，无需指令操作）",
+    "description": "诸神列表（可在 WebUI 直接配置，无需指令操作）",
     "type": "list",
     "default": [],
     "items": {
       "type": "object",
       "items": {
         "type": {
-          "description": "类型：user（用户ID）或 group（群号）",
+          "description": "类型（仅支持 user）",
           "type": "string",
           "default": "user"
         },
         "id": {
-          "description": "用户ID 或 群号",
+          "description": "用户ID（QQ号）",
           "type": "string",
           "default": ""
         },

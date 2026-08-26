@@ -208,13 +208,14 @@ class TestWhitelistOperations:
         assert await db_manager.is_whitelisted("u123") is True
 
     async def test_get_whitelist(self, db_manager):
-        """Test getting all global whitelist entries."""
+        """Test getting all global whitelist entries. Group type is filtered out (deprecated)."""
         await db_manager.add_to_whitelist("user", "u1", "admin")
         await db_manager.add_to_whitelist("user", "u2", "admin")
         await db_manager.add_to_whitelist("group", "g1", "admin")
 
         entries = await db_manager.get_whitelist()
-        assert len(entries) == 3
+        # Group entries are filtered out (deprecated)
+        assert len(entries) == 2
 
     async def test_get_whitelist_empty(self, db_manager):
         """Test getting whitelist when empty."""

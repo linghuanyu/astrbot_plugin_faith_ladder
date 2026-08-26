@@ -801,9 +801,9 @@ class DatabaseManager:
             return await cursor.fetchone() is not None
 
     async def get_whitelist(self) -> List[dict]:
-        """Get all global whitelist entries."""
+        """Get all global whitelist entries. 仅返回 user 类型（group 类型已废弃）。"""
         async with self._db.execute(
-            "SELECT entry_type, entry_id, added_by, added_at FROM whitelist"
+            "SELECT entry_type, entry_id, added_by, added_at FROM whitelist WHERE entry_type = 'user'"
         ) as cursor:
             rows = await cursor.fetchall()
             return [

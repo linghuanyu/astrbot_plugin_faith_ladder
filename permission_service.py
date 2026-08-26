@@ -127,13 +127,17 @@ class PermissionService:
         return format_whitelist_combined(config_entries, db_entries)
 
     def _get_config_whitelist_entries(self) -> list[dict]:
-        """Get whitelist entries from config."""
+        """Get whitelist entries from config. 仅返回 user 类型（group 类型已废弃）。"""
         whitelist = self._config.get("whitelist", [])
         result = []
         for entry in whitelist:
             if isinstance(entry, dict):
+                entry_type = str(entry.get("type", "user"))
+                # 仅返回 user 类型，group 类型已废弃不再支持
+                if entry_type != "user":
+                    continue
                 result.append({
-                    "entry_type": str(entry.get("type", "user")),
+                    "entry_type": entry_type,
                     "entry_id": str(entry.get("id", "")),
                     "note": str(entry.get("note", "")),
                     "source": "config",
