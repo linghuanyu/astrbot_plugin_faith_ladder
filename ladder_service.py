@@ -147,6 +147,43 @@ class LadderService:
         statuses = await self.db.get_player_statuses(group_id, player.player_id)
         return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
 
+    async def get_player_cards_by_names(
+        self, group_id: str, player_names: List[str],
+        init_ladder: int = 1000, init_pilgrimage: int = 100
+    ) -> tuple:
+        """批量查询玩家信息。返回 (cards_text, not_found_names)。
+        cards_text 是合并后的文本，not_found_names 是不存在的玩家名列表。
+        """
+        if not player_names:
+            return "", []
+
+        # 批量查询玩家
+        players_dict = await self.db.get_players_by_names(group_id, player_names)
+        not_found = [name for name in player_names if name not in players_dict]
+
+        if not players_dict:
+            return "", not_found
+
+        # 为每个玩家查询排名和状态（并行查询以提升性能）
+        cards = []
+        for name in player_names:
+            if name not in players_dict:
+                continue
+            player = players_dict[name]
+            ladder_rank = await self.db.get_player_ladder_rank(
+                group_id, player.ladder_score, player.pilgrimage_score
+            )
+            pilgrimage_rank = await self.db.get_player_pilgrimage_rank(
+                group_id, player.pilgrimage_score, player.ladder_score
+            )
+            statuses = await self.db.get_player_statuses(group_id, player.player_id)
+            card = format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
+            cards.append(card)
+
+        # 合并所有玩家信息
+        combined = "\n\n".join(cards)
+        return combined, not_found
+
     async def add_score(
         self,
         group_id: str,

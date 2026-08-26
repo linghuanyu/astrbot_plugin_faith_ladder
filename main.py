@@ -676,7 +676,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):
-        """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户（诸神专用）"""
+        """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户（诸神专用）或 查询 <玩家名1> <玩家名2> ...（诸神批量查询）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
         await self._maybe_trigger_qq_migration(event)
@@ -692,6 +692,7 @@ class FaithLadderPlugin(Star):
         has_perm = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         target_name = None
+        target_names = None  # 批量查询用
 
         if has_perm or is_admin:
             # 诸神/管理员：处理 @ 或玩家名参数
@@ -713,10 +714,18 @@ class FaithLadderPlugin(Star):
                     return
             else:
                 # 解析玩家名参数
-                target_name, _, error = await self._resolve_target_or_self(event, args or "")
-                if error:
-                    yield event.plain_result(error)
-                    return
+                args_str = args.strip() if args else ""
+                # 检测是否为批量查询（多个空格分隔的名字）
+                name_parts = args_str.split() if args_str else []
+                if len(name_parts) > 1:
+                    # 批量查询模式
+                    target_names = name_parts
+                else:
+                    # 单查询模式
+                    target_name, _, error = await self._resolve_target_or_self(event, args_str)
+                    if error:
+                        yield event.plain_result(error)
+                        return
         else:
             # 非诸神：无视所有参数，直接查自己（优先 QQ 绑定，回退名片识别）
             self_player = await self._resolve_self_player_lenient(event)
@@ -735,10 +744,32 @@ class FaithLadderPlugin(Star):
             return
         self.cooldown_manager.set_cooldown(cd_key)
 
+        init_ladder = self.config.get("init_ladder_score", 1000)
+        init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
+
+        # 批量查询模式
+        if target_names:
+            cards_text, not_found = await self.ladder_service.get_player_cards_by_names(
+                group_id, target_names,
+                init_ladder=init_ladder,
+                init_pilgrimage=init_pilgrimage
+            )
+            if not cards_text and not_found:
+                yield event.plain_result(f" {', '.join(not_found)} 不属于这个宇宙")
+                return
+            result_parts = []
+            if cards_text:
+                result_parts.append(cards_text)
+            if not_found:
+                result_parts.append(f"\n以下玩家不存在: {', '.join(not_found)}")
+            yield event.plain_result("\n".join(result_parts))
+            return
+
+        # 单查询模式
         text = await self.ladder_service.get_player_card_by_name(
             group_id, target_name,
-            init_ladder=self.config.get("init_ladder_score", 1000),
-            init_pilgrimage=self.config.get("init_pilgrimage_score", 100)
+            init_ladder=init_ladder,
+            init_pilgrimage=init_pilgrimage
         )
         if not text:
             yield event.plain_result(f" {target_name}不属于这个宇宙")

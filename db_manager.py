@@ -429,6 +429,20 @@ class DatabaseManager:
                 return None
             return self._row_to_player(row)
 
+    async def get_players_by_names(self, group_id: str, player_names: List[str]) -> dict:
+        """批量查询玩家。返回 {player_name: Player} 字典，不存在的玩家不包含在内。"""
+        if not player_names:
+            return {}
+        placeholders = ','.join('?' * len(player_names))
+        query = f"SELECT {self._PLAYER_COLUMNS} FROM players WHERE group_id = ? AND player_name IN ({placeholders})"
+        params = [group_id] + player_names
+        result = {}
+        async with self._db.execute(query, params) as cursor:
+            async for row in cursor:
+                player = self._row_to_player(row)
+                result[player.player_name] = player
+        return result
+
     async def get_player_by_qq(self, group_id: str, qq_id: str) -> Optional[Player]:
         """Get a player by bound QQ ID and group. Returns None if no binding."""
         async with self._db.execute(
