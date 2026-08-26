@@ -35,6 +35,12 @@ from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 _PRAYER_NORMALIZE_RE = re.compile(r'[^\w]')
 _PRAYER_CHINESE_RE = re.compile(r'[一-鿿]')
 
+# 预编译正则（通用）
+_CQ_CODE_RE = re.compile(r'\[CQ:[^\]]+\]')
+_AT_MENTION_RE = re.compile(r'@\S+')
+_CARD_BRACKET_RE = re.compile(r'^【[^】]*】\s*(.*)')
+_CARD_CONTENT_RE = re.compile(r'^【([^】]*)】\s*(.*)')
+
 
 @register(
     "astrbot_plugin_faith_ladder",
@@ -580,7 +586,7 @@ class FaithLadderPlugin(Star):
     def _extract_card_words(self, card: str) -> list:
         """从群名片中提取所有非纯数字的词（用于匹配）。"""
         card = card.strip()
-        match = re.match(r'^【[^】]*】\s*(.*)', card)
+        match = _CARD_BRACKET_RE.match(card)
         remaining = match.group(1).strip() if match else card.strip()
         return [w for w in remaining.split() if not w.isdigit()]
 
@@ -610,7 +616,7 @@ class FaithLadderPlugin(Star):
 
         # 1. 提取标签
         tag = None
-        match = re.match(r'^【([^】]*)】\s*(.*)', card)
+        match = _CARD_CONTENT_RE.match(card)
         if match:
             tag = match.group(1).strip()
             remaining = match.group(2).strip()
@@ -948,8 +954,8 @@ class FaithLadderPlugin(Star):
 
         if not (at_user_id and auto_name):
             # 只有非 @ 模式，或名片解析失败时，才从 args 提取显式参数
-            clean_args = re.sub(r'@\S+', '', args).strip()
-            clean_args = re.sub(r'\[CQ:[^\]]+\]', '', clean_args).strip()
+            clean_args = _AT_MENTION_RE.sub('', args).strip()
+            clean_args = _CQ_CODE_RE.sub('', clean_args).strip()
 
             parts = clean_args.split() if clean_args else []
 
@@ -1079,7 +1085,7 @@ class FaithLadderPlugin(Star):
         player = None
 
         # 提取参数中的第一个词作为候选玩家名（用于 @ 解析失败时回退）
-        cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip() if args else ""
+        cleaned = _CQ_CODE_RE.sub('', args).strip() if args else ""
         parts = cleaned.split()
         player_name_arg = parts[0] if parts else None
 
@@ -1150,7 +1156,7 @@ class FaithLadderPlugin(Star):
             return
 
         args = self._get_args(event, "换绑QQ")
-        cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip() if args else ""
+        cleaned = _CQ_CODE_RE.sub('', args).strip() if args else ""
         parts = cleaned.split()
         at_user_id = await self._get_at_user_id(event)
 
@@ -1987,7 +1993,7 @@ class FaithLadderPlugin(Star):
                     return
             if not receiver_player:
                 # 没 @ 或 @ 解析失败，从参数文本取第一个词
-                cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip()
+                cleaned = _CQ_CODE_RE.sub('', args).strip()
                 parts = cleaned.split()
                 if parts:
                     receiver_player = await self.db_manager.get_player_by_name(group_id, parts[0])
@@ -2063,7 +2069,7 @@ class FaithLadderPlugin(Star):
                     yield event.plain_result(err)
                     return
             if not receiver_player:
-                cleaned = re.sub(r'\[CQ:[^\]]+\]', '', args).strip()
+                cleaned = _CQ_CODE_RE.sub('', args).strip()
                 parts = cleaned.split()
                 if parts:
                     receiver_player = await self.db_manager.get_player_by_name(group_id, parts[0])

@@ -4,6 +4,7 @@ Checks both config-defined whitelist and database whitelist.
 Whitelist is GLOBAL — not scoped to any group.
 """
 
+import time
 from typing import Optional, Callable
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 
@@ -17,10 +18,22 @@ class PermissionService:
     3. DB whitelist - runtime whitelist managed via commands (global)
     """
 
+    # 权限缓存 TTL（秒）
+    CACHE_TTL = 300  # 5 分钟
+
     def __init__(self, db_manager: DatabaseManager, config: Optional[dict] = None, config_getter: Optional[Callable[[], dict]] = None):
         self.db = db_manager
         self._config_getter = config_getter
         self._config_static = config or {}
+        # 权限缓存：{user_id: (result, timestamp)}
+        self._permission_cache = {}
+
+    def invalidate_cache(self, user_id: str = None):
+        """失效权限缓存。不传 user_id 则清空全部缓存。"""
+        if user_id:
+            self._permission_cache.pop(user_id, None)
+        else:
+            self._permission_cache.clear()
 
     @property
     def _config(self) -> dict:
@@ -62,12 +75,26 @@ class PermissionService:
         Check if a user has permission to enter scores.
         Global check: config admin_ids → config whitelist → DB whitelist.
         group_id is accepted but ignored (kept for backward compatibility).
+        结果缓存 5 分钟，减少 DB 查询。
         """
+        # 检查缓存
+        now = time.time()
+        if user_id in self._permission_cache:
+            result, timestamp = self._permission_cache[user_id]
+            if now - timestamp < self.CACHE_TTL:
+                return result
+
+        # 原有逻辑
         if self.is_admin(user_id):
-            return True
-        if self.is_in_config_whitelist(user_id):
-            return True
-        return await self.db.is_whitelisted(user_id)
+            result = True
+        elif self.is_in_config_whitelist(user_id):
+            result = True
+        else:
+            result = await self.db.is_whitelisted(user_id)
+
+        # 写入缓存
+        self._permission_cache[user_id] = (result, now)
+        return result
 
     async def add_to_whitelist(
         self, entry_type: str, entry_id: str, added_by: str

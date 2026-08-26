@@ -3,6 +3,7 @@ Ladder service - core business logic for score management.
 """
 
 import re
+import time
 from typing import Optional, List, Dict, Any, Tuple, Callable, Awaitable
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
@@ -93,18 +94,61 @@ def format_item_display(item_name: str, grade: Optional[str], quantity: int) -> 
 class LadderService:
     """Core business logic for the faith ladder plugin."""
 
+    # 排行榜缓存 TTL（秒）
+    LEADERBOARD_CACHE_TTL = 30  # 30 秒
+
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+        # 排行榜缓存：{(group_id, limit): (players, timestamp)}
+        self._leaderboard_cache = {}
+        self._pilgrimage_cache = {}
+
+    def invalidate_leaderboard_cache(self, group_id: str = None):
+        """失效排行榜缓存。不传 group_id 则清空全部缓存。"""
+        if group_id:
+            keys_to_remove = [k for k in self._leaderboard_cache if k[0] == group_id]
+            for k in keys_to_remove:
+                del self._leaderboard_cache[k]
+            keys_to_remove = [k for k in self._pilgrimage_cache if k[0] == group_id]
+            for k in keys_to_remove:
+                del self._pilgrimage_cache[k]
+        else:
+            self._leaderboard_cache.clear()
+            self._pilgrimage_cache.clear()
 
     async def get_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
         """Get formatted ladder leaderboard text."""
-        players = await self.db.get_top_players(group_id, limit)
+        players = await self.get_top_players(group_id, limit)
         return format_leaderboard(players, limit)
+
+    async def get_top_players(self, group_id: str, limit: int = 10) -> List[Player]:
+        """获取登神之路排行榜，带 30 秒缓存。"""
+        cache_key = (group_id, limit)
+        now = time.time()
+        if cache_key in self._leaderboard_cache:
+            players, timestamp = self._leaderboard_cache[cache_key]
+            if now - timestamp < self.LEADERBOARD_CACHE_TTL:
+                return players
+        players = await self.db.get_top_players(group_id, limit)
+        self._leaderboard_cache[cache_key] = (players, now)
+        return players
 
     async def get_pilgrimage_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
         """Get formatted pilgrimage leaderboard text."""
-        players = await self.db.get_top_players_by_pilgrimage(group_id, limit)
+        players = await self.get_top_players_by_pilgrimage(group_id, limit)
         return format_pilgrimage_leaderboard(players, limit)
+
+    async def get_top_players_by_pilgrimage(self, group_id: str, limit: int = 10) -> List[Player]:
+        """获取觐见之梯排行榜，带 30 秒缓存。"""
+        cache_key = (group_id, limit)
+        now = time.time()
+        if cache_key in self._pilgrimage_cache:
+            players, timestamp = self._pilgrimage_cache[cache_key]
+            if now - timestamp < self.LEADERBOARD_CACHE_TTL:
+                return players
+        players = await self.db.get_top_players_by_pilgrimage(group_id, limit)
+        self._pilgrimage_cache[cache_key] = (players, now)
+        return players
 
     async def get_leaderboard_players(self, group_id: str, limit: int = 10) -> List[Player]:
         """Get top players for ladder leaderboard (for image rendering)."""
@@ -212,6 +256,9 @@ class LadderService:
 
         if not updated:
             return False, f"未找到玩家: {target_player_name}"
+
+        # 失效排行榜缓存（积分变化后排行榜可能变化）
+        self.invalidate_leaderboard_cache(group_id)
 
         return True, format_score_result(
             target_player_name,
@@ -537,6 +584,10 @@ class LadderService:
 
             # Commit all updates atomically
             await self.db.commit()
+
+            # 失效排行榜缓存（批量录入后排行榜可能变化）
+            if success_count > 0:
+                self.invalidate_leaderboard_cache(group_id)
 
         except Exception as e:
             logger.error(f"Batch update failed, rolling back: {e}")
