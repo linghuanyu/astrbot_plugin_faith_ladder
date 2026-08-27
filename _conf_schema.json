@@ -160,32 +160,32 @@
   "oath_text_虚无": {
     "description": "虚无信仰弃誓文本",
     "type": "string",
-    "default": "{name}背弃了虚无之道。万法归寂，誓约已碎。"
+    "default": "{name}碎了虚无之誓。从此真伪不分，命途不再回应你的低语"
   },
   "oath_text_存在": {
     "description": "存在信仰弃誓文本",
     "type": "string",
-    "default": "{name}否认了存在之意。所信皆空，誓约已碎。"
+    "default": "{name}碎了存在之誓。记忆开始遗忘你，时间不再为你停留"
   },
   "oath_text_文明": {
     "description": "文明信仰弃誓文本",
     "type": "string",
-    "default": "{name}舍弃了文明之光。秩序崩塌，誓约已碎。"
+    "default": "{name}碎了文明之誓。火种不再为你燃烧，秩序已将你除名"
   },
   "oath_text_沉沦": {
     "description": "沉沦信仰弃誓文本",
     "type": "string",
-    "default": "{name}离开了沉沦之渊。深渊不再接纳，誓约已碎。"
+    "default": "{name}碎了沉沦之誓。深渊拒绝了你，连腐朽都不再接纳"
   },
   "oath_text_混沌": {
     "description": "混沌信仰弃誓文本",
     "type": "string",
-    "default": "{name}背离了混沌之源。混乱不再眷顾，誓约已碎。"
+    "default": "{name}碎了混沌之誓。混乱不再眷顾，沉默吞没了你最后的喧嚣"
   },
   "oath_text_生命": {
     "description": "生命信仰弃誓文本",
     "type": "string",
-    "default": "{name}抛弃了生命之根。生机断绝，誓约已碎。"
+    "default": "{name}碎了生命之誓。根系枯萎，繁荣不再，死亡提前叩门"
   },
   "prayer_text_虚无": {
     "description": "虚无信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
