@@ -501,7 +501,7 @@ class FaithLadderPlugin(Star):
         return None
 
     async def _resolve_player_name(self, event: AstrMessageEvent) -> Optional[str]:
-        """自动识别发送者自己的群名片中的玩家名。"""
+        """自动识别发送者自己的群名片中的玩家名，并提取保存具体信仰。"""
         try:
             sender_id = str(event.get_sender_id())
             group_id = self._get_group_id(event)
@@ -510,6 +510,15 @@ class FaithLadderPlugin(Star):
             )
             card = info.get("card", "") or info.get("nickname", "")
             if card:
+                # 提取并保存具体信仰
+                specific_faith = self._extract_specific_faith(card)
+                if specific_faith:
+                    # 通过名片匹配到玩家名后，找到对应玩家记录并保存信仰
+                    player_name = await self._resolve_name_from_card(card, group_id)
+                    if player_name:
+                        player = await self.db_manager.get_player_by_name(group_id, player_name)
+                        if player and player.specific_faith != specific_faith:
+                            await self.db_manager.set_player_specific_faith(group_id, player.player_id, specific_faith)
                 return await self._resolve_name_from_card(card, group_id)
         except Exception:
             pass
