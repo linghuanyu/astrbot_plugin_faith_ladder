@@ -176,6 +176,7 @@ def format_help(config: dict) -> str:
         f"拒绝道具 - 拒绝赠送（所有人；诸神可指定接收玩家）\n"
         f"\n"
         f"[身份绑定]\n"
+        f"检测玩家 - 检查绑定状态，未绑定时自动绑定\n"
         f"绑定QQ @用户 - 为玩家绑定 QQ（诸神；防名片冒充）\n"
         f"\n"
         f"[状态] (诸神权限)\n"
@@ -266,7 +267,7 @@ def format_score_result(
     pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
 
     return (
-        f"{player_name} 的棋局已更新\n"
+        f"{player_name} 的积分已更新\n"
         f"登神之路: {ladder_str} → {new_ladder}\n"
         f"觐见之梯: {pilgrimage_str} → {new_pilgrimage}"
     )

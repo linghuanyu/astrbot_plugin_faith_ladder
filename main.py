@@ -216,7 +216,8 @@ class FaithLadderPlugin(Star):
 
     async def _resolve_self_player_lenient(self, event: AstrMessageEvent) -> Optional[Player]:
         """优先 QQ 绑定查找；失败则回退名片识别（兼容未绑定的老玩家）。
-        仅用于只读命令（查询/查储物空间）。"""
+        仅用于只读命令（查询/查储物空间）。
+        若通过名片识别到玩家，自动绑定其 QQ 避免重复触发。"""
         player = await self._resolve_self_player(event)
         if player:
             return player
@@ -224,7 +225,16 @@ class FaithLadderPlugin(Star):
         if not name:
             return None
         group_id = self._get_group_id(event)
-        return await self.db_manager.get_player_by_name(group_id, name)
+        player = await self.db_manager.get_player_by_name(group_id, name)
+        if player and not player.qq_id:
+            # 名片识别成功但 QQ 未绑定 → 自动绑定
+            sender_qq = str(event.get_sender_id())
+            # 检查该 QQ 是否已被其他玩家绑定
+            existing = await self.db_manager.get_player_by_qq(group_id, sender_qq)
+            if not existing:
+                await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
+                logger.info(f"[AutoBind] 名片识别自动绑定 QQ: {player.player_name} ← {sender_qq}")
+        return player
 
     async def _maybe_trigger_qq_migration(self, event: AstrMessageEvent):
         """首次事件时触发后台 QQ 绑定迁移；只运行一次。"""
@@ -1085,6 +1095,58 @@ class FaithLadderPlugin(Star):
             ])
         else:
             yield event.plain_result(message + target_info)
+
+    # === 检测玩家 ===
+
+    @filter.command("检测玩家", alias={"check", "检测"})
+    async def cmd_check_player(self, event: AstrMessageEvent):
+        """检测当前玩家的绑定状态（QQ、信仰等），未绑定时自动绑定。"""
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+
+        # 尝试通过名片识别玩家
+        player_name = await self._resolve_player_name(event)
+        if not player_name:
+            yield event.plain_result("无法从你的群名片识别到玩家。\n请确保名片格式为「【信仰】职业 玩家名」或联系诸神录入。")
+            return
+
+        player = await self.db_manager.get_player_by_name(group_id, player_name)
+        if not player:
+            yield event.plain_result(f"数据库中未找到玩家「{player_name}」，请联系诸神录入。")
+            return
+
+        # 检查 QQ 绑定状态
+        qq_bound = player.qq_id is not None
+        sender_qq = str(event.get_sender_id())
+
+        if not qq_bound:
+            # 检查该 QQ 是否已被其他玩家绑定
+            existing = await self.db_manager.get_player_by_qq(group_id, sender_qq)
+            if existing:
+                yield event.plain_result(
+                    f"检测玩家: {player.player_name}\n"
+                    f"命途: {player.faith or '未设定'} | 职业: {player.class_ or '未设定'}\n"
+                    f"QQ 状态: 你的 QQ 已被玩家「{existing.player_name}」绑定，无法自动绑定。\n"
+                    f"如需换绑请联系诸神使用「换绑QQ」。"
+                )
+                return
+
+            # 自动绑定
+            await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
+            status_line = f"QQ 状态: 已自动绑定 {sender_qq}"
+        else:
+            status_line = f"QQ 状态: 已绑定 {player.qq_id}"
+
+        faith_line = f"命途: {player.faith or '未设定'}"
+        if player.specific_faith:
+            faith_line += f"（{player.specific_faith}）"
+
+        yield event.plain_result(
+            f"检测玩家: {player.player_name}\n"
+            f"{faith_line} | 职业: {player.class_ or '未设定'}\n"
+            f"{status_line}\n"
+            f"登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}"
+        )
 
     # === 绑定 QQ ===
 
