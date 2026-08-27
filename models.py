@@ -46,7 +46,8 @@ class Player:
     group_id: str
     player_name: str
     class_: Optional[str] = None
-    faith: Optional[str] = None  # 存储的是命途（path），如"生命"、"虚无"
+    faith: Optional[str] = None  # 命途（path），如"虚无"、"存在"
+    specific_faith: Optional[str] = None  # 具体信仰（faith），如"欺诈"、"记忆"
     ladder_score: int = 0
     pilgrimage_score: int = 0
     created_at: Optional[str] = None
@@ -63,3 +64,8 @@ class Player:
     def validate_faith(faith_name: str) -> bool:
         """Validate a faith name (现在是命途)."""
         return faith_name in VALID_PATHS
+
+    @staticmethod
+    def validate_specific_faith(faith_name: str) -> bool:
+        """Validate a specific faith name (16个具体信仰)."""
+        return faith_name in VALID_FAITHS

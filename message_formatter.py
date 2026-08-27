@@ -296,153 +296,44 @@ def format_inventory(player_name: str, items: list) -> str:
     return "\n".join(lines)
 
 
-def format_prayer_trigger(player_name: str, player_faith: str, prayer_path: str, delta: int, config: dict = None) -> str:
-    """格式化祷词触发回复。按命途使用不同风格的文案。
+def format_prayer_trigger(player_name: str, player_faith: str, prayer_faith: str, delta: int, config: dict = None) -> str:
+    """格式化祷词触发回复。比较玩家具体信仰与祷词具体信仰。
 
     Args:
         player_name: 玩家名
-        player_faith: 玩家的具体信仰名（如"欺诈"，从名片【】中提取）
-        prayer_path: 祷词对应的命途名（如"虚无"）
+        player_faith: 玩家的具体信仰名（如"欺诈"）
+        prayer_faith: 祷词对应的具体信仰名（如"欺诈"）
         delta: 觐见分变化值（显示用）
         config: 插件配置（用于获取自定义文案）
     """
     import random
     from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
 
-    # 各命途的沉浸感文案
-    _PATH_MESSAGES = {
-        "虚无": {
-            "positive": [
-                "{god}低语：你看见了不该看见的，觐见+{delta}",
-                "{god}轻笑：真伪之间，你选了有趣的那边，觐见+{delta}",
-                "{god}垂眸：命如繁星，你恰好摘到一颗，觐见+{delta}",
-            ],
-            "negative": [
-                "{god}嘲弄：你本不该有此妄念，觐见{delta}",
-                "{god}冷眼：连虚无都骗不过你，觐见{delta}",
-                "{god}叹息：真伪不分，代价总要付的，觐见{delta}",
-            ],
-            "neutral": [
-                "{god}默然，真伪依旧",
-                "{god}不语，命途无波",
-                "{god}看了你一眼，又移开了视线",
-            ],
-        },
-        "存在": {
-            "positive": [
-                "{god}回响：往昔因你而重，觐见+{delta}",
-                "{god}铭记：此刻将刻入永恒，觐见+{delta}",
-                "{god}垂顾：时光因你停了一瞬，觐见+{delta}",
-            ],
-            "negative": [
-                "{god}剥落：此刻终将遗忘，觐见{delta}",
-                "{god}淡漠：你的存在不值一提，觐见{delta}",
-                "{god}回望：时间不收留无根之人，觐见{delta}",
-            ],
-            "neutral": [
-                "{god}沉寂，如从未发生",
-                "{god}不语，时光继续流淌",
-                "{god}看了一眼，没有铭记",
-            ],
-        },
-        "文明": {
-            "positive": [
-                "{god}共鸣：火种因你而明，觐见+{delta}",
-                "{god}审视：你配得上这簇火焰，觐见+{delta}",
-                "{god}嘉许：血与火中，你站住了，觐见+{delta}",
-            ],
-            "negative": [
-                "{god}审视：你尚不配执火，觐见{delta}",
-                "{god}冷漠：火种不收懦夫，觐见{delta}",
-                "{god}移目：真理不为妄念闪耀，觐见{delta}",
-            ],
-            "neutral": [
-                "{god}沉默，火种不熄不灭",
-                "{god}不语，秩序自循",
-                "{god}看了一眼，火焰没有变化",
-            ],
-        },
-        "沉沦": {
-            "positive": [
-                "深渊回响：它满意你的沉坠，觐见+{delta}",
-                "{god}呢喃：沉得越深，看得越清，觐见+{delta}",
-                "{god}微笑：枷锁松了一环，觐见+{delta}",
-            ],
-            "negative": [
-                "{god}蔓延：你连堕落都不够纯粹，觐见{delta}",
-                "{god}嗤笑：深渊不收半途之人，觐见{delta}",
-                "{god}冷视：腐朽也挑资格，觐见{delta}",
-            ],
-            "neutral": [
-                "深渊无波，枷锁仍在",
-                "{god}不语，沉沦自循",
-                "{god}看了一眼，深渊没有回应",
-            ],
-        },
-        "混沌": {
-            "positive": [
-                "{god}低笑：有趣，太有趣了，觐见+{delta}",
-                "{god}鼓掌：荒诞之中，你选了最妙的一步，觐见+{delta}",
-                "{god}玩味：混乱因你多了一分色彩，觐见+{delta}",
-            ],
-            "negative": [
-                "{god}凝视：你连疯狂都不够资格，觐见{delta}",
-                "{god}摇头：荒诞也要有资本的，觐见{delta}",
-                "{god}无趣：这点痴愚，不够看，觐见{delta}",
-            ],
-            "neutral": [
-                "沉默回应，寰宇无音",
-                "{god}不语，万物归寂",
-                "{god}看了一眼，又觉得无聊",
-            ],
-        },
-        "生命": {
-            "positive": [
-                "{god}绽放：根系因你而延，觐见+{delta}",
-                "{god}恩赐：万物因你多了一丝生机，觐见+{delta}",
-                "{god}垂顾：繁荣之路上，你多走了一步，觐见+{delta}",
-            ],
-            "negative": [
-                "{god}垂视：你的生机尚嫌多余，觐见{delta}",
-                "{god}冷漠：根系不收无根之种，觐见{delta}",
-                "{god}摇头：死亡不急于一时，觐见{delta}",
-            ],
-            "neutral": [
-                "生命不语，枯荣自循",
-                "{god}不语，万物自生自灭",
-                "{god}看了一眼，没有绽放也没有凋零",
-            ],
-        },
-    }
+    # 检查玩家信仰是否匹配祷词信仰
+    faith_matches = player_faith == prayer_faith
 
-    # 检查玩家信仰是否匹配祷词的命途
-    path_matches = player_faith in FAITH_TO_PATH and FAITH_TO_PATH[player_faith] == prayer_path
+    if faith_matches:
+        # 匹配：使用玩家的信仰名
+        god_name = player_faith
 
-    if path_matches:
-        # 匹配：使用玩家的具体信仰名
-        god_name = player_faith if player_faith else prayer_path
-
-        # 确定文案池配置键（优先查命途专属配置，回退到通用配置）
+        # 优先查信仰专属配置，回退到通用配置
         if delta > 0:
-            config_key = f"prayer_trigger_messages_positive_{prayer_path}"
+            config_key = f"prayer_trigger_messages_positive_{prayer_faith}"
             fallback_key = "prayer_trigger_messages_positive"
-            path_msgs = _PATH_MESSAGES.get(prayer_path, {}).get("positive")
-            default_msgs = path_msgs or ["{god}今日心情不错，觐见+{delta}"]
+            default_msgs = ["{god}今日心情不错，觐见+{delta}"]
             template_vars = {"god": god_name, "delta": f"+{delta}"}
         elif delta < 0:
-            config_key = f"prayer_trigger_messages_negative_{prayer_path}"
+            config_key = f"prayer_trigger_messages_negative_{prayer_faith}"
             fallback_key = "prayer_trigger_messages_negative"
-            path_msgs = _PATH_MESSAGES.get(prayer_path, {}).get("negative")
-            default_msgs = path_msgs or ["{god}今日心情不佳，觐见{delta}"]
+            default_msgs = ["{god}今日心情不佳，觐见{delta}"]
             template_vars = {"god": god_name, "delta": str(delta)}
         else:
-            config_key = f"prayer_trigger_messages_neutral_{prayer_path}"
+            config_key = f"prayer_trigger_messages_neutral_{prayer_faith}"
             fallback_key = "prayer_trigger_messages_neutral"
-            path_msgs = _PATH_MESSAGES.get(prayer_path, {}).get("neutral")
-            default_msgs = path_msgs or ["{god}听到了你的祈祷，但未起波澜"]
+            default_msgs = ["{god}听到了你的祈祷，但未起波澜"]
             template_vars = {"god": god_name}
 
-        # 从配置获取文案池：命途专属 → 通用 → 默认
+        # 从配置获取文案池：信仰专属 → 通用 → 默认
         messages = None
         if config:
             messages = config.get(config_key) or config.get(fallback_key)
@@ -455,28 +346,23 @@ def format_prayer_trigger(player_name: str, player_faith: str, prayer_path: str,
 
     else:
         # 不匹配（渎神）
-        # 从 prayer_path 对应的信仰中随机选一个
-        path_faiths = [f for f, p in FAITH_TO_PATH.items() if p == prayer_path]
-        prayer_faith = random.choice(path_faiths) if path_faiths else prayer_path
-
-        god_name = player_faith if player_faith else prayer_path
+        prayer_path = FAITH_TO_PATH.get(prayer_faith, prayer_faith)
 
         if delta == 0:
             # 渎神但随机到 0：宽宏大量
-            msg = f"{god_name}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚……\n但神明宽宏大量，放过了你这次渎神"
+            msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚……\n但神明宽宏大量，放过了你这次渎神"
         else:
             # 渎神扣分
             config_key = "prayer_trigger_messages_mismatch"
-            path_msgs = _PATH_MESSAGES.get(prayer_path, {}).get("mismatch")
-            default_msgs = path_msgs or ["{god}冷笑：蝼蚁也敢觊觎{prayer}的领域？觐见{delta}"]
+            default_msgs = ["{god}冷笑：蝼蚁也敢觊觎{prayer}的领域？觐见{delta}"]
             messages = config.get(config_key, default_msgs) if config else default_msgs
             if not messages:
                 messages = default_msgs
 
-            template_vars = {"god": god_name, "prayer": prayer_faith, "delta": str(delta)}
+            template_vars = {"god": player_faith, "prayer": prayer_faith, "delta": str(delta)}
             template = random.choice(messages)
             result = template.format(**template_vars)
-            msg = f"{god_name}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚\n{result}"
+            msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚\n{result}"
 
     # 测试模式：始终附加说明（因为目前不实际改分）
     msg += "\n（本次结果暂时不会影响实际分数）"

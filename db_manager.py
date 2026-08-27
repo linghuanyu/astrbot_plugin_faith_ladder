@@ -28,7 +28,7 @@ class DatabaseManager:
     # Column list for players SELECT queries (kept in one place so schema changes
     # only need to be updated here + in _row_to_player).
     _PLAYER_COLUMNS = (
-        "player_id, group_id, player_name, class, faith, "
+        "player_id, group_id, player_name, class, faith, specific_faith, "
         "ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id"
     )
 
@@ -54,6 +54,7 @@ class DatabaseManager:
                 player_name TEXT NOT NULL,
                 class TEXT DEFAULT NULL,
                 faith TEXT DEFAULT NULL,
+                specific_faith TEXT DEFAULT NULL,
                 ladder_score INTEGER DEFAULT 0,
                 pilgrimage_score INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -172,6 +173,9 @@ class DatabaseManager:
 
         # Migrate: add qq_id column to players (QQ binding for anti-impersonation)
         await self._migrate_qq_id()
+
+        # Migrate: add specific_faith column to players
+        await self._migrate_specific_faith()
 
         # Migrate: remove deprecated group entries from whitelist
         await self._migrate_whitelist_remove_groups()
@@ -336,6 +340,18 @@ class DatabaseManager:
             await self._db.commit()
             logger.info("[Migration] Added qq_id column + idx_players_qq to players")
 
+    async def _migrate_specific_faith(self):
+        """Add specific_faith column to players table if it doesn't exist."""
+        async with self._db.execute("PRAGMA table_info(players)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if "specific_faith" not in columns:
+            await self._db.execute(
+                "ALTER TABLE players ADD COLUMN specific_faith TEXT DEFAULT NULL"
+            )
+            await self._db.commit()
+            logger.info("[Migration] Added specific_faith column to players")
+
     async def _migrate_whitelist(self):
         """Migrate whitelist table from per-group to global if needed."""
         async with self._db.execute("PRAGMA table_info(whitelist)") as cursor:
@@ -374,10 +390,11 @@ class DatabaseManager:
         """Convert a database row tuple to a Player object."""
         return Player(
             player_id=row[0], group_id=row[1], player_name=row[2],
-            class_=row[3], faith=row[4], ladder_score=row[5],
-            pilgrimage_score=row[6], created_at=row[7], updated_at=row[8],
-            oathbreaker=bool(row[9]) if len(row) > 9 else False,
-            qq_id=row[10] if len(row) > 10 else None,
+            class_=row[3], faith=row[4], specific_faith=row[5],
+            ladder_score=row[6], pilgrimage_score=row[7],
+            created_at=row[8], updated_at=row[9],
+            oathbreaker=bool(row[10]) if len(row) > 10 else False,
+            qq_id=row[11] if len(row) > 11 else None,
         )
 
     async def upsert_player(
@@ -386,7 +403,7 @@ class DatabaseManager:
     ) -> Player:
         """Create or update a player record. New players get initial scores."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
+            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -400,7 +417,7 @@ class DatabaseManager:
                 )
                 await self._db.commit()
                 async with self._db.execute(
-                    "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
+                    "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
                     (player_id, group_id)
                 ) as cursor:
                     updated_row = await cursor.fetchone()
@@ -421,7 +438,7 @@ class DatabaseManager:
     async def get_player(self, group_id: str, player_id: str) -> Optional[Player]:
         """Get a player by ID and group."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
+            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -530,7 +547,7 @@ class DatabaseManager:
     async def get_top_players(self, group_id: str, limit: int = 10) -> List[Player]:
         """Get top players by ladder score for a group."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY ladder_score DESC LIMIT ?",
+            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY ladder_score DESC LIMIT ?",
             (group_id, limit)
         ) as cursor:
             rows = await cursor.fetchall()
@@ -539,7 +556,7 @@ class DatabaseManager:
     async def get_top_players_by_pilgrimage(self, group_id: str, limit: int = 10) -> List[Player]:
         """Get top players by pilgrimage score for a group."""
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY pilgrimage_score DESC LIMIT ?",
+            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY pilgrimage_score DESC LIMIT ?",
             (group_id, limit)
         ) as cursor:
             rows = await cursor.fetchall()
@@ -630,7 +647,7 @@ class DatabaseManager:
     async def set_player_faith(
         self, group_id: str, player_id: str, faith_name: str
     ) -> Optional[Player]:
-        """Set a player's faith only. Returns updated player or None if not found."""
+        """Set a player's faith (path) only. Returns updated player or None if not found."""
         async with self._db.execute(
             "SELECT player_id FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
@@ -641,6 +658,24 @@ class DatabaseManager:
         await self._db.execute(
             "UPDATE players SET faith = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
             (faith_name, player_id, group_id)
+        )
+        await self._db.commit()
+        return await self.get_player(group_id, player_id)
+
+    async def set_player_specific_faith(
+        self, group_id: str, player_id: str, specific_faith: str
+    ) -> Optional[Player]:
+        """Set a player's specific faith. Returns updated player or None if not found."""
+        async with self._db.execute(
+            "SELECT player_id FROM players WHERE player_id = ? AND group_id = ?",
+            (player_id, group_id)
+        ) as cursor:
+            if not await cursor.fetchone():
+                return None
+
+        await self._db.execute(
+            "UPDATE players SET specific_faith = ?, faith = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
+            (specific_faith, FAITH_TO_PATH.get(specific_faith), player_id, group_id)
         )
         await self._db.commit()
         return await self.get_player(group_id, player_id)

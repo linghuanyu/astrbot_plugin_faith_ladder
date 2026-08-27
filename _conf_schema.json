@@ -157,65 +157,165 @@
     "type": "string",
     "default": "立誓"
   },
-  "oath_text_虚无": {
-    "description": "虚无信仰弃誓文本",
+  "oath_text_诞育": {
+    "description": "诞育信仰弃誓文本",
     "type": "string",
-    "default": "{name}碎了虚无之誓。从此真伪不分，命途不再回应你的低语"
+    "default": "{name}碎了诞育之誓。生命之根枯萎，新生不再降临"
   },
-  "oath_text_存在": {
-    "description": "存在信仰弃誓文本",
+  "oath_text_繁荣": {
+    "description": "繁荣信仰弃誓文本",
     "type": "string",
-    "default": "{name}碎了存在之誓。记忆开始遗忘你，时间不再为你停留"
+    "default": "{name}碎了繁荣之誓。万物凋零，生机断绝"
   },
-  "oath_text_文明": {
-    "description": "文明信仰弃誓文本",
+  "oath_text_死亡": {
+    "description": "死亡信仰弃誓文本",
     "type": "string",
-    "default": "{name}碎了文明之誓。火种不再为你燃烧，秩序已将你除名"
+    "default": "{name}碎了死亡之誓。终焉之门关闭，灵魂无处安息"
   },
-  "oath_text_沉沦": {
-    "description": "沉沦信仰弃誓文本",
+  "oath_text_污堕": {
+    "description": "污堕信仰弃誓文本",
     "type": "string",
-    "default": "{name}碎了沉沦之誓。深渊拒绝了你，连腐朽都不再接纳"
+    "default": "{name}碎了污堕之誓。深渊不再接纳，沉沦之路断裂"
   },
-  "oath_text_混沌": {
-    "description": "混沌信仰弃誓文本",
+  "oath_text_腐朽": {
+    "description": "腐朽信仰弃誓文本",
     "type": "string",
-    "default": "{name}碎了混沌之誓。混乱不再眷顾，沉默吞没了你最后的喧嚣"
+    "default": "{name}碎了腐朽之誓。连腐朽都拒绝了你，归于虚无"
   },
-  "oath_text_生命": {
-    "description": "生命信仰弃誓文本",
+  "oath_text_湮灭": {
+    "description": "湮灭信仰弃誓文本",
     "type": "string",
-    "default": "{name}碎了生命之誓。根系枯萎，繁荣不再，死亡提前叩门"
+    "default": "{name}碎了湮灭之誓。万物不存，连灰烬都不留"
   },
-  "prayer_text_虚无": {
-    "description": "虚无信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "list",
-    "default": ["不辨真伪勿论虚实", "命若繁星望而不及"]
+  "oath_text_秩序": {
+    "description": "秩序信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了秩序之誓。法则崩塌，文明之光不再为你闪耀"
   },
-  "prayer_text_存在": {
-    "description": "存在信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "list",
-    "default": ["昔我长铭流光拓影", "时光如隙我亦如风"]
+  "oath_text_真理": {
+    "description": "真理信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了真理之誓。真相远去，再无法看清本质"
   },
-  "prayer_text_文明": {
-    "description": "文明信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "list",
-    "default": ["文明火起秩序长存", "洞窥本质行见真理", "何以求存唯血与火"]
+  "oath_text_战争": {
+    "description": "战争信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了战争之誓。血与火不再眷顾，你已不配执刃"
   },
-  "prayer_text_沉沦": {
-    "description": "沉沦信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "list",
-    "default": ["解脱枷锁直面心欲", "众生应腐万物将朽", "于无中生于寂中灭"]
+  "oath_text_混乱": {
+    "description": "混乱信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了混乱之誓。荒诞不再有趣，混沌之门关闭"
   },
-  "prayer_text_混沌": {
-    "description": "混沌信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
-    "type": "list",
-    "default": ["虚构规律寰宇笑谈", "生命皆痴文明皆愚", "万物归寂寰宇无音"]
+  "oath_text_痴愚": {
+    "description": "痴愚信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了痴愚之誓。沉默吞没了你最后的喧嚣"
   },
-  "prayer_text_生命": {
-    "description": "生命信仰录入玩家祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+  "oath_text_沉默": {
+    "description": "沉默信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了沉默之誓。寰宇无音，你连被遗忘的资格都没有"
+  },
+  "oath_text_记忆": {
+    "description": "记忆信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了记忆之誓。往昔开始遗忘你，铭刻化为空白"
+  },
+  "oath_text_时间": {
+    "description": "时间信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了时间之誓。流光不再为你停留，此刻化为永恒的空"
+  },
+  "oath_text_欺诈": {
+    "description": "欺诈信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了欺诈之誓。真伪不再分，命途不再回应你的低语"
+  },
+  "oath_text_命运": {
+    "description": "命运信仰弃誓文本",
+    "type": "string",
+    "default": "{name}碎了命运之誓。命线断裂，繁星不再为你闪烁"
+  },
+  "prayer_text_诞育": {
+    "description": "诞育信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
     "type": "list",
-    "default": ["感孕众生衔育自然", "万物滋生亦繁亦荣", "灵魂安眠生命终焉"]
+    "default": ["感孕众生衔育自然"]
+  },
+  "prayer_text_繁荣": {
+    "description": "繁荣信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["万物滋生亦繁亦荣"]
+  },
+  "prayer_text_死亡": {
+    "description": "死亡信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["灵魂安眠生命终焉"]
+  },
+  "prayer_text_污堕": {
+    "description": "污堕信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["解脱枷锁直面心欲"]
+  },
+  "prayer_text_腐朽": {
+    "description": "腐朽信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["众生应腐万物将朽"]
+  },
+  "prayer_text_湮灭": {
+    "description": "湮灭信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["于无中生于寂中灭"]
+  },
+  "prayer_text_秩序": {
+    "description": "秩序信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["文明火起秩序长存"]
+  },
+  "prayer_text_真理": {
+    "description": "真理信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["洞窥本质行见真理"]
+  },
+  "prayer_text_战争": {
+    "description": "战争信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["何以求存唯血与火"]
+  },
+  "prayer_text_混乱": {
+    "description": "混乱信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["虚构规律寰宇笑谈"]
+  },
+  "prayer_text_痴愚": {
+    "description": "痴愚信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["生命皆痴文明皆愚"]
+  },
+  "prayer_text_沉默": {
+    "description": "沉默信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["万物归寂寰宇无音"]
+  },
+  "prayer_text_记忆": {
+    "description": "记忆信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["昔我长铭流光拓影"]
+  },
+  "prayer_text_时间": {
+    "description": "时间信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["时光如隙我亦如风"]
+  },
+  "prayer_text_欺诈": {
+    "description": "欺诈信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["不辨真伪勿论虚实"]
+  },
+  "prayer_text_命运": {
+    "description": "命运信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "type": "list",
+    "default": ["命若繁星望而不及"]
   },
   "auto_whitelist_group": {
     "description": "自动白名单群号（该群成员加入时自动加入白名单，退群时自动移除）",
@@ -231,24 +331,31 @@
     }
   },
   "prayer_trigger_messages_positive": {
-    "description": "祷词触发正分时的随机文案列表（{god}=信仰名, {delta}=变化值）",
+    "description": "祷词触发正分时的随机文案列表（通用回退，{god}=具体信仰名, {delta}=变化值）",
     "type": "list",
     "default": [
       "{god}今日心情不错，觐见+{delta}"
     ]
   },
   "prayer_trigger_messages_negative": {
-    "description": "祷词触发负分时的随机文案列表（{god}=信仰名, {delta}=变化值）",
+    "description": "祷词触发负分时的随机文案列表（通用回退，{god}=具体信仰名, {delta}=变化值）",
     "type": "list",
     "default": [
       "{god}今日心情不佳，觐见{delta}"
     ]
   },
   "prayer_trigger_messages_neutral": {
-    "description": "祷词触发零分时的随机文案列表（{god}=信仰名）",
+    "description": "祷词触发零分时的随机文案列表（通用回退，{god}=具体信仰名）",
     "type": "list",
     "default": [
       "{god}听到了你的祈祷，但未起波澜"
+    ]
+  },
+  "prayer_trigger_messages_mismatch": {
+    "description": "祷词触发不匹配时的随机文案列表（{god}=玩家信仰, {prayer}=祷词信仰, {delta}=变化值）",
+    "type": "list",
+    "default": [
+      "{god}冷笑：蝼蚁也敢觊觎{prayer}的领域？觐见{delta}"
     ]
   },
   "gift_daily_accept_limit": {
