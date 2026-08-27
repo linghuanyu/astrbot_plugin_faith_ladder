@@ -3,7 +3,7 @@ Message formatting utilities for the faith ladder plugin.
 """
 
 from typing import List, Optional
-from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
+from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS, VALID_FAITHS, FAITH_TO_PATH
 
 
 def _name_with_tag(player: Player) -> str:
@@ -12,32 +12,32 @@ def _name_with_tag(player: Player) -> str:
     return f"{player.player_name}{tag}"
 
 
+def _faith_display(player: Player) -> str:
+    """显示玩家信仰：具体信仰 > 命途 > 未设定"""
+    if player.specific_faith:
+        return player.specific_faith
+    if player.faith:
+        return player.faith
+    return "未设定"
+
+
 def format_leaderboard(players: List[Player], limit: int = 10) -> str:
     """Format the leaderboard display."""
     if not players:
         return "暂无排名数据。"
 
-    lines = ["==登神之路排行榜==", ""]
+    lines = ["═══ 登神之路 · 凡人的阶梯 ═══", ""]
     displayed = min(len(players), limit)
 
     for rank, player in enumerate(players[:limit], 1):
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
-        faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
-        lines.append(
-            f"{rank}. {_name_with_tag(player)}"
-        )
-        lines.append(
-            f"   {class_str} {faith_str}"
-        )
-        lines.append(
-            f"   登神之路: {player.ladder_score}"
-        )
-        lines.append(
-            f"   觐见之梯: {player.pilgrimage_score}"
-        )
+        faith_str = _faith_display(player)
+        lines.append(f"{rank}. {_name_with_tag(player)}")
+        lines.append(f"   {class_str} <{faith_str}>")
+        lines.append(f"   登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}")
         lines.append("")
 
-    lines.append(f"--- 显示前 {displayed} 名 ---")
+    lines.append(f"─── 显示前 {displayed} 名 ───")
     return "\n".join(lines)
 
 
@@ -46,27 +46,18 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
     if not players:
         return "暂无排名数据。"
 
-    lines = ["==觐见之梯==", ""]
+    lines = ["═══ 觐见之梯 · 神明的凝视 ═══", ""]
     displayed = min(len(players), limit)
 
     for rank, player in enumerate(players[:limit], 1):
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
-        faith_str = f"<{player.faith}>" if player.faith else "<未设定>"
-        lines.append(
-            f"{rank}. {_name_with_tag(player)}"
-        )
-        lines.append(
-            f"   {class_str} {faith_str}"
-        )
-        lines.append(
-            f"   觐见之梯: {player.pilgrimage_score}"
-        )
-        lines.append(
-            f"   登神之路: {player.ladder_score}"
-        )
+        faith_str = _faith_display(player)
+        lines.append(f"{rank}. {_name_with_tag(player)}")
+        lines.append(f"   {class_str} <{faith_str}>")
+        lines.append(f"   觐见之梯: {player.pilgrimage_score} | 登神之路: {player.ladder_score}")
         lines.append("")
 
-    lines.append(f"--- 显示前 {displayed} 名 ---")
+    lines.append(f"─── 显示前 {displayed} 名 ───")
     return "\n".join(lines)
 
 
@@ -80,7 +71,7 @@ def format_player_card(
 ) -> str:
     """Format a player's info card with rankings and statuses."""
     class_str = player.class_ if player.class_ else "未设定"
-    faith_str = player.faith if player.faith else "未设定"
+    faith_str = _faith_display(player)
     oathbreaker_str = "(弃誓者)" if player.oathbreaker else ""
 
     # 初始积分视为未上榜
@@ -99,20 +90,17 @@ def format_player_card(
         pilgrimage_rank_str = "未上榜"
 
     lines = [
-        f"=== 玩家信息 ===",
+        f"═══ 玩家档案 ═══",
         f"姓名: {player.player_name}{oathbreaker_str}",
-        f"职业: {class_str}",
-        f"信仰: {faith_str}",
-        f"登神之路: {player.ladder_score}",
-        f"登神之路排名: {ladder_rank_str}",
-        f"觐见之梯: {player.pilgrimage_score}",
-        f"觐见之梯排名: {pilgrimage_rank_str}",
+        f"职业: {class_str} | 信仰: {faith_str}",
+        f"登神之路: {player.ladder_score} ┃ 排名: {ladder_rank_str}",
+        f"觐见之梯: {player.pilgrimage_score} ┃ 排名: {pilgrimage_rank_str}",
     ]
 
     # 状态显示
     if statuses:
         lines.append("")
-        lines.append("[状态]")
+        lines.append("─── 状态 ───")
         for s in statuses:
             remaining = s['remaining_days']
             if remaining == 0:
@@ -288,9 +276,9 @@ def format_inventory(player_name: str, items: list) -> str:
     from astrbot_plugin_faith_ladder.ladder_service import format_item_display
 
     if not items:
-        return f"=== 储物空间 ===\n玩家: {player_name}\n\n储物空间为空。"
+        return f"═══ 储物空间 ═══\n玩家: {player_name}\n\n储物空间为空。"
 
-    lines = [f"=== 储物空间 ===", f"玩家: {player_name}", ""]
+    lines = [f"═══ 储物空间 ═══", f"玩家: {player_name}", ""]
     for item in items:
         lines.append(format_item_display(item["item_name"], item["grade"], item["quantity"]))
     return "\n".join(lines)

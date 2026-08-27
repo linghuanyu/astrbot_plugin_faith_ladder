@@ -134,7 +134,7 @@ class TestFormatPlayerCardWithStatuses:
             {"status_name": "中毒", "remaining_days": 0},
         ]
         result = format_player_card(player, ladder_rank=3, pilgrimage_rank=2, statuses=statuses)
-        assert "[状态]" in result
+        assert "─── 状态 ───" in result
         assert "虚弱: 剩余2天" in result
         assert "护盾: 剩余5天" in result
         assert "中毒: 今日到期" in result
@@ -145,7 +145,7 @@ class TestFormatPlayerCardWithStatuses:
             ladder_score=1200, pilgrimage_score=150
         )
         result = format_player_card(player, ladder_rank=3, pilgrimage_rank=2, statuses=[])
-        assert "[状态]" not in result
+        assert "─── 状态 ───" not in result
 
     def test_card_with_none_statuses(self):
         player = Player(
@@ -153,7 +153,7 @@ class TestFormatPlayerCardWithStatuses:
             ladder_score=1200, pilgrimage_score=150
         )
         result = format_player_card(player, ladder_rank=3, pilgrimage_rank=2)
-        assert "[状态]" not in result
+        assert "─── 状态 ───" not in result
 
 
 class TestGiveAndTakeStatuses:

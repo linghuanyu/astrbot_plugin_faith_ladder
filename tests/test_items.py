@@ -303,7 +303,7 @@ class TestFormatInventory:
             {"item_name": "生命药水", "grade": None, "quantity": 5},
         ]
         result = format_inventory("Alice", items)
-        assert "=== 储物空间 ===" in result
+        assert "═══ 储物空间 ═══" in result
         assert "玩家: Alice" in result
         assert "铁剑 * 2" in result
         assert "生命药水 * 5" in result
