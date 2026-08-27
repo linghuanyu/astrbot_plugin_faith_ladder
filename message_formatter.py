@@ -34,7 +34,8 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
         faith_str = _faith_display(player)
         lines.append(f"{rank}. {_name_with_tag(player)}")
         lines.append(f"   {class_str} <{faith_str}>")
-        lines.append(f"   登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}")
+        lines.append(f"   登神之路: {player.ladder_score}")
+        lines.append(f"   觐见之梯: {player.pilgrimage_score}")
         lines.append("")
 
     lines.append(f"─── 显示前 {displayed} 名 ───")
@@ -54,7 +55,8 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
         faith_str = _faith_display(player)
         lines.append(f"{rank}. {_name_with_tag(player)}")
         lines.append(f"   {class_str} <{faith_str}>")
-        lines.append(f"   觐见之梯: {player.pilgrimage_score} | 登神之路: {player.ladder_score}")
+        lines.append(f"   觐见之梯: {player.pilgrimage_score}")
+        lines.append(f"   登神之路: {player.ladder_score}")
         lines.append("")
 
     lines.append(f"─── 显示前 {displayed} 名 ───")
@@ -93,8 +95,10 @@ def format_player_card(
         f"═══ 玩家档案 ═══",
         f"姓名: {player.player_name}{oathbreaker_str}",
         f"职业: {class_str} | 信仰: {faith_str}",
-        f"登神之路: {player.ladder_score} ┃ 排名: {ladder_rank_str}",
-        f"觐见之梯: {player.pilgrimage_score} ┃ 排名: {pilgrimage_rank_str}",
+        f"登神之路: {player.ladder_score}",
+        f"登神之路排名: {ladder_rank_str}",
+        f"觐见之梯: {player.pilgrimage_score}",
+        f"觐见之梯排名: {pilgrimage_rank_str}",
     ]
 
     # 状态显示
