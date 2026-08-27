@@ -2258,32 +2258,34 @@ class FaithLadderPlugin(Star):
         if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
             return
 
-        # 12. 随机 -2 到 +2（暂时禁用，固定为 0，后续可能启用）
-        # import random
-        # delta = random.randint(-2, 2)
-        # # 如果配置不允许负分，则 clamp 到 [0, 2]
-        # if not self.config.get("allow_negative_scores", True):
-        #     delta = max(0, delta)
-        delta = 0  # 暂时不加分也不扣分
+        # 12. 随机打分
+        import random
+        path_matches = player_specific_faith in FAITH_TO_PATH and FAITH_TO_PATH.get(player_specific_faith) == matched_path
+        if path_matches:
+            display_delta = random.randint(-2, 2)   # 匹配：-2 ~ +2
+        else:
+            display_delta = random.randint(-2, 0)   # 不匹配（渎神）：-2 ~ 0
 
-        # 13. 记录今日已触发（DB 写入，唯一约束防并发）
-        recorded = await self.db_manager.record_prayer_hit(group_id, player.player_id, delta)
+        # 测试模式：DB 始终记 0，不实际改分
+        db_delta = 0
+
+        # 13. 记录今日已触发（DB 写入，固定为 0）
+        recorded = await self.db_manager.record_prayer_hit(group_id, player.player_id, db_delta)
         if not recorded:
             return  # 并发情况，已被其他请求抢先
 
-        # 14. 加分（ladder_delta=0, pilgrimage_delta=delta）
-        # 暂时 delta=0，不会实际改变分数，但仍记录触发
-        if delta != 0:
+        # 14. 加分（测试模式：跳过）
+        if db_delta != 0:
             ok, _ = await self.ladder_service.add_score(
                 group_id, player.player_id, player.player_name,
-                ladder_delta=0, pilgrimage_delta=delta,
+                ladder_delta=0, pilgrimage_delta=db_delta,
                 operator_id="prayer_trigger",
                 reason="祷词触发"
             )
             if not ok:
                 return
 
-        # 15. 回复群消息 + 阻止 AI 也响应祷词
-        msg = format_prayer_trigger(player.player_name, player_specific_faith, matched_path, delta, self.config)
+        # 15. 回复群消息 + 阻止 AI 也响应祷词（显示随机结果）
+        msg = format_prayer_trigger(player.player_name, player_specific_faith, matched_path, display_delta, self.config)
         yield event.plain_result(msg)
         event.stop_event()

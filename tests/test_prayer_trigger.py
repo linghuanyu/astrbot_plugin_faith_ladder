@@ -166,25 +166,22 @@ class TestFormatPrayerTrigger:
 
     def test_positive_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
-        # player_faith="欺诈" 属于 prayer_path="虚无" → 匹配
         msg = format_prayer_trigger("Alice", "欺诈", "虚无", 2, None)
         assert "神明看到了你的祈祷" in msg
         assert "欺诈" in msg
         assert "+2" in msg
-        assert "本次结果暂时不会影响实际分数" not in msg
+        assert "本次结果暂时不会影响实际分数" in msg  # 测试模式始终显示
 
     def test_negative_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
-        # player_faith="记忆" 属于 prayer_path="存在" → 匹配
         msg = format_prayer_trigger("Alice", "记忆", "存在", -1, None)
         assert "神明看到了你的祈祷" in msg
         assert "记忆" in msg
         assert "-1" in msg
-        assert "本次结果暂时不会影响实际分数" not in msg
+        assert "本次结果暂时不会影响实际分数" in msg
 
     def test_zero_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
-        # player_faith="秩序" 属于 prayer_path="文明" → 匹配
         msg = format_prayer_trigger("Alice", "秩序", "文明", 0, None)
         assert "神明看到了你的祈祷" in msg
         assert "秩序" in msg
@@ -194,38 +191,47 @@ class TestFormatPrayerTrigger:
     def test_mismatch_faith(self):
         """玩家信仰和祷词命途不匹配时的特殊文案。"""
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
-        # player_faith="欺诈"(虚无命途) 祈祷 prayer_path="文明" → 不匹配
+        msg = format_prayer_trigger("Alice", "欺诈", "文明", -2, None)
+        assert "欺诈" in msg
+        assert "看到了你对" in msg
+        assert "的祈祷，决定对你进行惩罚" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
+
+    def test_mismatch_zero(self):
+        """不匹配（渎神）但随机到 0：宽宏大量。"""
+        from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         msg = format_prayer_trigger("Alice", "欺诈", "文明", 0, None)
-        assert "神明看到了你的祈祷" in msg
-        assert "欺诈" in msg  # 玩家信仰名
-        assert "文明" in msg or "秩序" in msg or "真理" in msg or "战争" in msg  # 命途对应信仰
+        assert "欺诈" in msg
+        assert "神明宽宏大量" in msg
+        assert "放过了你这次渎神" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
 
     def test_mismatch_no_player_faith(self):
         """玩家无具体信仰时，使用命途名。"""
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
-        msg = format_prayer_trigger("Alice", None, "虚无", 0, None)
-        assert "神明看到了你的祈祷" in msg
+        msg = format_prayer_trigger("Alice", None, "虚无", -1, None)
         assert "虚无" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
 
     def test_custom_config_messages(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         config = {
             "prayer_trigger_messages_positive": ["{god}开心，{delta}"],
         }
-        # 匹配情况
         msg = format_prayer_trigger("Alice", "欺诈", "虚无", 1, config)
         assert "神明看到了你的祈祷" in msg
         assert "欺诈开心，+1" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
 
     def test_empty_config_uses_default(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         config = {
-            "prayer_trigger_messages_positive": [],  # empty list
+            "prayer_trigger_messages_positive": [],
         }
         msg = format_prayer_trigger("Alice", "欺诈", "虚无", 1, config)
         assert "神明看到了你的祈祷" in msg
-        # Should fall back to default
         assert "欺诈" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
 
 
 class TestPrayerTriggerEdgeCases:
