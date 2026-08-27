@@ -292,34 +292,60 @@ def format_inventory(player_name: str, items: list) -> str:
     return "\n".join(lines)
 
 
-def format_prayer_trigger(player_name: str, path: str, delta: int, config: dict = None) -> str:
-    """格式化祷词触发回复。根据 delta 正负零选择文案池，随机选取一条。
+def format_prayer_trigger(player_name: str, player_faith: str, prayer_path: str, delta: int, config: dict = None) -> str:
+    """格式化祷词触发回复。
 
     Args:
         player_name: 玩家名
-        path: 命途名（如"虚无"、"存在"等，player.faith 字段实际存储的是命途）
+        player_faith: 玩家的具体信仰名（如"欺诈"，从名片【】中提取）
+        prayer_path: 祷词对应的命途名（如"虚无"）
         delta: 觐见分变化值
         config: 插件配置（用于获取自定义文案）
     """
     import random
+    from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
+
+    # 检查玩家信仰是否匹配祷词的命途
+    path_matches = player_faith in FAITH_TO_PATH and FAITH_TO_PATH[player_faith] == prayer_path
+
+    # 确定显示用信仰名
+    if path_matches:
+        # 匹配：使用玩家的具体信仰名
+        god_name = player_faith if player_faith else prayer_path
+    else:
+        # 不匹配：使用玩家信仰（如果有效）
+        god_name = player_faith if player_faith else prayer_path
 
     # 确定文案池配置键
     if delta > 0:
         config_key = "prayer_trigger_messages_positive"
         default_msgs = ["{god}今日心情不错，觐见+{delta}"]
-        template_vars = {"god": path, "delta": f"+{delta}"}
+        template_vars = {"god": god_name, "delta": f"+{delta}"}
     elif delta < 0:
         config_key = "prayer_trigger_messages_negative"
         default_msgs = ["{god}今日心情不佳，觐见{delta}"]
-        template_vars = {"god": path, "delta": str(delta)}
+        template_vars = {"god": god_name, "delta": str(delta)}
     else:
         config_key = "prayer_trigger_messages_neutral"
         default_msgs = ["{god}听到了你的祈祷，但未起波澜"]
-        template_vars = {"god": path}
+        template_vars = {"god": god_name}
+
+    # 如果命途不匹配，使用特殊文案
+    if not path_matches and player_faith:
+        # 从 prayer_path 对应的信仰中随机选一个
+        path_faiths = [f for f, p in FAITH_TO_PATH.items() if p == prayer_path]
+        prayer_faith = random.choice(path_faiths) if path_faiths else prayer_path
+        default_msgs = [f"{{god}}看到了你对{{prayer}}的祈祷，决定……"]
+        if config:
+            config_key_mismatch = "prayer_trigger_messages_mismatch"
+            default_msgs = config.get(config_key_mismatch, default_msgs)
+            if not default_msgs:
+                default_msgs = ["{god}看到了你对{prayer}的祈祷，决定……"]
+        template_vars = {"god": player_faith, "prayer": prayer_faith}
 
     # 从配置或默认值获取文案池
     messages = default_msgs
-    if config:
+    if config and path_matches:
         messages = config.get(config_key, default_msgs)
         if not messages:  # 空列表保护
             messages = default_msgs

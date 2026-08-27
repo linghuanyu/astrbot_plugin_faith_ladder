@@ -27,13 +27,14 @@ from astrbot_plugin_faith_ladder.ladder_service import LadderService
 from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
-from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, Player
+from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, FAITH_TO_PATH, Player
 # from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer  # 暂时禁用图片渲染
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 
 # 预编译正则（祷词触发用）
 _PRAYER_NORMALIZE_RE = re.compile(r'[^\w]')
 _PRAYER_CHINESE_RE = re.compile(r'[一-鿿]')
+_SPECIFIC_FAITH_TAG_RE = re.compile(r'【([^】]+)】')
 
 # 预编译正则（通用）
 _CQ_CODE_RE = re.compile(r'\[CQ:[^\]]+\]')
@@ -589,6 +590,17 @@ class FaithLadderPlugin(Star):
         match = _CARD_BRACKET_RE.match(card)
         remaining = match.group(1).strip() if match else card.strip()
         return [w for w in remaining.split() if not w.isdigit()]
+
+    def _extract_specific_faith(self, card: str) -> Optional[str]:
+        """从群名片的【】标签中提取具体信仰名。
+        返回具体信仰名（如"欺诈"），如果不是有效信仰则返回 None。
+        """
+        match = _SPECIFIC_FAITH_TAG_RE.search(card)
+        if match:
+            tag = match.group(1).strip()
+            if tag in FAITH_TO_PATH:  # 检查是否为有效信仰
+                return tag
+        return None
 
     async def _get_at_user_id(self, event: AstrMessageEvent) -> Optional[str]:
         """获取消息中第一个 @ 的用户 ID（排除机器人自身）。"""
@@ -2218,9 +2230,9 @@ class FaithLadderPlugin(Star):
             return
 
         # 8. 快速匹配：是否匹配任何祷词（缓存查找，O(1)）
-        matched_faith = self._prayer_cache.get(normalized)
-        logger.debug(f"[PrayerTrigger] Matched faith: {matched_faith}, cache size: {len(self._prayer_cache)}")
-        if not matched_faith:
+        matched_path = self._prayer_cache.get(normalized)
+        logger.debug(f"[PrayerTrigger] Matched path: {matched_path}, cache size: {len(self._prayer_cache)}")
+        if not matched_path:
             logger.debug("[PrayerTrigger] No prayer match")
             return
 
@@ -2231,10 +2243,16 @@ class FaithLadderPlugin(Star):
             logger.debug("[PrayerTrigger] Player not found or no faith")
             return
 
-        # 10. 检查是否匹配玩家自己的命途（发送其他命途的祷词不触发）
-        if player.faith != matched_faith:
-            logger.debug(f"[PrayerTrigger] Player faith {player.faith} != matched {matched_faith}")
-            return
+        # 10. 从群名片提取玩家的具体信仰（如【欺诈】→"欺诈"）
+        sender_id = str(event.get_sender_id())
+        try:
+            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+            card = member_info.get("card", "") or member_info.get("nickname", "")
+            player_specific_faith = self._extract_specific_faith(card)
+        except Exception:
+            player_specific_faith = None
+            card = ""
+        logger.debug(f"[PrayerTrigger] Player specific faith: {player_specific_faith}")
 
         # 11. 检查今日是否已触发（DB 查询）
         if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
@@ -2266,6 +2284,6 @@ class FaithLadderPlugin(Star):
                 return
 
         # 15. 回复群消息 + 阻止 AI 也响应祷词
-        msg = format_prayer_trigger(player.player_name, player.faith, delta, self.config)
+        msg = format_prayer_trigger(player.player_name, player_specific_faith, matched_path, delta, self.config)
         yield event.plain_result(msg)
         event.stop_event()
