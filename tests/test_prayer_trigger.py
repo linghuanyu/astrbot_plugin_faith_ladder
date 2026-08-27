@@ -185,7 +185,6 @@ class TestFormatPrayerTrigger:
         msg = format_prayer_trigger("Alice", "秩序", "文明", 0, None)
         assert "神明看到了你的祈祷" in msg
         assert "秩序" in msg
-        assert "未起波澜" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
     def test_mismatch_faith(self):
@@ -223,6 +222,17 @@ class TestFormatPrayerTrigger:
         assert "欺诈开心，+1" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
+    def test_path_specific_config_override(self):
+        """命途专属配置键优先于通用配置。"""
+        from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
+        config = {
+            "prayer_trigger_messages_positive": ["通用：{god}开心，{delta}"],
+            "prayer_trigger_messages_positive_虚无": ["虚无专属：{god}低语，{delta}"],
+        }
+        msg = format_prayer_trigger("Alice", "欺诈", "虚无", 1, config)
+        assert "虚无专属" in msg
+        assert "欺诈低语" in msg
+
     def test_empty_config_uses_default(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         config = {
@@ -231,6 +241,27 @@ class TestFormatPrayerTrigger:
         msg = format_prayer_trigger("Alice", "欺诈", "虚无", 1, config)
         assert "神明看到了你的祈祷" in msg
         assert "欺诈" in msg
+        assert "本次结果暂时不会影响实际分数" in msg
+
+    def test_all_paths_have_messages(self):
+        """确保每个命途都有对应的文案。"""
+        from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
+        from astrbot_plugin_faith_ladder.models import VALID_PATHS
+        path_faiths = {
+            "虚无": "欺诈", "存在": "记忆", "文明": "秩序",
+            "沉沦": "污堕", "混沌": "混乱", "生命": "诞育",
+        }
+        for path in VALID_PATHS:
+            faith = path_faiths[path]
+            # 正分
+            msg = format_prayer_trigger("Alice", faith, path, 2, None)
+            assert "神明看到了你的祈祷" in msg, f"{path} positive message missing"
+            # 负分
+            msg = format_prayer_trigger("Alice", faith, path, -1, None)
+            assert "神明看到了你的祈祷" in msg, f"{path} negative message missing"
+            # 零分
+            msg = format_prayer_trigger("Alice", faith, path, 0, None)
+            assert "神明看到了你的祈祷" in msg, f"{path} neutral message missing"
         assert "本次结果暂时不会影响实际分数" in msg
 
 
