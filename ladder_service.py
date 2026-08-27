@@ -429,15 +429,22 @@ class LadderService:
         # Commit all operations atomically
         await self.db.commit()
 
-        qq_line = f"\n绑定 QQ: {qq_id}" if qq_id and qq_binding_ok else ""
+        qq_line = f"绑定 QQ: {qq_id}" if qq_id and qq_binding_ok else ""
+        ladder_tag = "凡人之始" if ladder_score == 1000 else ""
+        pilgrimage_tag = "初窥门径" if pilgrimage_score == 100 else ""
+        tags = []
+        if ladder_tag:
+            tags.append(f"—— {ladder_tag}")
+        if pilgrimage_tag:
+            tags.append(f"—— {pilgrimage_tag}")
+
         return True, (
-            f"=== 玩家信息 ===\n"
-            f"姓名: {player_name}\n"
-            f"职业: {class_name}\n"
-            f"信仰: {faith_name}\n"
-            f"登神之路: {ladder_score}\n"
-            f"觐见之梯: {pilgrimage_score}"
-            f"{qq_line}"
+            f"「{player_name}」踏入棋局\n"
+            f"职业: {class_name} | 命途: {faith_name}\n"
+            f"登神之路: {ladder_score} {' '.join(tags[:1])}\n"
+            f"觐见之梯: {pilgrimage_score} {' '.join(tags[1:])}\n"
+            f"愿神明不要愚弄你。"
+            f"{chr(10) + qq_line if qq_line else ''}"
         )
 
     # === 批量录入 ===
