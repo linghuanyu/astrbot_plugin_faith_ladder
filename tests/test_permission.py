@@ -75,7 +75,7 @@ class TestPermissionService:
         text = await service.get_whitelist_text()
         assert "u1" in text
         assert "u2" in text
-        assert "2 条记录" in text
+        assert "共 2 位" in text
 
 
 @pytest.mark.asyncio

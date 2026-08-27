@@ -213,7 +213,7 @@ class TestFormatWhitelist:
         result = format_whitelist(entries)
         assert "[user] u123" in result
         assert "[group] g456" in result
-        assert "共 2 条记录" in result
+        assert "共 2 位" in result
 
 
 class TestFormatScoreResult:

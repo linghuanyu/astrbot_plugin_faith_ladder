@@ -210,7 +210,7 @@ def format_gift_request(
     from astrbot_plugin_faith_ladder.ladder_service import format_item_display
     display = format_item_display(item_name, grade, quantity)
     return (
-        f"{sender_name} 赠送 {receiver_name} {display}\n"
+        f"{sender_name} 将 {display} 递向 {receiver_name}\n"
         f"接收方发送「接受道具」接受\n"
         f"接收方发送「拒绝道具」拒绝"
     )
@@ -221,10 +221,10 @@ def format_whitelist(entries: List[dict]) -> str:
     if not entries:
         return "诸神列表为空。"
 
-    lines = ["=== 诸神列表 ===", ""]
+    lines = ["═══ 诸神列表 ═══", ""]
     for i, entry in enumerate(entries, 1):
         lines.append(f"{i}. [{entry['entry_type']}] {entry['entry_id']}")
-    lines.append(f"\n共 {len(entries)} 条记录")
+    lines.append(f"\n─── 共 {len(entries)} 位 ───")
     return "\n".join(lines)
 
 
@@ -233,7 +233,7 @@ def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]
     if not config_entries and not db_entries:
         return "诸神列表为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
 
-    lines = ["=== 诸神列表 ==", ""]
+    lines = ["═══ 诸神列表 ═══", ""]
 
     if config_entries:
         lines.append("[WebUI 配置]")
@@ -250,7 +250,7 @@ def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]
         lines.append("")
 
     total = len(config_entries) + len(db_entries)
-    lines.append(f"共 {total} 条记录（配置: {len(config_entries)}, 运行时: {len(db_entries)}）")
+    lines.append(f"─── 共 {total} 位（配置: {len(config_entries)}, 运行时: {len(db_entries)}）───")
     return "\n".join(lines)
 
 
@@ -266,10 +266,9 @@ def format_score_result(
     pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
 
     return (
-        f"积分录入成功!\n"
-        f"玩家: {player_name}\n"
-        f"登神之路: {ladder_str} -> {new_ladder}\n"
-        f"觐见之梯: {pilgrimage_str} -> {new_pilgrimage}"
+        f"{player_name} 的棋局已更新\n"
+        f"登神之路: {ladder_str} → {new_ladder}\n"
+        f"觐见之梯: {pilgrimage_str} → {new_pilgrimage}"
     )
 
 
