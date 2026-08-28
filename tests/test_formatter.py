@@ -74,10 +74,10 @@ class TestFormatPlayerCard:
         result = format_player_card(player)
         assert "姓名: TestPlayer" in result
         assert "职业: 未设定" in result
-        assert "信仰: 未设定" in result
+        assert "命途: 未设定" in result
         assert "登神之路: 0" in result
         assert "觐见之梯: 0" in result
-        assert "排名: 未上榜" in result
+        assert "未上榜" in result
 
     def test_full_card(self):
         """Test card with all values set."""
@@ -88,11 +88,11 @@ class TestFormatPlayerCard:
         )
         result = format_player_card(player, ladder_rank=3, pilgrimage_rank=1)
         assert "职业: 战士" in result
-        assert "信仰: 虚无" in result
+        assert "命途: 虚无" in result
         assert "登神之路: 500" in result
         assert "觐见之梯: 200" in result
-        assert "排名: 第3名" in result
-        assert "排名: 第1名" in result
+        assert "登神之路第3名" in result
+        assert "觐见之梯第1名" in result
 
     def test_initial_scores_not_ranked(self):
         """Test that initial scores (configurable) show as not ranked."""
@@ -101,7 +101,7 @@ class TestFormatPlayerCard:
             ladder_score=1000, pilgrimage_score=100
         )
         result = format_player_card(player, ladder_rank=5, pilgrimage_rank=3)
-        assert "排名: 未上榜" in result
+        assert "未上榜" in result
 
     def test_custom_initial_scores(self):
         """Test with custom initial score thresholds."""
@@ -113,7 +113,7 @@ class TestFormatPlayerCard:
             player, ladder_rank=5, pilgrimage_rank=3,
             init_ladder=500, init_pilgrimage=50
         )
-        assert "排名: 未上榜" in result
+        assert "未上榜" in result
 
 
 class TestFormatHelp:

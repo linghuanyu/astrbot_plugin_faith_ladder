@@ -73,8 +73,15 @@ def format_player_card(
 ) -> str:
     """Format a player's info card with rankings and statuses."""
     class_str = player.class_ if player.class_ else "未设定"
-    faith_str = _faith_display(player)
     oathbreaker_str = "(弃誓者)" if player.oathbreaker else ""
+
+    # 命途 | 具体信仰
+    if player.specific_faith:
+        path_line = f"命途: {player.faith} | {player.specific_faith}"
+    elif player.faith:
+        path_line = f"命途: {player.faith}"
+    else:
+        path_line = "命途: 未设定"
 
     # 初始积分视为未上榜
     if player.ladder_score == init_ladder:
@@ -94,12 +101,16 @@ def format_player_card(
     lines = [
         f"═══ 玩家档案 ═══",
         f"姓名: {player.player_name}{oathbreaker_str}",
-        f"职业: {class_str} | 信仰: {faith_str}",
+        f"职业: {class_str}",
+        f"{path_line}",
         f"登神之路: {player.ladder_score}",
-        f"登神之路排名: {ladder_rank_str}",
         f"觐见之梯: {player.pilgrimage_score}",
-        f"觐见之梯排名: {pilgrimage_rank_str}",
     ]
+    # 排名汇总行
+    if ladder_rank_str != "未上榜" or pilgrimage_rank_str != "未上榜":
+        lines.append(f"—— 登神之路{ladder_rank_str} · 觐见之梯{pilgrimage_rank_str} ——")
+    else:
+        lines.append("—— 两榜均未上榜 ——")
 
     # 状态显示
     if statuses:
