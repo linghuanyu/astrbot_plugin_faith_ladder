@@ -2236,23 +2236,47 @@ class FaithLadderPlugin(Star):
             logger.debug("[PrayerTrigger] Player not found")
             return
 
-        # 10. 获取玩家的具体信仰（优先从 DB，其次从名片【】中提取）
-        player_specific_faith = player.specific_faith
-        if not player_specific_faith:
-            # 从名片中提取
-            sender_id = str(event.get_sender_id())
-            try:
-                member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
-                card = member_info.get("card", "") or member_info.get("nickname", "")
-                player_specific_faith = self._extract_specific_faith(card)
-                # 如果从名片提取到了具体信仰，保存到 DB
-                if player_specific_faith:
-                    await self.db_manager.set_player_specific_faith(group_id, player.player_id, player_specific_faith)
-                    logger.info(f"[PrayerTrigger] Saved specific faith '{player_specific_faith}' for {player.player_name}")
-            except Exception as e:
-                logger.debug(f"[PrayerTrigger] Failed to extract faith from card: {e}")
+        # 10. 检查玩家数据完整性，从名片补全缺失字段
+        sender_id = str(event.get_sender_id())
+        card = ""
+        try:
+            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+            card = member_info.get("card", "") or member_info.get("nickname", "")
+        except Exception as e:
+            logger.debug(f"[PrayerTrigger] Failed to get member info: {e}")
 
-        if not player_specific_faith:
+        # 补全具体信仰
+        if not player.specific_faith and card:
+            sf = self._extract_specific_faith(card)
+            if sf:
+                await self.db_manager.set_player_specific_faith(group_id, player.player_id, sf)
+                logger.info(f"[PrayerTrigger] 补全信仰: {player.player_name} ← {sf}")
+
+        # 补全职业（从名片中提取职业关键词）
+        if not player.class_ and card:
+            for word in self._extract_card_words(card):
+                if word in VALID_CLASSES:
+                    await self.db_manager.set_player_class(group_id, player.player_id, word, player.faith or "")
+                    logger.info(f"[PrayerTrigger] 补全职业: {player.player_name} ← {word}")
+                    break
+                # 检查具体职业
+                for specific_name, (sf, sp, sc) in self._specific_classes.items():
+                    if word == specific_name or word.startswith(specific_name):
+                        await self.db_manager.set_player_class(group_id, player.player_id, sc, sp)
+                        if not player.specific_faith:
+                            await self.db_manager.set_player_specific_faith(group_id, player.player_id, sf)
+                        logger.info(f"[PrayerTrigger] 补全职业: {player.player_name} ← {sc}（{sf}）")
+                        break
+
+        # 自动绑定 QQ
+        if not player.qq_id:
+            existing = await self.db_manager.get_player_by_qq(group_id, sender_id)
+            if not existing:
+                await self.db_manager.set_player_qq(group_id, player.player_id, sender_id)
+                logger.info(f"[PrayerTrigger] 自动绑定 QQ: {player.player_name} ← {sender_id}")
+
+        # 检查具体信仰是否补全成功
+        if not player.specific_faith:
             logger.debug("[PrayerTrigger] Player has no specific faith, skipping")
             return
 
@@ -2260,17 +2284,9 @@ class FaithLadderPlugin(Star):
         if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
             return
 
-        # 11.5. 检查 QQ 绑定，未绑定时自动绑定
-        sender_qq = str(event.get_sender_id())
-        if not player.qq_id:
-            existing = await self.db_manager.get_player_by_qq(group_id, sender_qq)
-            if not existing:
-                await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
-                logger.info(f"[PrayerTrigger] 自动绑定 QQ: {player.player_name} ← {sender_qq}")
-
         # 12. 随机打分
         import random
-        faith_matches = player_specific_faith == matched_faith
+        faith_matches = player.specific_faith == matched_faith
         if faith_matches:
             display_delta = random.randint(-2, 2)   # 匹配：-2 ~ +2
         else:
@@ -2296,6 +2312,6 @@ class FaithLadderPlugin(Star):
                 return
 
         # 15. 回复群消息 + 阻止 AI 也响应祷词（显示随机结果）
-        msg = format_prayer_trigger(player.player_name, player_specific_faith, matched_faith, display_delta, self.config)
+        msg = format_prayer_trigger(player.player_name, player.specific_faith, matched_faith, display_delta, self.config)
         yield event.plain_result(msg)
         event.stop_event()
