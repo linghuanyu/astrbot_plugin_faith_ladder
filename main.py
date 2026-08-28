@@ -213,7 +213,7 @@ class FaithLadderPlugin(Star):
     async def _resolve_self_player_lenient(self, event: AstrMessageEvent) -> Optional[Player]:
         """优先 QQ 绑定查找；失败则回退名片识别（兼容未绑定的老玩家）。
         仅用于只读命令（查询/查储物空间）。
-        若通过名片识别到玩家，自动绑定其 QQ 避免重复触发。"""
+        不自动绑定 QQ，避免高频触发。"""
         player = await self._resolve_self_player(event)
         if player:
             return player
@@ -221,28 +221,7 @@ class FaithLadderPlugin(Star):
         if not name:
             return None
         group_id = self._get_group_id(event)
-        player = await self.db_manager.get_player_by_name(group_id, name)
-        if player and not player.qq_id:
-            # 名片识别成功但 QQ 未绑定 → 自动绑定
-            sender_qq = str(event.get_sender_id())
-            # 检查该 QQ 是否已被其他玩家绑定
-            existing = await self.db_manager.get_player_by_qq(group_id, sender_qq)
-            if not existing:
-                await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
-                logger.info(f"[AutoBind] 名片识别自动绑定 QQ: {player.player_name} ← {sender_qq}")
-        return player
-                        else:
-                            logger.info(
-                                f"[QQMigration] 绑定冲突：群 {group_id} 玩家 {player.player_name} ↔ QQ {qq}"
-                            )
-                    elif len(matches) > 1:
-                        logger.info(
-                            f"[QQMigration] 玩家 {player.player_name} 在群 {group_id} 匹配到多个名片，跳过"
-                        )
-            if total_bound > 0:
-                logger.info(f"[QQMigration] 自动绑定完成：共绑定 {total_bound} 个玩家")
-        except Exception as e:
-            logger.error(f"[QQMigration] 自动迁移失败: {e}")
+        return await self.db_manager.get_player_by_name(group_id, name)
 
     async def _resolve_player_by_at(
         self, group_id: str, at_user_id: Optional[str], event: AstrMessageEvent
@@ -2280,6 +2259,14 @@ class FaithLadderPlugin(Star):
         # 11. 检查今日是否已触发（DB 查询）
         if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
             return
+
+        # 11.5. 检查 QQ 绑定，未绑定时自动绑定
+        sender_qq = str(event.get_sender_id())
+        if not player.qq_id:
+            existing = await self.db_manager.get_player_by_qq(group_id, sender_qq)
+            if not existing:
+                await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
+                logger.info(f"[PrayerTrigger] 自动绑定 QQ: {player.player_name} ← {sender_qq}")
 
         # 12. 随机打分
         import random
