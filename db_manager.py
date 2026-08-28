@@ -534,16 +534,6 @@ class DatabaseManager:
         await self._db.commit()
         return True, "换绑成功", old_qq
 
-    async def list_unbound_players(self, group_id: str) -> List[Player]:
-        """List players in a group that have no QQ binding yet."""
-        async with self._db.execute(
-            f"SELECT {self._PLAYER_COLUMNS} FROM players "
-            "WHERE group_id = ? AND qq_id IS NULL",
-            (group_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [self._row_to_player(r) for r in rows]
-
     async def get_top_players(self, group_id: str, limit: int = 10) -> List[Player]:
         """Get top players by ladder score for a group."""
         async with self._db.execute(

@@ -154,10 +154,6 @@ class FaithLadderPlugin(Star):
         )
         await self._scheduler.start()
 
-        # QQ 绑定自动迁移：延迟到首次事件时触发（需要 bot API 引用）
-        self._qq_migration_attempted = False
-        self._qq_migration_lock = asyncio.Lock()
-
         # 注册群成员变动监听（白名单自动同步）
         try:
             if hasattr(self.context, 'register_event_handler'):
@@ -235,57 +231,6 @@ class FaithLadderPlugin(Star):
                 await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
                 logger.info(f"[AutoBind] 名片识别自动绑定 QQ: {player.player_name} ← {sender_qq}")
         return player
-
-    async def _maybe_trigger_qq_migration(self, event: AstrMessageEvent):
-        """首次事件时触发后台 QQ 绑定迁移；只运行一次。"""
-        if self._qq_migration_attempted:
-            return
-        async with self._qq_migration_lock:
-            if self._qq_migration_attempted:
-                return
-            self._qq_migration_attempted = True
-        try:
-            bot = getattr(event, 'bot', None)
-            if bot:
-                asyncio.create_task(self._do_auto_migrate_qq(bot))
-            else:
-                logger.warning("[QQMigration] 无法获取 bot 引用，迁移跳过")
-        except Exception as e:
-            logger.error(f"[QQMigration] 触发失败: {e}")
-
-    async def _do_auto_migrate_qq(self, bot):
-        """后台迁移：扫描各活跃群，为未绑定 QQ 的玩家找到唯一匹配的名片 → 自动绑定。"""
-        try:
-            groups = await self.db_manager.get_active_groups()
-            total_bound = 0
-            for group_id in groups:
-                try:
-                    members = await bot.get_group_member_list(group_id=int(group_id))
-                except Exception as e:
-                    logger.warning(f"[QQMigration] 拉取群 {group_id} 成员失败（跳过）: {e}")
-                    continue
-
-                unbound = await self.db_manager.list_unbound_players(group_id)
-                if not unbound:
-                    continue
-
-                for player in unbound:
-                    matches = []
-                    for m in members:
-                        card = m.get("card") or m.get("nickname") or ""
-                        if not card:
-                            continue
-                        words = self._extract_card_words(card)
-                        if player.player_name in words:
-                            matches.append(m)
-                    if len(matches) == 1:
-                        qq = str(matches[0].get("user_id"))
-                        ok = await self.db_manager.set_player_qq(group_id, player.player_id, qq)
-                        if ok:
-                            total_bound += 1
-                            logger.info(
-                                f"[QQMigration] 自动绑定：群 {group_id} 玩家 {player.player_name} ↔ QQ {qq}"
-                            )
                         else:
                             logger.info(
                                 f"[QQMigration] 绑定冲突：群 {group_id} 玩家 {player.player_name} ↔ QQ {qq}"
@@ -716,7 +661,6 @@ class FaithLadderPlugin(Star):
         """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户（诸神专用）或 查询 <玩家名1> <玩家名2> ...（诸神批量查询）"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
-        await self._maybe_trigger_qq_migration(event)
 
         args = self._get_args(event, "查询")
         if not args:
@@ -1979,7 +1923,6 @@ class FaithLadderPlugin(Star):
         """赠送道具。格式: 赠送道具 <接收方名> <道具*数量>
         发送方由发送者 QQ 绑定鉴权（防名片冒充），接收方仍按玩家名查找。"""
         group_id = self._get_group_id(event)
-        await self._maybe_trigger_qq_migration(event)
 
         # 发送方 = 自己（QQ 绑定鉴权）
         sender_player = await self._resolve_self_player(event)

@@ -52,22 +52,6 @@ class TestQQBindingDB:
         assert p1.player_id == "u1"
         assert p2.player_id == "u2"
 
-    async def test_list_unbound_players(self, db_manager):
-        """list_unbound_players returns only rows without qq_id."""
-        await db_manager.upsert_player("g1", "u1", "Alice")
-        await db_manager.upsert_player("g1", "u2", "Bob")
-        await db_manager.upsert_player("g1", "u3", "Carol")
-        await db_manager.set_player_qq("g1", "u2", "222222")
-
-        unbound = await db_manager.list_unbound_players("g1")
-        names = sorted(p.player_name for p in unbound)
-        assert names == ["Alice", "Carol"]
-
-    async def test_list_unbound_players_empty(self, db_manager):
-        """Empty group returns empty list."""
-        unbound = await db_manager.list_unbound_players("g_unknown")
-        assert unbound == []
-
     async def test_player_model_has_qq_id(self, db_manager):
         """Player model exposes qq_id after row_to_player."""
         await db_manager.upsert_player("g1", "u1", "Alice")
