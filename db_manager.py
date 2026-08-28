@@ -1053,6 +1053,46 @@ class DatabaseManager:
         )
         return cursor.rowcount
 
+    async def get_all_players_in_group(self, group_id: str) -> List[Player]:
+        """获取群内所有玩家（用于批量计算排名）。"""
+        async with self._db.execute(
+            "SELECT player_id, group_id, player_name, class, faith, specific_faith, "
+            "ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id "
+            "FROM players WHERE group_id = ?",
+            (group_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [self._row_to_player(r) for r in rows]
+
+    async def get_statuses_for_players(self, group_id: str, player_ids: List[str]) -> list:
+        """批量获取多个玩家的状态。返回 [(player_id, [statuses]), ...]。"""
+        from datetime import datetime, timezone
+        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        placeholders = ','.join('?' * len(player_ids))
+        query = (
+            f"SELECT player_id, status_name, expire_at FROM player_statuses "
+            f"WHERE group_id = ? AND player_id IN ({placeholders}) AND expire_at > ? "
+            f"ORDER BY player_id, expire_at"
+        )
+        async with self._db.execute(query, (group_id, *player_ids, now)) as cursor:
+            rows = await cursor.fetchall()
+        # 按 player_id 分组
+        result_map = {}
+        for pid, sname, exp in rows:
+            remaining = self._calc_remaining_days(exp)
+            result_map.setdefault(pid, []).append({
+                "status_name": sname, "expire_at": exp, "remaining_days": remaining
+            })
+        return [(pid, result_map.get(pid, [])) for pid in player_ids]
+
+    def _calc_remaining_days(self, expire_at: str) -> int:
+        """计算剩余天数。"""
+        from datetime import datetime
+        exp = datetime.strptime(expire_at, "%Y-%m-%d %H:%M:%S")
+        now = datetime.now(BEIJING_TZ)
+        delta = exp - now
+        return max(0, (delta.days + (delta.seconds > 0)))
+
     async def get_player_statuses(self, group_id: str, player_id: str) -> list:
         """获取玩家未过期的状态列表。返回 [{"status_name": str, "expire_at": str, "remaining_days": int}, ...]"""
         from datetime import datetime, timezone

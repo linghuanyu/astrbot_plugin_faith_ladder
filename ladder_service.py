@@ -191,18 +191,18 @@ class LadderService:
         statuses = await self.db.get_player_statuses(group_id, player.player_id)
         return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
 
+
     async def get_player_cards_by_names(
         self, group_id: str, player_names: List[str],
         init_ladder: int = 1000, init_pilgrimage: int = 100
     ) -> tuple:
         """批量查询玩家信息。返回 (cards_text, not_found_names)。
-        cards_text 是合并后的文本，not_found_names 是不存在的玩家名列表。
-        注意：由于 SQLite 单连接限制，排名和状态查询仍为串行执行。
+        优化：一次性获取全组玩家计算排名 + 批量查状态，将 3N+1 次 DB 降为 3 次。
         """
         if not player_names:
             return "", []
 
-        # 批量查询玩家（1 次 SQL）
+        # 1. 批量查询玩家（1 次 SQL）
         players_dict = await self.db.get_players_by_names(group_id, player_names)
         not_found = [name for name in player_names if name not in players_dict]
 
@@ -212,22 +212,31 @@ class LadderService:
         # 按原始顺序获取玩家列表
         players = [players_dict[name] for name in player_names if name in players_dict]
 
-        # 串行查询每个玩家的排名和状态（SQLite 单连接不支持并发）
+        # 2. 一次性获取全组玩家，客户端派生排名（1 次 SQL）
+        all_players = await self.db.get_all_players_in_group(group_id)
+        ladder_sorted = sorted(all_players, key=lambda p: (p.ladder_score, p.pilgrimage_score), reverse=True)
+        pilgrimage_sorted = sorted(all_players, key=lambda p: (p.pilgrimage_score, p.ladder_score), reverse=True)
+        ladder_ranks = {p.player_id: i + 1 for i, p in enumerate(ladder_sorted)}
+        pilgrimage_ranks = {p.player_id: i + 1 for i, p in enumerate(pilgrimage_sorted)}
+
+        # 3. 批量查状态（1 次 SQL）
+        player_ids = [p.player_id for p in players]
+        all_statuses = await self.db.get_statuses_for_players(group_id, player_ids)
+        status_map = {pid: stats for pid, stats in all_statuses}
+
+        # 组装卡片
         cards = []
         for player in players:
-            ladder_rank = await self.db.get_player_ladder_rank(
-                group_id, player.ladder_score, player.pilgrimage_score
-            )
-            pilgrimage_rank = await self.db.get_player_pilgrimage_rank(
-                group_id, player.pilgrimage_score, player.ladder_score
-            )
-            statuses = await self.db.get_player_statuses(group_id, player.player_id)
+            ladder_rank = ladder_ranks.get(player.player_id, 0)
+            pilgrimage_rank = pilgrimage_ranks.get(player.player_id, 0)
+            statuses = status_map.get(player.player_id, [])
             card = format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
             cards.append(card)
 
         # 合并所有玩家信息
         combined = "\n\n".join(cards)
         return combined, not_found
+
 
     async def add_score(
         self,

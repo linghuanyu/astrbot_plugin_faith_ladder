@@ -119,6 +119,10 @@ class FaithLadderPlugin(Star):
                     if basic_class == "祷词":
                         continue  # 跳过祷词
                     self._specific_classes[specific_name] = (faith, path, basic_class)
+            # 预排序（按职业名长度降序，确保长名优先匹配）
+            self._sorted_specific_classes = sorted(
+                self._specific_classes.items(), key=lambda x: len(x[0]), reverse=True
+            )
             logger.info(f"[SpecificClasses] 加载 {len(self._specific_classes)} 个具体职业映射")
         except Exception as e:
             logger.warning(f"[SpecificClasses] 加载具体职业映射失败: {e}")
@@ -587,7 +591,7 @@ class FaithLadderPlugin(Star):
 
         # 3. 找职业（支持职业名后紧跟数字/字母的情况）
         # 按职业名长度降序排序，确保长的优先匹配
-        sorted_classes = sorted(self._specific_classes.items(), key=lambda x: len(x[0]), reverse=True)
+        sorted_classes = self._sorted_specific_classes
 
         class_word = None
         name_parts = []  # 存储玩家名的部分
