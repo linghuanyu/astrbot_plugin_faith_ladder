@@ -97,17 +97,50 @@ class PermissionService:
         return result
 
     async def add_to_whitelist(
-        self, user_id: str, added_by: str
+        self, user_id: str, added_by: str, faith: str = None
     ) -> tuple[bool, str]:
         """添加用户到诸神列表。返回 (success, message)。"""
         if not user_id.strip():
             return False, "ID 不能为空。"
 
-        added = await self.db.add_to_whitelist("user", user_id, added_by)
+        added = await self.db.add_to_whitelist("user", user_id, added_by, faith=faith)
         if added:
-            return True, f"已添加 {user_id} 到诸神列表。"
+            faith_str = f"（信仰：{faith}）" if faith else ""
+            return True, f"已添加 {user_id} 到诸神列表{faith_str}。"
         else:
-            return False, f"{user_id} 已是诸神。"
+            return False, f"{user_id} 已是诸神之一。"
+
+    async def set_whitelist_faith(
+        self, user_id: str, faith: str
+    ) -> tuple[bool, str]:
+        """为诸神设置信仰。返回 (success, message)。"""
+        if not user_id.strip():
+            return False, "ID 不能为空。"
+        if not faith or not faith.strip():
+            return False, "信仰不能为空。"
+
+        updated = await self.db.set_whitelist_faith(user_id, faith)
+        if updated:
+            return True, f"已设置 {user_id} 的信仰为：{faith}。"
+        else:
+            return False, f"未找到 {user_id}，请先添加到诸神列表。"
+
+    async def remove_whitelist_faith(
+        self, user_id: str
+    ) -> tuple[bool, str]:
+        """移除诸神的信仰标记。返回 (success, message)。"""
+        if not user_id.strip():
+            return False, "ID 不能为空。"
+
+        updated = await self.db.set_whitelist_faith(user_id, None)
+        if updated:
+            return True, f"已移除 {user_id} 的信仰标记。"
+        else:
+            return False, f"未找到 {user_id}。"
+
+    async def get_god_faith(self, user_id: str) -> Optional[str]:
+        """获取诸神对应的信仰名。"""
+        return await self.db.get_whitelist_faith(user_id)
 
     async def remove_from_whitelist(
         self, user_id: str

@@ -238,82 +238,82 @@
     "default": "{name}碎了命运之誓。命线断裂，繁星不再为你闪烁"
   },
   "prayer_text_诞育": {
-    "description": "诞育信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "诞育信仰祷词列表 ",
     "type": "list",
     "default": ["感孕众生衔育自然"]
   },
   "prayer_text_繁荣": {
-    "description": "繁荣信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "繁荣信仰祷词列表 ",
     "type": "list",
     "default": ["万物滋生亦繁亦荣"]
   },
   "prayer_text_死亡": {
-    "description": "死亡信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "死亡信仰祷词列表 ",
     "type": "list",
     "default": ["灵魂安眠生命终焉"]
   },
   "prayer_text_污堕": {
-    "description": "污堕信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "污堕信仰祷词列表 ",
     "type": "list",
     "default": ["解脱枷锁直面心欲"]
   },
   "prayer_text_腐朽": {
-    "description": "腐朽信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "腐朽信仰祷词列表 ",
     "type": "list",
     "default": ["众生应腐万物将朽"]
   },
   "prayer_text_湮灭": {
-    "description": "湮灭信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "湮灭信仰祷词列表 ",
     "type": "list",
     "default": ["于无中生于寂中灭"]
   },
   "prayer_text_秩序": {
-    "description": "秩序信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "秩序信仰祷词列表 ",
     "type": "list",
     "default": ["文明火起秩序长存"]
   },
   "prayer_text_真理": {
-    "description": "真理信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "真理信仰祷词列表 ",
     "type": "list",
     "default": ["洞窥本质行见真理"]
   },
   "prayer_text_战争": {
-    "description": "战争信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "战争信仰祷词列表 ",
     "type": "list",
     "default": ["何以求存唯血与火"]
   },
   "prayer_text_混乱": {
-    "description": "混乱信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "混乱信仰祷词列表 ",
     "type": "list",
     "default": ["虚构规律寰宇笑谈"]
   },
   "prayer_text_痴愚": {
-    "description": "痴愚信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "痴愚信仰祷词列表 ",
     "type": "list",
     "default": ["生命皆痴文明皆愚"]
   },
   "prayer_text_沉默": {
-    "description": "沉默信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "沉默信仰祷词列表 ",
     "type": "list",
     "default": ["万物归寂寰宇无音"]
   },
   "prayer_text_记忆": {
-    "description": "记忆信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "记忆信仰祷词列表 ",
     "type": "list",
     "default": ["昔我长铭流光拓影"]
   },
   "prayer_text_时间": {
-    "description": "时间信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "时间信仰祷词列表 ",
     "type": "list",
     "default": ["时光如隙我亦如风"]
   },
   "prayer_text_欺诈": {
-    "description": "欺诈信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "欺诈信仰祷词列表 ",
     "type": "list",
     "default": ["不辨真伪勿论虚实"]
   },
   "prayer_text_命运": {
-    "description": "命运信仰祷词列表（8字，匹配时忽略标点和空格，任意一个匹配即可）",
+    "description": "命运信仰祷词列表 ",
     "type": "list",
     "default": ["命若繁星望而不及"]
   },
@@ -362,5 +362,19 @@
     "description": "每日接受道具上限（0 为不限制）",
     "type": "int",
     "default": 1
+  },
+  "inventory_easter_egg": {
+    "description": "储物空间查询彩蛋配置",
+    "type": "object",
+    "default": {
+      "enabled": false,
+      "probability": 0.05,
+      "messages": [
+        "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
+        "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
+        "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
+        "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～"
+      ]
+    }
   }
 }

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 # 北京时间 UTC+8
 BEIJING_TZ = timezone(timedelta(hours=8))
 
-from astrbot_plugin_faith_ladder.models import Player
+from astrbot_plugin_faith_ladder.models import Player, FAITH_TO_PATH
 
 try:
     from astrbot.api import logger
@@ -180,6 +180,9 @@ class DatabaseManager:
         # Migrate: remove deprecated group entries from whitelist
         await self._migrate_whitelist_remove_groups()
 
+        # Migrate: add faith column to whitelist
+        await self._migrate_whitelist_faith()
+
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
         async with self._db.execute("PRAGMA table_info(players)") as cursor:
@@ -269,7 +272,7 @@ class DatabaseManager:
             await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT DEFAULT NULL")
             logger.info("[Migration] Added 'grade' column to player_items")
 
-        from astrbot_plugin_faith_ladder.ladder_service import parse_item_full_name
+        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name
 
         try:
             # Always scan all rows to catch any remaining unmigrated data
@@ -385,6 +388,51 @@ class DatabaseManager:
             from astrbot.api import logger
             logger.info(f"[Migration] 移除 {cursor.rowcount} 条已废弃的 group 白名单")
         await self._db.commit()
+
+    async def _migrate_whitelist_faith(self):
+        """白名单新增 faith 字段（诸神对应信仰）。"""
+        async with self._db.execute("PRAGMA table_info(whitelist)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "faith" not in columns:
+            await self._db.execute("ALTER TABLE whitelist ADD COLUMN faith TEXT DEFAULT NULL")
+            await self._db.commit()
+            from astrbot.api import logger
+            logger.info("[Migration] Added 'faith' column to whitelist")
+
+    async def get_whitelist_faith(self, entry_id: str) -> Optional[str]:
+        """获取白名单条目对应的信仰名。"""
+        async with self._db.execute(
+            "SELECT faith FROM whitelist WHERE entry_id = ? AND entry_type = 'user'",
+            (entry_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    async def set_whitelist_faith(self, entry_id: str, faith: str) -> bool:
+        """设置白名单条目的信仰。返回是否成功。"""
+        cursor = await self._db.execute(
+            "UPDATE whitelist SET faith = ? WHERE entry_id = ? AND entry_type = 'user'",
+            (faith, entry_id)
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def get_whitelist_with_faith(self) -> List[dict]:
+        """获取白名单列表，包含信仰字段。"""
+        async with self._db.execute(
+            "SELECT entry_type, entry_id, faith, added_by, added_at FROM whitelist ORDER BY id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "entry_type": r[0],
+                    "entry_id": r[1],
+                    "faith": r[2],
+                    "added_by": r[3],
+                    "added_at": r[4],
+                }
+                for r in rows
+            ]
 
     def _row_to_player(self, row) -> Player:
         """Convert a database row tuple to a Player object."""
@@ -804,13 +852,13 @@ class DatabaseManager:
     # --- Global whitelist operations ---
 
     async def add_to_whitelist(
-        self, entry_type: str, entry_id: str, added_by: str
+        self, entry_type: str, entry_id: str, added_by: str, faith: str = None
     ) -> bool:
         """Add an entry to the global whitelist. Returns True if added, False if already exists."""
         try:
             await self._db.execute(
-                "INSERT INTO whitelist (entry_type, entry_id, added_by) VALUES (?, ?, ?)",
-                (entry_type, entry_id, added_by)
+                "INSERT INTO whitelist (entry_type, entry_id, added_by, faith) VALUES (?, ?, ?, ?)",
+                (entry_type, entry_id, added_by, faith)
             )
             await self._db.commit()
             return True
@@ -839,15 +887,16 @@ class DatabaseManager:
     async def get_whitelist(self) -> List[dict]:
         """Get all global whitelist entries. 仅返回 user 类型（group 类型已废弃）。"""
         async with self._db.execute(
-            "SELECT entry_type, entry_id, added_by, added_at FROM whitelist WHERE entry_type = 'user'"
+            "SELECT entry_type, entry_id, faith, added_by, added_at FROM whitelist WHERE entry_type = 'user'"
         ) as cursor:
             rows = await cursor.fetchall()
             return [
                 {
                     "entry_type": r[0],
                     "entry_id": r[1],
-                    "added_by": r[2],
-                    "added_at": r[3]
+                    "faith": r[2],
+                    "added_by": r[3],
+                    "added_at": r[4]
                 }
                 for r in rows
             ]

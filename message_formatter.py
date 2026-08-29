@@ -13,16 +13,23 @@ def _name_with_tag(player: Player) -> str:
 
 
 def _faith_display(player: Player) -> str:
-    """显示玩家信仰：具体信仰 > 命途 > 未设定"""
-    if player.specific_faith:
-        return player.specific_faith
+    """排行榜只显示命途：命途 > 未设定"""
     if player.faith:
         return player.faith
     return "未设定"
 
 
+def _faith_card_display(player: Player) -> str:
+    """玩家卡片显示信仰：信仰：命途 | 具体信仰"""
+    if player.specific_faith:
+        return f"信仰：{player.faith} | {player.specific_faith}"
+    elif player.faith:
+        return f"信仰：{player.faith}"
+    return "信仰：未设定"
+
+
 def format_leaderboard(players: List[Player], limit: int = 10) -> str:
-    """Format the leaderboard display."""
+    """Format the leaderboard display. 只显示命途。"""
     if not players:
         return "暂无排名数据。"
 
@@ -43,7 +50,7 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
 
 
 def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str:
-    """Format the pilgrimage leaderboard display."""
+    """Format the pilgrimage leaderboard display. 只显示命途。"""
     if not players:
         return "暂无排名数据。"
 
@@ -75,13 +82,8 @@ def format_player_card(
     class_str = player.class_ if player.class_ else "未设定"
     oathbreaker_str = "(弃誓者)" if player.oathbreaker else ""
 
-    # 命途 | 具体信仰
-    if player.specific_faith:
-        path_line = f"命途: {player.faith} | {player.specific_faith}"
-    elif player.faith:
-        path_line = f"命途: {player.faith}"
-    else:
-        path_line = "命途: 未设定"
+    # 信仰：命途 | 具体信仰
+    faith_line = _faith_card_display(player)
 
     # 初始积分视为未上榜
     if player.ladder_score == init_ladder:
@@ -102,15 +104,10 @@ def format_player_card(
         f"═══ 玩家档案 ═══",
         f"姓名: {player.player_name}{oathbreaker_str}",
         f"职业: {class_str}",
-        f"{path_line}",
-        f"登神之路: {player.ladder_score}",
-        f"觐见之梯: {player.pilgrimage_score}",
+        f"{faith_line}",
+        f"登神之路: {player.ladder_score}（{ladder_rank_str}）",
+        f"觐见之梯:  {player.pilgrimage_score}（{pilgrimage_rank_str}）",
     ]
-    # 排名汇总行
-    if ladder_rank_str != "未上榜" or pilgrimage_rank_str != "未上榜":
-        lines.append(f"—— 登神之路{ladder_rank_str} · 觐见之梯{pilgrimage_rank_str} ——")
-    else:
-        lines.append("—— 两榜均未上榜 ——")
 
     # 状态显示
     if statuses:
@@ -147,10 +144,10 @@ def format_help(config: dict) -> str:
     faiths_str = "/".join(VALID_PATHS)
 
     return (
-        f"═══════════════════════\n"
-        f"      诸 神 愚 戏\n"
-        f"   信仰为局 众生为棋\n"
-        f"═══════════════════════\n"
+        f"════════════\n"
+        f"诸   神  愚   戏\n"
+        f"信仰为局 众生为棋\n"
+        f"════════════\n"
         f"\n"
         f"[窥探棋局]\n"
         f"{cmd_query} - 窥探自己在棋局中的位置（冷却 {query_cd}s）\n"
@@ -162,11 +159,11 @@ def format_help(config: dict) -> str:
         f"{cmd_pilgrimage} - 觐见之梯 · 神明的凝视（冷却 {ladder_cd}s）\n"
         f"\n"
         f"[玩家管理] (诸神权限)\n"
-        f"{cmd_register} @用户 [姓名] [命途] [职业] [分] [分] - 将新棋子推入棋局（@可自动提取名片信息）\n"
+        f"{cmd_register} @用户 [姓名] [命途] [职业] [分] [分] - 录入新信徒（@可自动提取名片信息）\n"
         f"{cmd_register} <姓名> <命途> <职业> [分] [分] - 或手动指定全部参数\n"
         f"  名片支持具体职业（如 酋长/织命师），系统自动识别对应命途和普通职业\n"
-        f"{cmd_class} <玩家名> <职业> - 更改棋子身份\n"
-        f"立誓 <玩家名> <命途> - 为棋子选择信仰\n"
+        f"{cmd_class} <玩家名> <职业> - 更改玩家职业\n"
+        f"立誓 <玩家名> <命途> - 为玩家选择信仰\n"
         f"  职业: {classes_str} | 命途: {faiths_str}\n"
         f"\n"
         f"[积分管理] (诸神权限)\n"
@@ -177,8 +174,8 @@ def format_help(config: dict) -> str:
         f"[储物空间]\n"
         f"查询储物空间 - 查看自己的道具（自动识别，需先绑定QQ）\n"
         f"查询储物空间 <玩家名> [玩家名2 ...] - 查看指定玩家道具（诸神批量）\n"
-        f"赐予道具 <玩家名> <道具*数量> ... - 赐予道具（空格分隔多个）(诸神)\n"
-        f"收回道具 <玩家名> <道具*数量> ... - 收回道具（不指定数量则全部收回）(诸神)\n"
+        f"赐予道具 <玩家名> <道具> <数量> ... - 赐予道具（空格分隔多个）(诸神)\n"
+        f"收回道具 <玩家名> <道具> <数量> ... - 收回道具（不指定数量则全部收回）(诸神)\n"
         f"清除储物空间 <玩家名> [道具名|全部] - 清除储物空间（清空需加「全部」）(诸神)\n"
         f"\n"
         f"[赠送道具]（需先绑定QQ）\n"
@@ -219,7 +216,7 @@ def format_gift_request(
     sender_name: str, receiver_name: str, item_name: str, grade, quantity: int
 ) -> str:
     """Format gift notification for receiver."""
-    from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+    from astrbot_plugin_faith_ladder.item_utils import format_item_display
     display = format_item_display(item_name, grade, quantity)
     return (
         f"{sender_name} 将 {display} 递向 {receiver_name}\n"
@@ -251,14 +248,18 @@ def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]
         lines.append("[WebUI 配置]")
         for i, entry in enumerate(config_entries, 1):
             note = f" ({entry.get('note', '')})" if entry.get("note") else ""
-            lines.append(f"  {i}. [{entry['entry_type']}] {entry['entry_id']}{note}")
+            faith = entry.get("faith")
+            faith_str = f" <{faith}>" if faith else ""
+            lines.append(f"  {i}. [{entry['entry_type']}] {entry['entry_id']}{faith_str}{note}")
         lines.append("")
 
     if db_entries:
         lines.append("[运行时添加]")
         start = len(config_entries) + 1
         for i, entry in enumerate(db_entries, start):
-            lines.append(f"  {i}. [{entry['entry_type']}] {entry['entry_id']}")
+            faith = entry.get("faith")
+            faith_str = f" <{faith}>" if faith else ""
+            lines.append(f"  {i}. [{entry['entry_type']}] {entry['entry_id']}{faith_str}")
         lines.append("")
 
     total = len(config_entries) + len(db_entries)
@@ -288,10 +289,10 @@ def format_inventory(player_name: str, items: list) -> str:
     """Format player inventory display.
     items: [{"item_name": str, "grade": str|None, "quantity": int}, ...]
     """
-    from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+    from astrbot_plugin_faith_ladder.item_utils import format_item_display
 
     if not items:
-        return f"═══ 储物空间 ═══\n玩家: {player_name}\n\n储物空间为空。"
+        return f"═══ 储物空间 ═══\n玩家: {player_name}\n\n储物空间满满当当，嘻～"
 
     lines = [f"═══ 储物空间 ═══", f"玩家: {player_name}", ""]
     for item in items:
@@ -323,7 +324,7 @@ def format_prayer_trigger(player_name: str, player_faith: str, prayer_faith: str
         if delta > 0:
             config_key = f"prayer_trigger_messages_positive_{prayer_faith}"
             fallback_key = "prayer_trigger_messages_positive"
-            default_msgs = ["{god}今日心情不错，觐见+{delta}"]
+            default_msgs = ["{god}今日心情不错，觐见{delta}"]
             template_vars = {"god": god_name, "delta": f"+{delta}"}
         elif delta < 0:
             config_key = f"prayer_trigger_messages_negative_{prayer_faith}"

@@ -28,8 +28,9 @@ from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, FAITH_TO_PATH, Player
-# from astrbot_plugin_faith_ladder.image_renderer import ImageRenderer  # 暂时禁用图片渲染
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+from astrbot_plugin_faith_ladder.messages import get_message, PERMISSION_DENIED, INPUT_ERRORS, SUCCESS_MESSAGES, ERROR_MESSAGES, ITEM_MESSAGES, COOLDOWN_MESSAGES, BATCH_MESSAGES
+from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 
 # 预编译正则（祷词触发用）
 _PRAYER_NORMALIZE_RE = re.compile(r'[^\w]')
@@ -59,7 +60,6 @@ class FaithLadderPlugin(Star):
         self.db_manager = DatabaseManager(self.data_dir)
         self.ladder_service = LadderService(self.db_manager)
         self.cooldown_manager = CooldownManager()
-        # self.image_renderer = ImageRenderer(self)  # 暂时禁用图片渲染
 
         try:
             self.permission_service = PermissionService(
@@ -74,7 +74,11 @@ class FaithLadderPlugin(Star):
                 self.permission_service = PermissionService(self.db_manager)
 
         self._scheduler = None
-        self._qq_admin = QQAdminHandler(self)
+        self._qq_admin = QQAdminHandler(
+            check_perm_fn=self.permission_service.check_score_permission,
+            check_admin_fn=self._is_plugin_admin,
+            get_faith_fn=self._get_god_faith,
+        )
         self._pending_gifts_receive = {}  # (group_id, receiver_id) -> gift_dict（内存缓存）
 
         # 祷词触发缓存
@@ -180,14 +184,10 @@ class FaithLadderPlugin(Star):
         return str(event.message_obj.group_id)
 
     def _get_args(self, event: AstrMessageEvent, cmd_name: str) -> str:
-        """Extract arguments after the command name."""
+        """Extract arguments after the command name using exact prefix match."""
         text = event.message_str.strip()
-        if text == cmd_name:
-            return ""
-        # Find the command name in text and return everything after it
-        idx = text.find(cmd_name)
-        if idx >= 0:
-            return text[idx + len(cmd_name):].strip()
+        if text.startswith(cmd_name):
+            return text[len(cmd_name):].strip()
         return ""
 
     def _is_plugin_admin(self, event: AstrMessageEvent) -> bool:
@@ -207,6 +207,24 @@ class FaithLadderPlugin(Star):
         has_permission = await self.permission_service.check_score_permission(user_id)
         is_admin = self._is_plugin_admin(event)
         return has_permission or is_admin
+
+    async def _get_god_faith(self, qq_id: str) -> Optional[str]:
+        """获取诸神对应的信仰名（如果在白名单中且配置了信仰）。"""
+        return await self.permission_service.get_god_faith(qq_id)
+
+    def _get_faith_message(self, faith: str, action: str, **kwargs) -> str:
+        """获取信仰专属的随机消息。优先级：信仰专属 → 通用神明 → 默认。"""
+        import random
+        messages = FAITH_MESSAGES.get(faith, {}).get(action, [])
+        if messages:
+            msg = random.choice(messages)
+            return msg.format(**kwargs)
+        # 回退到通用消息
+        generic = GENERIC_GOD_MESSAGES.get(action, [])
+        if generic:
+            return random.choice(generic).format(**kwargs)
+        # 最终回退
+        return kwargs.get("default", "")
 
     async def _resolve_self_player(self, event: AstrMessageEvent) -> Optional[Player]:
         """通过发送者的 QQ 号查找绑定的玩家记录（强鉴权，不可伪造）。"""
@@ -298,43 +316,6 @@ class FaithLadderPlugin(Star):
         self._pending_gifts_receive[gift_key] = gift
         return gift
 
-    # === 图片渲染已暂时禁用 ===
-    # async def _render_and_send(
-    #     self,
-    #     event: AstrMessageEvent,
-    #     group_id: str,
-    #     is_ladder: bool,
-    #     render_func,
-    #     get_text_func,
-    #     limit: int
-    # ):
-    #     """Render image and send, with fallback to text on failure."""
-    #     players = await render_func(group_id, limit)
-    #     if not players:
-    #         yield event.plain_result("暂无排名数据。")
-    #         return
-    #
-    #     image_format = self.config.get("image_format", "PNG")
-    #     image_quality = self.config.get("image_quality", 90)
-    #
-    #     # Try image rendering (returns bytes)
-    #     if is_ladder:
-    #         image_bytes = await self.image_renderer.render_leaderboard_image(
-    #             players, limit, image_format=image_format, quality=image_quality
-    #         )
-    #     else:
-    #         image_bytes = await self.image_renderer.render_pilgrimage_image(
-    #             players, limit, image_format=image_format, quality=image_quality
-    #         )
-    #
-    #     if image_bytes:
-    #         from astrbot.api.message_components import Image
-    #         yield event.chain_result([Image.fromBytes(image_bytes)])
-    #     else:
-    #         # Fallback to text
-    #         text = await get_text_func(group_id, limit)
-    #         yield event.plain_result(text + "\n[图片渲染失败，已降级为文本]")
-
     # === 排行榜 ===
 
     @filter.command("天梯榜", alias={"ladder", "ranking", "排行榜"})
@@ -386,39 +367,6 @@ class FaithLadderPlugin(Star):
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
         yield event.plain_result(text)
-
-    # === 输出模式切换（已暂时禁用） ===
-
-    # @filter.command("输出模式", alias={"outputmode", "模式切换"})
-    # async def cmd_output_mode(self, event: AstrMessageEvent):
-    #     """切换输出模式（仅管理员）。格式: 输出模式 <text|image>"""
-    #     if not self._is_plugin_admin(event):
-    #         yield event.plain_result("权限不足：仅管理员可切换输出模式。")
-    #         return
-    #
-    #     group_id = self._get_group_id(event)
-    #
-    #     # Get argument
-    #     args = self._get_args(event, "输出模式")
-    #     if not args:
-    #         args = self._get_args(event, "outputmode") or self._get_args(event, "模式切换")
-    #
-    #     if not args or args not in ("text", "image"):
-    #         current_mode = await self.ladder_service.get_effective_output_mode(
-    #             group_id, self.config.get("output_mode", "text")
-    #         )
-    #         yield event.plain_result(
-    #             f"当前群输出模式: {current_mode}\n"
-    #             f"全局默认模式: {self.config.get('output_mode', 'text')}\n\n"
-    #             f"用法：输出模式 <text|image>\n"
-    #             f"  text  - 纯文本输出\n"
-    #             f"  image - 图片输出"
-    #         )
-    #         return
-    #
-    #     # Store per-group mode in DB
-    #     await self.db_manager.set_group_output_mode(group_id, args)
-    #     yield event.plain_result(f"本群输出模式已切换为: {args}")
 
     # === 群名片解析与玩家识别 ===
 
@@ -719,7 +667,7 @@ class FaithLadderPlugin(Star):
                 init_pilgrimage=init_pilgrimage
             )
             if not cards_text and not_found:
-                yield event.plain_result(f" {', '.join(not_found)} 不属于这个宇宙")
+                yield event.plain_result("".join(get_message("PLAYER_NOT_FOUND", name=n) for n in not_found))
                 return
             result_parts = []
             if cards_text:
@@ -736,7 +684,7 @@ class FaithLadderPlugin(Star):
             init_pilgrimage=init_pilgrimage
         )
         if not text:
-            yield event.plain_result(f" {target_name}不属于这个宇宙")
+            yield event.plain_result(get_message("PLAYER_NOT_FOUND", name=target_name))
             return
         yield event.plain_result(text)
 
@@ -749,7 +697,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "录入积分")
@@ -800,7 +748,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         # Cooldown check
@@ -836,7 +784,12 @@ class FaithLadderPlugin(Star):
         )
 
         # Build reply
-        reply_parts = [f"批量录入完成: 成功 {success_count} 人"]
+        if skipped:
+            reply_parts = [BATCH_MESSAGES["partial_skip"].format(
+                success=success_count, skip=len(skipped)
+            )]
+        else:
+            reply_parts = [BATCH_MESSAGES["all_success"].format(count=success_count)]
         if success_details:
             reply_parts.append("\n".join(success_details))
         if skipped:
@@ -873,7 +826,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "录入玩家")
@@ -1029,17 +982,12 @@ class FaithLadderPlugin(Star):
     async def cmd_check_player(self, event: AstrMessageEvent):
         """检测当前玩家的绑定状态（QQ、信仰等），未绑定时自动绑定。"""
         group_id = self._get_group_id(event)
-        user_id = str(event.get_sender_id())
 
-        # 尝试通过名片识别玩家
-        player_name = await self._resolve_player_name(event)
-        if not player_name:
-            yield event.plain_result("无法从你的群名片识别到玩家。\n请确保名片格式为「【信仰】职业 玩家名」或联系诸神录入。")
-            return
-
-        player = await self.db_manager.get_player_by_name(group_id, player_name)
+        # 优先 QQ 绑定查找，失败回退名片识别
+        player = await self._resolve_self_player_lenient(event)
         if not player:
-            yield event.plain_result(f"数据库中未找到玩家「{player_name}」，请联系诸神录入。")
+            # 名片也识别不到，给提示
+            yield event.plain_result("无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。")
             return
 
         # 检查 QQ 绑定状态
@@ -1084,7 +1032,7 @@ class FaithLadderPlugin(Star):
         一个 QQ 在同一群只能绑定一个玩家。"""
         group_id = self._get_group_id(event)
         if not await self._check_perm(event):
-            yield event.plain_result("只有诸神才能为玩家绑定 QQ。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         at_user_id = await self._get_at_user_id(event)
@@ -1109,7 +1057,7 @@ class FaithLadderPlugin(Star):
             # @ 解析不出 → 尝试参数里的玩家名
             player = await self.db_manager.get_player_by_name(group_id, player_name_arg)
             if not player:
-                yield event.plain_result(f"玩家 {player_name_arg} 不存在。")
+                yield event.plain_result(get_message("PLAYER_NOT_FOUND", name=player_name_arg))
                 return
             if not target_qq:
                 # 没 @ 走的是玩家名路径 → 反查其 QQ
@@ -1162,7 +1110,7 @@ class FaithLadderPlugin(Star):
         若新 QQ 已绑其他玩家，提示先解绑/换绑。"""
         group_id = self._get_group_id(event)
         if not await self._check_perm(event):
-            yield event.plain_result("只有诸神才能为玩家换绑 QQ。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "换绑QQ")
@@ -1225,7 +1173,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
 
         if not await self._check_perm(event):
-            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "设置职业")
@@ -1243,7 +1191,7 @@ class FaithLadderPlugin(Star):
         target_name, class_name = parts
         target_player = await self.db_manager.get_player_by_name(group_id, target_name)
         if not target_player:
-            yield event.plain_result(f"{target_name}不属于这个宇宙")
+            yield event.plain_result(get_message("PLAYER_NOT_FOUND", name=target_name))
             return
 
         success, message = await self.ladder_service.set_class(
@@ -1259,7 +1207,7 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
 
         if not await self._check_perm(event):
-            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         # Cooldown
@@ -1297,7 +1245,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("凡人也胆敢染指神明的权柄？")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         # Cooldown
@@ -1353,12 +1301,6 @@ class FaithLadderPlugin(Star):
                 f"改名/ rename <旧名> <新名> — 改名 (诸神/管理员)\n"
                 f"清空/ clear — 清空本群所有玩家和数据 (管理员)\n"
                 f"清除弃誓/ clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
-                f"\n"
-                f"示例:\n"
-                f"天梯榜管理 重置 张三\n"
-                f"天梯榜管理 删除 张三\n"
-                f"天梯榜管理 改名 张三 李四\n"
-                f"天梯榜管理 清除弃誓 张三"
             )
             return
 
@@ -1378,7 +1320,7 @@ class FaithLadderPlugin(Star):
         # delete: whitelist or admin
         if action == "delete":
             if not await self._check_perm(event):
-                yield event.plain_result("仅供诸神使用")
+                yield event.plain_result("此等权柄，唯诸神方可执掌。")
                 return
             if len(parts) < 2:
                 yield event.plain_result("用法：天梯榜管理 删除 <玩家名>")
@@ -1395,7 +1337,7 @@ class FaithLadderPlugin(Star):
         # rename: whitelist or admin
         if action == "rename":
             if not await self._check_perm(event):
-                yield event.plain_result("仅供诸神使用")
+                yield event.plain_result("此等权柄，唯诸神方可执掌。")
                 return
             if len(parts) < 3:
                 yield event.plain_result("用法：天梯榜管理 改名 <旧名> <新名>")
@@ -1411,7 +1353,7 @@ class FaithLadderPlugin(Star):
 
         # Other actions: admin only
         if not is_admin:
-            yield event.plain_result("仅供诸神使用")
+            yield event.plain_result("此等权柄，唯诸神方可执掌。")
             return
 
         if action == "clearoath" and len(parts) >= 2:
@@ -1459,9 +1401,9 @@ class FaithLadderPlugin(Star):
 
     @filter.command("白名单", alias={"whitelist", "wl"})
     async def cmd_whitelist(self, event: AstrMessageEvent):
-        """白名单管理。格式: 白名单 <add/remove/list> [类型] [ID]"""
+        """白名单管理。格式: 白名单 <add/remove/list/setfaith/removefaith> [用户ID] [信仰]"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result( "权限不足：仅管理员可管理诸神列表。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         user_id = str(event.get_sender_id())
@@ -1472,29 +1414,45 @@ class FaithLadderPlugin(Star):
         parts = args.split()
         if not parts:
             yield event.plain_result(
-                f"用法：白名单 <add/remove/list> [用户ID]\n"
-                f"示例：白名单 add 123456789"
+                f"用法：白名单 <add/remove/list/setfaith/removefaith/view> [用户ID] [信仰]\n"
+                f"示例：白名单 add 123456789\n"
+                f"      白名单 add 123456789 沉默\n"
+                f"      白名单 setfaith 123456789 湮灭\n"
+                f"      白名单 view — 查看所有神明及信仰"
             )
             return
 
         action = parts[0]
-        if action == "list":
+        if action == "list" or action == "view":
             text = await self.permission_service.get_whitelist_text()
-            yield event.plain_result( text)
+            yield event.plain_result(text)
         elif action == "add" and len(parts) >= 2:
             target_id = parts[1]
-            _, message = await self.permission_service.add_to_whitelist(target_id, user_id)
+            faith = parts[2] if len(parts) >= 3 else None
+            _, message = await self.permission_service.add_to_whitelist(target_id, user_id, faith=faith)
             # 白名单变更后失效权限缓存（让新权限立即生效）
             self.permission_service.invalidate_cache()
-            yield event.plain_result( message)
+            yield event.plain_result(message)
         elif action == "remove" and len(parts) >= 2:
             target_id = parts[1]
             _, message = await self.permission_service.remove_from_whitelist(target_id)
             # 白名单变更后失效权限缓存（让权限移除立即生效）
             self.permission_service.invalidate_cache()
-            yield event.plain_result( message)
+            yield event.plain_result(message)
+        elif action == "setfaith" and len(parts) >= 3:
+            target_id = parts[1]
+            faith = parts[2]
+            if faith not in VALID_PATHS:
+                yield event.plain_result(f"无效信仰。可选：{'/'.join(VALID_PATHS)}")
+                return
+            _, message = await self.permission_service.set_whitelist_faith(target_id, faith)
+            yield event.plain_result(message)
+        elif action == "removefaith" and len(parts) >= 2:
+            target_id = parts[1]
+            _, message = await self.permission_service.remove_whitelist_faith(target_id)
+            yield event.plain_result(message)
         else:
-            yield event.plain_result(f"用法：白名单 <add/remove/list> [用户ID]")
+            yield event.plain_result(f"用法：白名单 <add/remove/list/setfaith/removefaith/view> [用户ID] [信仰]")
 
     # === 帮助 ===
 
@@ -1575,6 +1533,21 @@ class FaithLadderPlugin(Star):
                 return
             names = [self_player.player_name]
 
+            # 储物空间彩蛋：非诸神查自己时有概率触发
+            ee_config = self.config.get("inventory_easter_egg", {})
+            if ee_config.get("enabled", False):
+                import random
+                prob = ee_config.get("probability", 0.0)
+                if random.random() < prob:
+                    ee_messages = ee_config.get("messages", [
+                        "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
+                        "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
+                        "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
+                        "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～",
+                    ])
+                    yield event.plain_result(random.choice(ee_messages))
+                    return
+
         results = []
         not_found = []
         for name in names:
@@ -1593,80 +1566,87 @@ class FaithLadderPlugin(Star):
         yield event.plain_result("\n".join(parts) if parts else "未查询到任何玩家。")
 
     def _parse_item_args(self, text: str) -> list:
-        """解析道具参数。格式: 道具名*数量，空格分隔多个。
+        """解析道具参数。格式: 道具名 数量，空格分隔多个。
         返回: [(道具名, 数量), ...]
-        道具名可包含（）括号，数量可选（默认1）。
+        道具名可包含（）括号，数量紧跟名字后（默认1）。
+
+        示例:
+            '铁剑 2 生命药水 3' → [('铁剑', 2), ('生命药水', 3)]
+            '共生噬刃（C级） 2' → [('共生噬刃（C级）', 2)]
+            '铁剑' → [('铁剑', 1)]
         """
         items = []
-        # 按空格分割，但需要保留括号内的内容
-        # 策略: 先按空格分割，再检查每段是否有 *
         parts = text.strip().split()
-        for part in parts:
-            if '*' in part:
-                # 以最后一个 * 分隔（道具名可能不包含 *，数量在最后）
-                idx = part.rfind('*')
-                name = part[:idx].strip()
-                qty_str = part[idx+1:].strip()
+        i = 0
+        while i < len(parts):
+            # 尝试看下一个是否是数字（数量）
+            if i + 1 < len(parts):
                 try:
-                    qty = int(qty_str)
+                    qty = int(parts[i + 1])
+                    items.append((parts[i], qty))
+                    i += 2
+                    continue
                 except ValueError:
-                    # 如果 * 后面不是数字，整段作为道具名
-                    name = part
-                    qty = 1
-                if name:
-                    items.append((name, qty))
-            else:
-                if part:
-                    items.append((part, 1))
+                    pass
+            # 下一个不是数字，当前作为独立道具（数量1）
+            items.append((parts[i], 1))
+            i += 1
         return items
 
     @filter.command("赐予道具")
     async def cmd_give_item(self, event: AstrMessageEvent):
-        """赐予道具。格式: 赐予道具 <玩家名> <道具1*数量> [道具2*数量] ..."""
+        """赐予道具。格式: 赐予道具 <玩家名> <道具1> <数量1> [道具2] [数量2] ..."""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "赐予道具")
         if not args:
-            yield event.plain_result("用法：赐予道具 <玩家名> <道具*数量> ...\n示例：赐予道具 张三 铁剑*2 生命药水*3")
+            yield event.plain_result("用法：赐予道具 <玩家名> <道具> <数量> ...\n示例：赐予道具 张三 铁剑 2 生命药水 3")
             return
 
         parts = args.split(None, 1)  # 分割为玩家名 + 剩余
         if len(parts) < 2:
-            yield event.plain_result("用法：赐予道具 <玩家名> <道具*数量> ...")
+            yield event.plain_result("用法：赐予道具 <玩家名> <道具> <数量> ...")
             return
 
         player_name = parts[0]
         items = self._parse_item_args(parts[1])
         if not items:
-            yield event.plain_result("未指定有效道具。格式: 道具名*数量")
+            yield event.plain_result(INPUT_ERRORS["invalid_item_format"])
             return
 
         success, message = await self.ladder_service.give_items(group_id, player_name, items)
-        yield event.plain_result(message)
+        if success:
+            # 使用信仰主题消息
+            faith = await self._get_god_faith(user_id)
+            items_str = ", ".join(f"{name}×{qty}" if qty > 1 else name for name, qty in items)
+            themed_msg = self._get_faith_message(faith, "give_success", items=items_str, name=player_name)
+            yield event.plain_result(themed_msg if themed_msg else message)
+        else:
+            yield event.plain_result(message)
 
     @filter.command("收回道具")
     async def cmd_remove_item(self, event: AstrMessageEvent):
-        """收回道具。格式: 收回道具 <玩家名> <道具1*数量> [道具2*数量] ..."""
+        """收回道具。格式: 收回道具 <玩家名> <道具> <数量> ..."""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "收回道具")
         if not args:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n示例：收回道具 张三 铁剑*2 生命药水")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具> <数量> ...\n示例：收回道具 张三 铁剑 2 生命药水")
             return
 
         parts = args.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具> <数量> ...")
             return
 
         player_name = parts[0]
@@ -1694,7 +1674,14 @@ class FaithLadderPlugin(Star):
                     items.append((part, None))  # None = 全部收回
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
-        yield event.plain_result(message)
+        if success:
+            # 使用信仰主题消息
+            faith = await self._get_god_faith(user_id)
+            items_str = ", ".join(f"{name}×{qty}" if qty else name for name, qty in items)
+            themed_msg = self._get_faith_message(faith, "take_success", items=items_str, name=player_name)
+            yield event.plain_result(themed_msg if themed_msg else message)
+        else:
+            yield event.plain_result(message)
 
     @filter.command("清除储物空间")
     async def cmd_clear_inventory(self, event: AstrMessageEvent):
@@ -1704,7 +1691,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "清除储物空间")
@@ -1741,7 +1728,7 @@ class FaithLadderPlugin(Star):
     async def cmd_sync_whitelist(self, event: AstrMessageEvent):
         """同步指定群的当前成员到白名单。格式: 同步白名单"""
         if not self._is_plugin_admin(event):
-            yield event.plain_result("权限不足：仅管理员可同步诸神列表。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         target_group = self.config.get("auto_whitelist_group", "")
@@ -1823,7 +1810,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "添加状态")
@@ -1861,7 +1848,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "移除状态")
@@ -1887,7 +1874,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "清除状态")
@@ -2060,7 +2047,7 @@ class FaithLadderPlugin(Star):
         await self.db_manager.record_gift_accept(group_id, receiver_id)
 
         gift_key = (group_id, receiver_id)
-        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        from astrbot_plugin_faith_ladder.item_utils import format_item_display
         success, msg = await self.ladder_service.receive_item(
             gift["group_id"], gift["receiver_id"], gift["receiver_name"],
             gift["item_name"], gift["quantity"], grade=gift.get("grade")
@@ -2125,7 +2112,7 @@ class FaithLadderPlugin(Star):
             return
 
         gift_key = (group_id, receiver_id)
-        from astrbot_plugin_faith_ladder.ladder_service import format_item_display
+        from astrbot_plugin_faith_ladder.item_utils import format_item_display
         # 退回赠送方道具
         await self.ladder_service.receive_item(
             gift["group_id"], gift["sender_id"], gift["sender_name"],
@@ -2170,11 +2157,6 @@ class FaithLadderPlugin(Star):
     def _quick_chinese_count(self, text: str) -> int:
         """快速统计汉字数量（不做完整归一化）。"""
         return sum(1 for c in text if '一' <= c <= '鿿')
-
-    def _is_valid_prayer_length(self, text: str) -> bool:
-        """检查是否为恰好 8 个汉字（祷词固定长度，快速过滤非祷词消息）。"""
-        chinese_chars = _PRAYER_CHINESE_RE.findall(text)
-        return len(chinese_chars) == 8
 
     def _is_command_message(self, text: str) -> bool:
         """检查消息是否以已注册的命令前缀开头。"""
