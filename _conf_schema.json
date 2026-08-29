@@ -363,18 +363,24 @@
     "type": "int",
     "default": 1
   },
-  "inventory_easter_egg": {
-    "description": "储物空间查询彩蛋配置",
-    "type": "object",
-    "default": {
-      "enabled": false,
-      "probability": 0.05,
-      "messages": [
-        "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
-        "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
-        "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
-        "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～"
-      ]
-    }
+  "inventory_easter_egg_enabled": {
+    "description": "是否启用储物空间查询彩蛋",
+    "type": "bool",
+    "default": false
+  },
+  "inventory_easter_egg_probability": {
+    "description": "储物空间查询彩蛋触发概率（0~1，默认0.05=5%）",
+    "type": "float",
+    "default": 0.05
+  },
+  "inventory_easter_egg_messages": {
+    "description": "储物空间查询彩蛋文案列表",
+    "type": "list",
+    "default": [
+      "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
+      "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
+      "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
+      "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～"
+    ]
   }
 }

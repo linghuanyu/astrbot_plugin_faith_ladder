@@ -1534,12 +1534,11 @@ class FaithLadderPlugin(Star):
             names = [self_player.player_name]
 
             # 储物空间彩蛋：非诸神查自己时有概率触发
-            ee_config = self.config.get("inventory_easter_egg", {})
-            if ee_config.get("enabled", False):
+            if self.config.get("inventory_easter_egg_enabled", False):
                 import random
-                prob = ee_config.get("probability", 0.0)
+                prob = self.config.get("inventory_easter_egg_probability", 0.05)
                 if random.random() < prob:
-                    ee_messages = ee_config.get("messages", [
+                    ee_messages = self.config.get("inventory_easter_egg_messages", [
                         "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
                         "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
                         "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
