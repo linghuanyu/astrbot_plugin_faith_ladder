@@ -1693,26 +1693,31 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "收回道具")
         if not args:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具> <数量> ...\n示例：收回道具 张三 铁剑 2 生命药水")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n示例：收回道具 张三 铁剑*2 生命药水")
             return
 
         parts = args.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具> <数量> ...")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...")
             return
 
         player_name = parts[0]
-        items = self._parse_item_args(parts[1])
-        if not items:
-            yield event.plain_result("未指定有效道具。")
-            return
 
-        # 对于收回道具，需要区分"有数量"和"无数量（全部收回）"
-        # _parse_item_args 返回 [(道具名, 数量)]，数量默认为1
-        # 需要转换为 [(道具名, 数量或None)]，None表示全部收回
-        # 这里假设所有指定数量的都是明确数量，不带数量的是全部收回
-        # 由于当前格式是 道具 数量，我们使用实际解析的结果
-        # 如果需要全部收回，用户应该使用"清除储物空间"命令
+        # 解析道具参数：支持 道具*数量 或 道具（无数量=全部收回）
+        items = []
+        for part in parts[1].strip().split():
+            if '*' in part:
+                idx = part.rfind('*')
+                name = part[:idx].strip()
+                qty_str = part[idx+1:].strip()
+                try:
+                    qty = int(qty_str)
+                    items.append((name, qty))
+                except ValueError:
+                    items.append((part, None))  # * 后不是数字 → 全部收回
+            else:
+                if part:
+                    items.append((part, None))  # 无 * → 全部收回
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
         if success:
