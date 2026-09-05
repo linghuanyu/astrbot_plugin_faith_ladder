@@ -345,34 +345,6 @@
       "type": "string"
     }
   },
-  "prayer_trigger_messages_positive": {
-    "description": "祷词触发正分时的随机文案列表（通用回退，{god}=具体信仰名, {delta}=变化值）",
-    "type": "list",
-    "default": [
-      "{god}今日心情不错，觐见+{delta}"
-    ]
-  },
-  "prayer_trigger_messages_negative": {
-    "description": "祷词触发负分时的随机文案列表（通用回退，{god}=具体信仰名, {delta}=变化值）",
-    "type": "list",
-    "default": [
-      "{god}今日心情不佳，觐见{delta}"
-    ]
-  },
-  "prayer_trigger_messages_neutral": {
-    "description": "祷词触发零分时的随机文案列表（通用回退，{god}=具体信仰名）",
-    "type": "list",
-    "default": [
-      "{god}听到了你的祈祷，但未起波澜"
-    ]
-  },
-  "prayer_trigger_messages_mismatch": {
-    "description": "祷词触发不匹配时的随机文案列表（{god}=玩家信仰, {prayer}=祷词信仰, {delta}=变化值）",
-    "type": "list",
-    "default": [
-      "{god}冷笑：蝼蚁也敢觊觎{prayer}的领域？觐见{delta}"
-    ]
-  },
   "gift_daily_accept_limit": {
     "description": "每日接受道具上限（0 为不限制）",
     "type": "int",
