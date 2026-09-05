@@ -352,11 +352,11 @@ class FaithLadderPlugin(Star):
                 bot_id = int(event.get_self_id())
             except Exception:
                 bot_id = 123456789
-            from astrbot.core.message.components import Node
+            from astrbot.core.message.components import Node, Plain
             nodes = [Node(
                 user_id=bot_id,
                 nickname="天梯榜",
-                content=[{"type": "text", "data": {"text": text}}]
+                content=[Plain(text=text)]
             )]
             try:
                 await event.bot.call_action(
@@ -402,11 +402,11 @@ class FaithLadderPlugin(Star):
                 bot_id = int(event.get_self_id())
             except Exception:
                 bot_id = 123456789
-            from astrbot.core.message.components import Node
+            from astrbot.core.message.components import Node, Plain
             nodes = [Node(
                 user_id=bot_id,
                 nickname="觐见榜",
-                content=[{"type": "text", "data": {"text": text}}]
+                content=[Plain(text=text)]
             )]
             try:
                 await event.bot.call_action(
@@ -1683,57 +1683,8 @@ class FaithLadderPlugin(Star):
 
     @filter.command("收回道具")
     async def cmd_remove_item(self, event: AstrMessageEvent):
-        """收回道具。格式: 收回道具 <玩家名> <道具> <数量> ..."""
-        group_id = self._get_group_id(event)
-        user_id = str(event.get_sender_id())
-
-        if not await self._check_perm(event):
-            yield event.plain_result(PERMISSION_DENIED["god_only"])
-            return
-
-        args = self._get_args(event, "收回道具")
-        if not args:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具> <数量> ...\n示例：收回道具 张三 铁剑 2 生命药水")
-            return
-
-        parts = args.split(None, 1)
-        if len(parts) < 2:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具> <数量> ...")
-            return
-
-        player_name = parts[0]
-        raw_items = self._parse_item_args(parts[1])
-        if not raw_items:
-            yield event.plain_result("未指定有效道具。")
-            return
-
-        # 对于收回，需要区分"有数量"和"无数量（全部收回）"
-        # _parse_item_args 默认给1，但用户可能没指定数量
-        # 重新解析: 没有 * 的道具 → quantity=None (全部收回)
-        items = []
-        for part in parts[1].strip().split():
-            if '*' in part:
-                idx = part.rfind('*')
-                name = part[:idx].strip()
-                qty_str = part[idx+1:].strip()
-                try:
-                    qty = int(qty_str)
-                    items.append((name, qty))
-                except ValueError:
-                    items.append((part, None))
-            else:
-                if part:
-                    items.append((part, None))  # None = 全部收回
-
-        success, message = await self.ladder_service.take_items(group_id, player_name, items)
-        if success:
-            # 使用信仰主题消息
-            faith = await self._get_god_faith(user_id)
-            items_str = ", ".join(f"{name}×{qty}" if qty else name for name, qty in items)
-            themed_msg = self._get_faith_message(faith, "take_success", items=items_str, name=player_name)
-            yield event.plain_result(themed_msg if themed_msg else message)
-        else:
-            yield event.plain_result(message)
+        """收回道具。（功能待恢复）"""
+        yield event.plain_result("收回道具功能暂时不可用，请联系管理员。")
 
     @filter.command("清除储物空间")
     async def cmd_clear_inventory(self, event: AstrMessageEvent):
