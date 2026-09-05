@@ -345,7 +345,31 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_leaderboard_text(group_id, limit)
+
+        # 根据配置决定是否使用合并转发
+        if self.config.get("ladder_forward_enabled", False):
+            try:
+                bot_id = int(event.get_self_id())
+            except Exception:
+                bot_id = 123456789
+            from astrbot.core.message.components import Node
+            nodes = [Node(
+                user_id=bot_id,
+                nickname="天梯榜",
+                content=[{"type": "text", "data": {"text": text}}]
+            )]
+            try:
+                await event.bot.call_action(
+                    "send_group_forward_msg",
+                    group_id=int(group_id),
+                    messages=nodes
+                )
+                event.stop_event()
+                return
+            except Exception:
+                pass
         yield event.plain_result(text)
+        event.stop_event()
 
     # === 觐见榜 ===
 
@@ -371,7 +395,31 @@ class FaithLadderPlugin(Star):
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
+
+        # 根据配置决定是否使用合并转发
+        if self.config.get("ladder_forward_enabled", False):
+            try:
+                bot_id = int(event.get_self_id())
+            except Exception:
+                bot_id = 123456789
+            from astrbot.core.message.components import Node
+            nodes = [Node(
+                user_id=bot_id,
+                nickname="觐见榜",
+                content=[{"type": "text", "data": {"text": text}}]
+            )]
+            try:
+                await event.bot.call_action(
+                    "send_group_forward_msg",
+                    group_id=int(group_id),
+                    messages=nodes
+                )
+                event.stop_event()
+                return
+            except Exception:
+                pass
         yield event.plain_result(text)
+        event.stop_event()
 
     # === 群名片解析与玩家识别 ===
 
