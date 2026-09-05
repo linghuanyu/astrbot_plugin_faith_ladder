@@ -838,11 +838,11 @@ class FaithLadderPlugin(Star):
 
         # Build reply
         if skipped:
-            reply_parts = [BATCH_MESSAGES["partial_skip"].format(
+            reply_parts = [BATCH_PARTIAL_SKIP.format(
                 success=success_count, skip=len(skipped)
             )]
         else:
-            reply_parts = [BATCH_MESSAGES["all_success"].format(count=success_count)]
+            reply_parts = [BATCH_ALL_SUCCESS.format(count=success_count)]
         if success_details:
             reply_parts.append("\n".join(success_details))
         if skipped:
