@@ -370,7 +370,26 @@ class LadderService:
         # Commit all operations atomically
         await self.db.commit()
 
-        qq_line = f"绑定 QQ: {qq_id}" if qq_id and qq_binding_ok else ""
+        # 尝试使用信仰专属文案
+        try:
+            from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
+            import random
+            faith_messages = FAITH_MESSAGES.get(faith_name, {}).get("register_success", [])
+            if not faith_messages:
+                faith_messages = GENERIC_GOD_MESSAGES.get("register_success", [])
+            if faith_messages:
+                flavor_text = random.choice(faith_messages)
+                return True, (
+                    f"「{player_name}」踏入信仰之途\n"
+                    f"职业: {class_name} | 命途: {faith_name}\n"
+                    f"登神之路: {ladder_score}\n"
+                    f"觐见之梯: {pilgrimage_score}\n"
+                    f"{flavor_text}"
+                )
+        except Exception:
+            pass
+
+        # 回退到默认文案
         ladder_tag = "凡人之始" if ladder_score == 1000 else ""
         pilgrimage_tag = "初窥门径" if pilgrimage_score == 100 else ""
         tags = []
@@ -380,12 +399,11 @@ class LadderService:
             tags.append(f"—— {pilgrimage_tag}")
 
         return True, (
-            f"「{player_name}」\n"
+            f"「{player_name}」踏入信仰之途\n"
             f"职业: {class_name} | 命途: {faith_name}\n"
             f"登神之路: {ladder_score} {' '.join(tags[:1])}\n"
             f"觐见之梯: {pilgrimage_score} {' '.join(tags[1:])}\n"
             f"愿神明不要愚弄你。"
-            f"{chr(10) + qq_line if qq_line else ''}"
         )
 
     # === 批量录入 ===

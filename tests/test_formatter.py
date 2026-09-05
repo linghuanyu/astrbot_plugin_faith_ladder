@@ -53,7 +53,7 @@ class TestFormatLeaderboard:
             for i in range(10)
         ]
         result = format_leaderboard(players, 3)
-        assert "显示前 3 名" in result
+        assert "前 3 名" in result
         # Should only show 3 numbered entries
         assert "4." not in result
 
@@ -206,11 +206,11 @@ class TestFormatWhitelist:
         """Test formatting whitelist with entries."""
         entries = [
             {"entry_type": "user", "entry_id": "u123", "added_by": "admin", "added_at": "2024-01-01"},
-            {"entry_type": "group", "entry_id": "g456", "added_by": "admin", "added_at": "2024-01-02"},
+            {"entry_type": "user", "entry_id": "u456", "added_by": "admin", "added_at": "2024-01-02"},
         ]
         result = format_whitelist(entries)
-        assert "[user] u123" in result
-        assert "[group] g456" in result
+        assert "u123" in result
+        assert "u456" in result
         assert "共 2 位" in result
 
 

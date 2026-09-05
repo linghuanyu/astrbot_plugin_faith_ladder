@@ -220,7 +220,7 @@ class TestFormatPrayerTrigger:
         }
         msg = format_prayer_trigger("Alice", "欺诈", "欺诈", 1, config)
         assert "神明看到了你的祈祷" in msg
-        assert "欺诈开心，+1" in msg
+        assert "欺诈开心，1" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
     def test_faith_specific_config_override(self):

@@ -10,6 +10,8 @@ from astrbot.core.message.components import At, Reply, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
+from astrbot_plugin_faith_ladder.messages import PERMISSION_DENIED
+from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 from astrbot.api import logger
 
 
@@ -102,7 +104,7 @@ class QQAdminHandler:
     async def handle_ban(self, event: AiocqhttpMessageEvent, ban_time: int = None):
         """禁言 <秒数> @用户 — 成功静默，错误保留"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯诸神方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED)
             event.stop_event()
             return
 
@@ -157,9 +159,9 @@ class QQAdminHandler:
     # === 解禁 ===
 
     async def handle_unban(self, event: AiocqhttpMessageEvent):
-        """解禁 @用户 — 成功静默"""
+        """解禁 @用户 — 成功显示信仰消息"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯诸神方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED)
             event.stop_event()
             return
 
@@ -169,16 +171,26 @@ class QQAdminHandler:
             event.stop_event()
             return
 
+        success_targets = []
         for uid in targets:
+            info = await self._get_member_info(event, uid)
+            nickname = info.get("card") or info.get("nickname") or str(uid)
             try:
                 await event.bot.set_group_ban(
                     group_id=int(event.get_group_id()),
                     user_id=int(uid),
                     duration=0,
                 )
+                success_targets.append(nickname)
             except Exception:
                 pass
-        # 成功：静默
+
+        if success_targets:
+            for name in success_targets:
+                msg = await self._get_faith_message(event, "unban_success", target_name=name)
+                if msg:
+                    yield event.plain_result(msg)
+                    break
         event.stop_event()
 
     # === 踢人 ===
@@ -186,7 +198,7 @@ class QQAdminHandler:
     async def handle_kick(self, event: AiocqhttpMessageEvent):
         """踢出 @用户 — 成功显示信仰消息，错误保留"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯诸神方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED)
             event.stop_event()
             return
 
@@ -232,7 +244,7 @@ class QQAdminHandler:
     async def handle_recall(self, event: AiocqhttpMessageEvent):
         """撤回消息 — 成功静默，错误保留"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯诸神方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED)
             event.stop_event()
             return
 

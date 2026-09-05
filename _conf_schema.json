@@ -70,6 +70,11 @@
           "description": "备注说明",
           "type": "string",
           "default": ""
+        },
+        "faith": {
+          "description": "对应具体信仰（可选，留空则为普通诸神。如：沉默、湮灭、欺诈等16信仰）",
+          "type": "string",
+          "default": ""
         }
       }
     }
@@ -86,6 +91,16 @@
     "description": "排行榜显示人数上限",
     "type": "int",
     "default": 10
+  },
+  "ladder_forward_enabled": {
+    "description": "是否使用合并转发发送排行榜（仅 aiocqhttp 平台生效）",
+    "type": "bool",
+    "default": false
+  },
+  "query_use_reply": {
+    "description": "查询指令是否使用引用回复（引用原消息）",
+    "type": "bool",
+    "default": false
   },
   "query_cooldown_seconds": {
     "description": "查询指令冷却时间（秒）",

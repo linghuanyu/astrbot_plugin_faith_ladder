@@ -29,7 +29,12 @@ from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, FAITH_TO_PATH, Player
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
-from astrbot_plugin_faith_ladder.messages import get_message, PERMISSION_DENIED, INPUT_ERRORS, SUCCESS_MESSAGES, ERROR_MESSAGES, ITEM_MESSAGES, COOLDOWN_MESSAGES, BATCH_MESSAGES
+from astrbot_plugin_faith_ladder.messages import (
+    PERMISSION_DENIED, PLAYER_NOT_FOUND,
+    SCORE_NOT_INT, INVALID_ITEM_FORMAT,
+    BATCH_ALL_SUCCESS, BATCH_PARTIAL_SKIP,
+    COOLDOWN_MSG, QUERY_COOLDOWN_MSG,
+)
 from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 
 # 预编译正则（祷词触发用）

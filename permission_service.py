@@ -153,11 +153,10 @@ class PermissionService:
             return False, f"未找到 {user_id}。"
 
     async def get_whitelist_text(self) -> str:
-        """Get formatted whitelist text combining config and DB sources."""
+        """Get formatted whitelist text showing only WebUI config entries."""
         from astrbot_plugin_faith_ladder.message_formatter import format_whitelist_combined
-        db_entries = await self.db.get_whitelist()
         config_entries = self._get_config_whitelist_entries()
-        return format_whitelist_combined(config_entries, db_entries)
+        return format_whitelist_combined(config_entries, [])
 
     def _get_config_whitelist_entries(self) -> list[dict]:
         """Get whitelist entries from config. 仅返回 user 类型（group 类型已废弃）。"""
@@ -169,9 +168,11 @@ class PermissionService:
                 # 仅返回 user 类型，group 类型已废弃不再支持
                 if entry_type != "user":
                     continue
+                faith = entry.get("faith", "").strip() or None
                 result.append({
                     "entry_type": entry_type,
                     "entry_id": str(entry.get("id", "")),
+                    "faith": faith,
                     "note": str(entry.get("note", "")),
                     "source": "config",
                 })

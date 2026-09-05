@@ -33,7 +33,7 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
     if not players:
         return "暂无排名数据。"
 
-    lines = ["═══ 登神之路 · 凡人的阶梯 ═══", ""]
+    lines = ["═══ 登神之路 ═══", ""]
     displayed = min(len(players), limit)
 
     for rank, player in enumerate(players[:limit], 1):
@@ -45,7 +45,7 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
         lines.append(f"   觐见之梯: {player.pilgrimage_score}")
         lines.append("")
 
-    lines.append(f"─── 显示前 {displayed} 名 ───")
+    lines.append(f"─── 前 {displayed} 名 ───")
     return "\n".join(lines)
 
 
@@ -54,7 +54,7 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
     if not players:
         return "暂无排名数据。"
 
-    lines = ["═══ 觐见之梯 · 神明的凝视 ═══", ""]
+    lines = ["═══ 觐见之梯 ═══", ""]
     displayed = min(len(players), limit)
 
     for rank, player in enumerate(players[:limit], 1):
@@ -66,7 +66,7 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str
         lines.append(f"   登神之路: {player.ladder_score}")
         lines.append("")
 
-    lines.append(f"─── 显示前 {displayed} 名 ───")
+    lines.append(f"─── 前 {displayed} 名 ───")
     return "\n".join(lines)
 
 
@@ -232,38 +232,28 @@ def format_whitelist(entries: List[dict]) -> str:
 
     lines = ["═══ 诸神列表 ═══", ""]
     for i, entry in enumerate(entries, 1):
-        lines.append(f"{i}. [{entry['entry_type']}] {entry['entry_id']}")
+        faith = entry.get("faith")
+        faith_str = f" <{faith}>" if faith else ""
+        lines.append(f"{i}. {entry['entry_id']}{faith_str}")
     lines.append(f"\n─── 共 {len(entries)} 位 ───")
     return "\n".join(lines)
 
 
 def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]) -> str:
-    """Format whitelist display combining config and DB sources."""
-    if not config_entries and not db_entries:
+    """Format whitelist display showing only WebUI config entries."""
+    if not config_entries:
         return "诸神列表为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
 
     lines = ["═══ 诸神列表 ═══", ""]
 
-    if config_entries:
-        lines.append("[WebUI 配置]")
-        for i, entry in enumerate(config_entries, 1):
-            note = f" ({entry.get('note', '')})" if entry.get("note") else ""
-            faith = entry.get("faith")
-            faith_str = f" <{faith}>" if faith else ""
-            lines.append(f"  {i}. [{entry['entry_type']}] {entry['entry_id']}{faith_str}{note}")
-        lines.append("")
+    for i, entry in enumerate(config_entries, 1):
+        note = f" ({entry.get('note', '')})" if entry.get("note") else ""
+        faith = entry.get("faith")
+        faith_str = f" <{faith}>" if faith else ""
+        lines.append(f"  {i}. {entry['entry_id']}{faith_str}{note}")
+    lines.append("")
 
-    if db_entries:
-        lines.append("[运行时添加]")
-        start = len(config_entries) + 1
-        for i, entry in enumerate(db_entries, start):
-            faith = entry.get("faith")
-            faith_str = f" <{faith}>" if faith else ""
-            lines.append(f"  {i}. [{entry['entry_type']}] {entry['entry_id']}{faith_str}")
-        lines.append("")
-
-    total = len(config_entries) + len(db_entries)
-    lines.append(f"─── 共 {total} 位（配置: {len(config_entries)}, 运行时: {len(db_entries)}）───")
+    lines.append(f"─── 共 {len(config_entries)} 位 ───")
     return "\n".join(lines)
 
 
@@ -300,75 +290,48 @@ def format_inventory(player_name: str, items: list) -> str:
     return "\n".join(lines)
 
 
-def format_prayer_trigger(player_name: str, player_faith: str, prayer_faith: str, delta: int, config: dict = None) -> str:
-    """格式化祷词触发回复。比较玩家具体信仰与祷词具体信仰。
-
-    Args:
-        player_name: 玩家名
-        player_faith: 玩家的具体信仰名（如"欺诈"）
-        prayer_faith: 祷词对应的具体信仰名（如"欺诈"）
-        delta: 觐见分变化值（显示用）
-        config: 插件配置（用于获取自定义文案）
-    """
+def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config=None):
     import random
     from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
+    from astrbot_plugin_faith_ladder.prayer_messages import (
+        PRAYER_MESSAGES, DEFAULT_PRAYER_POSITIVE, DEFAULT_PRAYER_NEGATIVE,
+        DEFAULT_PRAYER_NEUTRAL, DEFAULT_PRAYER_MISMATCH,
+    )
 
-    # 检查玩家信仰是否匹配祷词信仰
     faith_matches = player_faith == prayer_faith
 
     if faith_matches:
-        # 匹配：使用玩家的信仰名
         god_name = player_faith
-
-        # 优先查信仰专属配置，回退到通用配置
         if delta > 0:
-            config_key = f"prayer_trigger_messages_positive_{prayer_faith}"
-            fallback_key = "prayer_trigger_messages_positive"
-            default_msgs = ["{god}今日心情不错，觐见{delta}"]
-            template_vars = {"god": god_name, "delta": f"+{delta}"}
+            messages = config.get(f"prayer_trigger_messages_positive_{prayer_faith}") or config.get("prayer_trigger_messages_positive") if config else None
+            if not messages:
+                messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("positive", DEFAULT_PRAYER_POSITIVE)
+            template_vars = {"god": god_name, "delta": delta}
         elif delta < 0:
-            config_key = f"prayer_trigger_messages_negative_{prayer_faith}"
-            fallback_key = "prayer_trigger_messages_negative"
-            default_msgs = ["{god}今日心情不佳，觐见{delta}"]
-            template_vars = {"god": god_name, "delta": str(delta)}
+            messages = config.get(f"prayer_trigger_messages_negative_{prayer_faith}") or config.get("prayer_trigger_messages_negative") if config else None
+            if not messages:
+                messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("negative", DEFAULT_PRAYER_NEGATIVE)
+            template_vars = {"god": god_name, "delta": delta}
         else:
-            config_key = f"prayer_trigger_messages_neutral_{prayer_faith}"
-            fallback_key = "prayer_trigger_messages_neutral"
-            default_msgs = ["{god}听到了你的祈祷，但未起波澜"]
-            template_vars = {"god": god_name}
-
-        # 从配置获取文案池：信仰专属 → 通用 → 默认
-        messages = None
-        if config:
-            messages = config.get(config_key) or config.get(fallback_key)
-        if not messages:
-            messages = default_msgs
+            messages = config.get(f"prayer_trigger_messages_neutral_{prayer_faith}") or config.get("prayer_trigger_messages_neutral") if config else None
+            if not messages:
+                messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("neutral", DEFAULT_PRAYER_NEUTRAL)
+            template_vars = {"god": god_name, "delta": delta}
 
         template = random.choice(messages)
         result = template.format(**template_vars)
         msg = f"神明看到了你的祈祷\n{result}"
-
     else:
-        # 不匹配（渎神）
-        prayer_path = FAITH_TO_PATH.get(prayer_faith, prayer_faith)
-
         if delta == 0:
-            # 渎神但随机到 0：宽宏大量
             msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚……\n但神明宽宏大量，放过了你这次渎神"
         else:
-            # 渎神扣分
-            config_key = "prayer_trigger_messages_mismatch"
-            default_msgs = ["{god}冷笑：蝼蚁也敢觊觎{prayer}的领域？觐见{delta}"]
-            messages = config.get(config_key, default_msgs) if config else default_msgs
+            messages = config.get("prayer_trigger_messages_mismatch") if config else None
             if not messages:
-                messages = default_msgs
-
+                messages = PRAYER_MESSAGES.get(player_faith, {}).get("mismatch", DEFAULT_PRAYER_MISMATCH)
             template_vars = {"god": player_faith, "prayer": prayer_faith, "delta": str(delta)}
             template = random.choice(messages)
             result = template.format(**template_vars)
             msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚\n{result}"
 
-    # 测试模式：始终附加说明（因为目前不实际改分）
     msg += "\n（本次结果暂时不会影响实际分数）"
-
     return msg

@@ -5,6 +5,10 @@ Cooldown manager for query anti-spam.
 import time
 from typing import Dict
 
+# 常量
+CLEANUP_THRESHOLD_SECONDS = 7200  # 2小时
+CLEANUP_SIZE_THRESHOLD = 100
+
 
 class CooldownManager:
     """Manages per-user query cooldowns."""
@@ -42,9 +46,9 @@ class CooldownManager:
 
     def _cleanup_if_needed(self):
         """Periodically purge expired cooldown entries to prevent unbounded memory growth."""
-        if len(self._cooldowns) <= 100:
+        if len(self._cooldowns) <= CLEANUP_SIZE_THRESHOLD:
             return
         now = time.time()
-        expired = [k for k, v in self._cooldowns.items() if now - v > 7200]
+        expired = [k for k, v in self._cooldowns.items() if now - v > CLEANUP_THRESHOLD_SECONDS]
         for k in expired:
             self._cooldowns.pop(k, None)
