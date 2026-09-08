@@ -1712,7 +1712,7 @@ class FaithLadderPlugin(Star):
 
     @filter.command("收回道具")
     async def cmd_remove_item(self, event: AstrMessageEvent):
-        """收回道具。格式: 收回道具 <玩家名> <道具> <数量> ..."""
+        """收回道具。格式: 收回道具 <玩家名> <道具*数量> 或 收回道具 <玩家名> <编号> ..."""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -1722,31 +1722,59 @@ class FaithLadderPlugin(Star):
 
         args = self._get_args(event, "收回道具")
         if not args:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n示例：收回道具 张三 铁剑*2 生命药水")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n      或：收回道具 <玩家名> <编号> ...（如 1 2 3）")
             return
 
         parts = args.split(None, 1)
         if len(parts) < 2:
-            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...")
+            yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n      或：收回道具 <玩家名> <编号> ...（如 1 2 3）")
             return
 
         player_name = parts[0]
 
-        # 解析道具参数：支持 道具*数量 或 道具（无数量=全部收回）
-        items = []
-        for part in parts[1].strip().split():
-            if '*' in part:
-                idx = part.rfind('*')
-                name = part[:idx].strip()
-                qty_str = part[idx+1:].strip()
-                try:
-                    qty = int(qty_str)
-                    items.append((name, qty))
-                except ValueError:
-                    items.append((part, None))  # * 后不是数字 → 全部收回
-            else:
-                if part:
-                    items.append((part, None))  # 无 * → 全部收回
+        # 获取玩家储物空间
+        player = await self.db_manager.get_player_by_name(group_id, player_name)
+        if not player:
+            yield event.plain_result(f"玩家 {player_name} 不存在")
+            return
+
+        inventory = await self.db_manager.get_player_items(group_id, player.player_id)
+        if not inventory:
+            yield event.plain_result(f"{player_name} 的储物空间为空")
+            return
+
+        # 尝试解析为编号模式（纯数字）
+        raw_parts = parts[1].strip().split()
+        if all(p.isdigit() for p in raw_parts):
+            # 编号模式：收回指定编号的道具（全部数量）
+            items = []
+            invalid_nums = []
+            for p in raw_parts:
+                num = int(p)
+                if 1 <= num <= len(inventory):
+                    item = inventory[num - 1]
+                    items.append((item["item_name"], None))  # None = 全部收回
+                else:
+                    invalid_nums.append(p)
+            if invalid_nums:
+                yield event.plain_result(f"编号 {', '.join(invalid_nums)} 超出范围（1-{len(inventory)}）")
+                return
+        else:
+            # 道具名模式：支持 道具*数量 或 道具
+            items = []
+            for part in raw_parts:
+                if '*' in part:
+                    idx = part.rfind('*')
+                    name = part[:idx].strip()
+                    qty_str = part[idx+1:].strip()
+                    try:
+                        qty = int(qty_str)
+                        items.append((name, qty))
+                    except ValueError:
+                        items.append((part, None))
+                else:
+                    if part:
+                        items.append((part, None))
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
         if success:

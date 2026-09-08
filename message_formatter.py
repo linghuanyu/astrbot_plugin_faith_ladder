@@ -285,8 +285,9 @@ def format_inventory(player_name: str, items: list) -> str:
         return f"═══ 储物空间 ═══\n玩家: {player_name}\n\n储物空间满满当当，嘻～"
 
     lines = [f"═══ 储物空间 ═══", f"玩家: {player_name}", ""]
-    for item in items:
-        lines.append(format_item_display(item["item_name"], item["grade"], item["quantity"]))
+    for i, item in enumerate(items, 1):
+        display = format_item_display(item["item_name"], item["grade"], item["quantity"])
+        lines.append(f"{i}. {display}")
     return "\n".join(lines)
 
 
