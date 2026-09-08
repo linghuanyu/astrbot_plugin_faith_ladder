@@ -92,16 +92,6 @@
     "type": "int",
     "default": 10
   },
-  "ladder_forward_enabled": {
-    "description": "是否使用合并转发发送排行榜（仅 aiocqhttp 平台生效）",
-    "type": "bool",
-    "default": false
-  },
-  "query_use_reply": {
-    "description": "查询指令是否使用引用回复（引用原消息）",
-    "type": "bool",
-    "default": false
-  },
   "query_cooldown_seconds": {
     "description": "查询指令冷却时间（秒）",
     "type": "int",

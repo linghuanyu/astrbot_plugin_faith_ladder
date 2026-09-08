@@ -346,28 +346,27 @@ class FaithLadderPlugin(Star):
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_leaderboard_text(group_id, limit)
 
-        # 根据配置决定是否使用合并转发
-        if self.config.get("ladder_forward_enabled", False):
-            try:
-                bot_id = int(event.get_self_id())
-            except Exception:
-                bot_id = 123456789
-            from astrbot.core.message.components import Node, Plain
-            nodes = [Node(
-                user_id=bot_id,
-                nickname="天梯榜",
-                content=[Plain(text=text)]
-            )]
-            try:
-                await event.bot.call_action(
-                    "send_group_forward_msg",
-                    group_id=int(group_id),
-                    messages=nodes
-                )
-                event.stop_event()
-                return
-            except Exception:
-                pass
+        # 默认使用合并转发
+        try:
+            bot_id = int(event.get_self_id())
+        except Exception:
+            bot_id = 123456789
+        from astrbot.core.message.components import Node, Plain
+        nodes = [Node(
+            user_id=bot_id,
+            nickname="天梯榜",
+            content=[Plain(text=text)]
+        )]
+        try:
+            await event.bot.call_action(
+                "send_group_forward_msg",
+                group_id=int(group_id),
+                messages=nodes
+            )
+            event.stop_event()
+            return
+        except Exception:
+            pass
         yield event.plain_result(text)
         event.stop_event()
 
@@ -396,28 +395,27 @@ class FaithLadderPlugin(Star):
         limit = self.config.get("ladder_display_limit", 10)
         text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
 
-        # 根据配置决定是否使用合并转发
-        if self.config.get("ladder_forward_enabled", False):
-            try:
-                bot_id = int(event.get_self_id())
-            except Exception:
-                bot_id = 123456789
-            from astrbot.core.message.components import Node, Plain
-            nodes = [Node(
-                user_id=bot_id,
-                nickname="觐见榜",
-                content=[Plain(text=text)]
-            )]
-            try:
-                await event.bot.call_action(
-                    "send_group_forward_msg",
-                    group_id=int(group_id),
-                    messages=nodes
-                )
-                event.stop_event()
-                return
-            except Exception:
-                pass
+        # 默认使用合并转发
+        try:
+            bot_id = int(event.get_self_id())
+        except Exception:
+            bot_id = 123456789
+        from astrbot.core.message.components import Node, Plain
+        nodes = [Node(
+            user_id=bot_id,
+            nickname="觐见榜",
+            content=[Plain(text=text)]
+        )]
+        try:
+            await event.bot.call_action(
+                "send_group_forward_msg",
+                group_id=int(group_id),
+                messages=nodes
+            )
+            event.stop_event()
+            return
+        except Exception:
+            pass
         yield event.plain_result(text)
         event.stop_event()
 
@@ -1615,7 +1613,31 @@ class FaithLadderPlugin(Star):
         if not_found:
             parts.append(f"\n以下玩家不存在: {', '.join(not_found)}")
 
-        yield event.plain_result("\n".join(parts) if parts else "未查询到任何玩家。")
+        text = "\n".join(parts) if parts else "未查询到任何玩家。"
+
+        # 默认使用合并转发
+        try:
+            bot_id = int(event.get_self_id())
+        except Exception:
+            bot_id = 123456789
+        from astrbot.core.message.components import Node, Plain
+        nodes = [Node(
+            user_id=bot_id,
+            nickname="储物空间",
+            content=[Plain(text=text)]
+        )]
+        try:
+            await event.bot.call_action(
+                "send_group_forward_msg",
+                group_id=int(group_id),
+                messages=nodes
+            )
+            event.stop_event()
+            return
+        except Exception:
+            pass
+        yield event.plain_result(text)
+        event.stop_event()
 
     def _parse_item_args(self, text: str) -> list:
         """解析道具参数。格式: 道具名 数量，空格分隔多个。
