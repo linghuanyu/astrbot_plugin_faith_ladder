@@ -104,7 +104,7 @@ class QQAdminHandler:
     async def handle_ban(self, event: AiocqhttpMessageEvent, ban_time: int = None):
         """禁言 <秒数> @用户 — 成功静默，错误保留"""
         if not await self._check_permission(event):
-            yield event.plain_result(PERMISSION_DENIED)
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
 
@@ -161,7 +161,7 @@ class QQAdminHandler:
     async def handle_unban(self, event: AiocqhttpMessageEvent):
         """解禁 @用户 — 成功显示信仰消息"""
         if not await self._check_permission(event):
-            yield event.plain_result(PERMISSION_DENIED)
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
 
@@ -198,7 +198,7 @@ class QQAdminHandler:
     async def handle_kick(self, event: AiocqhttpMessageEvent):
         """踢出 @用户 — 成功显示信仰消息，错误保留"""
         if not await self._check_permission(event):
-            yield event.plain_result(PERMISSION_DENIED)
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
 
@@ -244,7 +244,7 @@ class QQAdminHandler:
     async def handle_recall(self, event: AiocqhttpMessageEvent):
         """撤回消息 — 成功静默，错误保留"""
         if not await self._check_permission(event):
-            yield event.plain_result(PERMISSION_DENIED)
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
 

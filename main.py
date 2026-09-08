@@ -1688,7 +1688,7 @@ class FaithLadderPlugin(Star):
         user_id = str(event.get_sender_id())
 
         if not await self._check_perm(event):
-            yield event.plain_result(PERMISSION_DENIED)
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         args = self._get_args(event, "收回道具")

@@ -4,7 +4,7 @@
 """
 
 # ========== 权限拒绝 ==========
-PERMISSION_DENIED = "此等权柄，唯诸神方可执掌。"
+PERMISSION_DENIED = {"god_only": "此等权柄，唯诸神方可执掌。"}
 
 # ========== 玩家不存在 ==========
 PLAYER_NOT_FOUND = "{name}未引起寰宇诸神的注意。"
