@@ -1352,6 +1352,7 @@ class FaithLadderPlugin(Star):
                 f"改名/ rename <旧名> <新名> — 改名 (诸神/管理员)\n"
                 f"清空/ clear — 清空本群所有玩家和数据 (管理员)\n"
                 f"清除弃誓/ clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
+                f"迁移储物空间/ migrate_inventory — 迁移储物空间格式（一次性）\n"
             )
             return
 
@@ -1365,6 +1366,7 @@ class FaithLadderPlugin(Star):
             "resetall": "resetall", "全部重置": "resetall", "重置全部": "resetall",
             "clear": "clear", "清空": "clear",
             "clearoath": "clearoath", "清除弃誓": "clearoath",
+            "migrate_inventory": "migrate_inventory", "迁移储物空间": "migrate_inventory",
         }
         action = ACTION_MAP.get(action, action)
 
@@ -1415,6 +1417,11 @@ class FaithLadderPlugin(Star):
                 return
             await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
             yield event.plain_result(f"已清除 {target_name} 的弃誓者标记。")
+            return
+
+        if action == "migrate_inventory":
+            count = await self.db_manager.migrate_player_items()
+            yield event.plain_result(f"储物空间迁移完成，共处理 {count} 条记录。")
             return
 
         if action == "reset" and len(parts) >= 2:

@@ -260,6 +260,50 @@ class DatabaseManager:
 
         await self._db.commit()
 
+    async def migrate_player_items(self) -> int:
+        """手动触发储物空间格式迁移。返回处理的记录数。"""
+        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name
+
+        async with self._db.execute(
+            "SELECT rowid, group_id, player_id, item_name, grade, quantity FROM player_items"
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        migrated = 0
+        merged = 0
+
+        for rowid, group_id, player_id, old_name, current_grade, quantity in rows:
+            base_name, grade = parse_item_full_name(old_name)
+            if base_name == old_name:
+                continue
+
+            async with self._db.execute(
+                "SELECT rowid, quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
+                (group_id, player_id, base_name)
+            ) as check_cursor:
+                existing = await check_cursor.fetchone()
+
+            if existing:
+                existing_rowid, existing_qty = existing
+                new_qty = existing_qty + quantity
+                await self._db.execute(
+                    "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE rowid = ?",
+                    (new_qty, existing_rowid)
+                )
+                await self._db.execute("DELETE FROM player_items WHERE rowid = ?", (rowid,))
+                merged += 1
+            else:
+                await self._db.execute(
+                    "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
+                    (grade, base_name, rowid)
+                )
+                migrated += 1
+
+        if migrated > 0 or merged > 0:
+            await self._db.commit()
+
+        return migrated + merged
+
     async def _migrate_items_add_grade(self):
         """Add grade column to player_items and backfill from item_name.
         Idempotent: safe to re-run. Handles duplicate items by merging quantities.
