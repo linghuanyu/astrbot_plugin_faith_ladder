@@ -690,11 +690,11 @@ class FaithLadderPlugin(Star):
                         yield event.plain_result(error)
                         return
         else:
-            # 非诸神：无视所有参数，直接查自己（优先 QQ 绑定，回退名片识别）
-            self_player = await self._resolve_self_player_lenient(event)
+            # 非诸神：强制 QQ 识别（高性能，需先绑定 QQ）
+            self_player = await self._resolve_self_player(event)
             if not self_player:
                 yield event.plain_result(
-                    "无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。"
+                    "无法识别你的身份，请先让诸神使用「绑定QQ @你」完成绑定。"
                 )
                 return
             target_name = self_player.player_name
@@ -1582,11 +1582,11 @@ class FaithLadderPlugin(Star):
                 return
             names = args.split()
         else:
-            # 非诸神：只能查自己，无视后面的参数（优先 QQ 绑定，回退名片识别）
-            self_player = await self._resolve_self_player_lenient(event)
+            # 非诸神：强制 QQ 识别（高性能，需先绑定 QQ）
+            self_player = await self._resolve_self_player(event)
             if not self_player:
                 yield event.plain_result(
-                    "无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。"
+                    "无法识别你的身份，请先让诸神使用「绑定QQ @你」完成绑定。"
                 )
                 return
             names = [self_player.player_name]
@@ -1996,20 +1996,13 @@ class FaithLadderPlugin(Star):
         发送方由发送者 QQ 绑定鉴权（防名片冒充），接收方仍按玩家名查找。"""
         group_id = self._get_group_id(event)
 
-        # 发送方 = 自己（QQ 绑定鉴权）
+        # 发送方 = 自己（强制 QQ 绑定鉴权）
         sender_player = await self._resolve_self_player(event)
         if not sender_player:
-            name = await self._resolve_player_name(event)
-            if name:
-                yield event.plain_result(
-                    f"玩家 {name} 尚未绑定 QQ，无法赠送道具。\n"
-                    "请让诸神使用「绑定QQ @你」完成绑定。"
-                )
-            else:
-                yield event.plain_result(
-                    "你尚未绑定 QQ，无法赠送道具。\n"
-                    "请让诸神使用「绑定QQ @你」完成绑定。"
-                )
+            yield event.plain_result(
+                "你尚未绑定 QQ，无法赠送道具。\n"
+                "请让诸神使用「绑定QQ @你」完成绑定。"
+            )
             return
         sender_name = sender_player.player_name
 
@@ -2324,14 +2317,15 @@ class FaithLadderPlugin(Star):
             logger.debug("[PrayerTrigger] Player not found")
             return
 
-        # 10. 检查玩家数据完整性，从名片补全缺失字段
+        # 10. 只在字段缺失时才获取名片补全
         sender_id = str(event.get_sender_id())
         card = ""
-        try:
-            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
-            card = member_info.get("card", "") or member_info.get("nickname", "")
-        except Exception as e:
-            logger.debug(f"[PrayerTrigger] Failed to get member info: {e}")
+        if not player.specific_faith or not player.class_:
+            try:
+                member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+                card = member_info.get("card", "") or member_info.get("nickname", "")
+            except Exception as e:
+                logger.debug(f"[PrayerTrigger] Failed to get member info: {e}")
 
         # 补全具体信仰
         if not player.specific_faith and card:
