@@ -61,7 +61,11 @@ class FaithLadderPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.config = config or {}
+
+        # 迁移旧数据目录
         self.data_dir = self._get_data_dir()
+        self._migrate_data_dir()
+
         self.db_manager = DatabaseManager(self.data_dir)
         self.ladder_service = LadderService(self.db_manager)
         self.cooldown_manager = CooldownManager()
@@ -117,6 +121,35 @@ class FaithLadderPlugin(Star):
 
         # 最终回退：插件目录下的 data 文件夹
         return _plugin_dir / "data"
+
+    def _migrate_data_dir(self):
+        """迁移旧数据目录到新位置。"""
+        import shutil
+
+        # 旧数据目录可能的位置
+        old_dirs = [
+            _plugin_dir / "data",
+            _plugin_dir.parent / "data" / "astrbot_plugin_faith_ladder",
+        ]
+
+        new_dir = self._get_data_dir()
+
+        for old_dir in old_dirs:
+            if old_dir.exists() and old_dir != new_dir:
+                # 检查是否有数据库文件
+                db_file = old_dir / "ladder.db"
+                if db_file.exists():
+                    # 新目录不存在则创建
+                    new_dir.mkdir(parents=True, exist_ok=True)
+
+                    # 迁移数据库
+                    new_db = new_dir / "ladder.db"
+                    if not new_db.exists():
+                        shutil.copy2(db_file, new_db)
+                        logger.info(f"[Migration] 数据库已迁移: {old_dir} → {new_dir}")
+                    else:
+                        logger.info(f"[Migration] 新数据库已存在，跳过迁移: {new_dir}")
+                    break
 
     def _load_specific_classes(self):
         """加载具体职业映射文件，构建 具体职业 -> (信仰, 命途, 普通职业) 的反向映射。"""
