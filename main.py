@@ -2041,6 +2041,240 @@ class FaithLadderPlugin(Star):
 
         # 检查接收方是否已有待处理的赠送
         gift_key = (group_id, str(receiver_player.player_id))
+        if gift_key in self._pending_gifts_receive:
+            yield event.plain_result(f"{receiver_name} 有未处理的赠送，请先接受或拒绝后再发起新的赠送。")
+            return
+
+        # 道具解析（等级和数量）
+        base_name, grade = parse_item_full_name(item_raw)
+
+        # 检查发送方是否有足够道具
+        sender_items = await self.db_manager.get_player_items(group_id, sender_player.player_id)
+        item = next((i for i in sender_items if i["item_name"] == base_name and i.get("grade") == grade), None)
+        if not item or item["quantity"] < quantity:
+            have = item["quantity"] if item else 0
+            from astrbot_plugin_faith_ladder.item_utils import format_item_display
+            display = format_item_display(base_name, grade, have)
+            yield event.plain_result(f"道具不足：你只有 {display}")
+            return
+
+        # 扣除发送方道具
+        await self.ladder_service.deduct_item(group_id, sender_player.player_id, base_name, quantity, grade)
+
+        # 保存待处理赠送（内存 + DB 双写）
+        import json
+        gift_key = (group_id, str(receiver_player.player_id))
+        gift_data = {
+            "group_id": group_id,
+            "sender_id": sender_player.player_id,
+            "sender_name": sender_name,
+            "receiver_id": receiver_player.player_id,
+            "receiver_name": receiver_name,
+            "item_name": base_name,
+            "grade": grade,
+            "quantity": quantity,
+        }
+        self._pending_gifts_receive[gift_key] = gift_data
+        await self.db_manager.save_pending_gift(
+            group_id, str(receiver_player.player_id),
+            str(sender_player.player_id), sender_name, receiver_name,
+            json.dumps({"item_name": base_name, "grade": grade, "quantity": quantity})
+        )
+
+        from astrbot_plugin_faith_ladder.message_formatter import format_gift_request
+        notification = format_gift_request(
+            sender_name, receiver_name, base_name, grade, quantity
+        )
+        yield event.plain_result(
+            f"已从 {sender_name} 扣除，等待 {receiver_name} 接受。\n\n{notification}"
+        )
+
+    # === 接受道具 ===
+
+    @filter.command("接受道具")
+    async def cmd_accept_gift(self, event: AstrMessageEvent):
+        """接收方接受赠送，无需参数。诸神可带参数指定接收玩家（跳过名片检测）。"""
+        group_id = self._get_group_id(event)
+        is_god = await self._check_perm(event)
+        args = self._get_args(event, "接受道具")
+
+        if is_god and args:
+            # 诸神可指定接收方（跳过名片检测）
+            at_user_id = await self._get_at_user_id(event)
+            receiver_player = None
+            if at_user_id:
+                receiver_player, err = await self._resolve_player_by_at(group_id, at_user_id, event)
+                if err:
+                    yield event.plain_result(err)
+                    return
+            if not receiver_player:
+                # 没 @ 或 @ 解析失败，从参数文本取第一个词
+                cleaned = _CQ_CODE_RE.sub('', args).strip()
+                parts = cleaned.split()
+                if parts:
+                    receiver_player = await self.db_manager.get_player_by_name(group_id, parts[0])
+            if not receiver_player:
+                yield event.plain_result("无法识别接收方，请指定玩家名或 @ 玩家。")
+                return
+            receiver_id = str(receiver_player.player_id)
+        else:
+            # 所有人默认通过 QQ 绑定鉴权（防名片冒充）
+            receiver_player = await self._resolve_self_player(event)
+            if not receiver_player:
+                name = await self._resolve_player_name(event)
+                if name:
+                    yield event.plain_result(
+                        f"玩家 {name} 尚未绑定 QQ，无法接受道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                else:
+                    yield event.plain_result(
+                        "你尚未绑定 QQ，无法接受道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                return
+            receiver_id = str(receiver_player.player_id)
+
+        # 检查今日接受道具次数（可配置上限，0 为不限制）
+        daily_limit = self.config.get("gift_daily_accept_limit", 1)
+        if daily_limit > 0:
+            accept_count = await self.db_manager.count_gift_accepts_today(group_id, receiver_id)
+            if accept_count >= daily_limit:
+                yield event.plain_result(f"今日接受道具次数已达上限（{daily_limit} 次/天）。")
+                return
+
+        gift = await self._get_valid_pending_gift(group_id, receiver_id)
+        if not gift:
+            yield event.plain_result("没有待接受的赠送（或赠送已超时退回）。")
+            return
+
+        # 记录今日已接受道具（用于计数）
+        await self.db_manager.record_gift_accept(group_id, receiver_id)
+
+        gift_key = (group_id, receiver_id)
+        from astrbot_plugin_faith_ladder.item_utils import format_item_display
+        success, msg = await self.ladder_service.receive_item(
+            gift["group_id"], gift["receiver_id"], gift["receiver_name"],
+            gift["item_name"], gift["quantity"], grade=gift.get("grade")
+        )
+        self._pending_gifts_receive.pop(gift_key, None)
+        await self.db_manager.delete_pending_gift(group_id, receiver_id)
+
+        if success:
+            display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
+            yield event.plain_result(
+                f"已接受 {gift['sender_name']} 赠送的 {display}"
+            )
+        else:
+            yield event.plain_result(f"接受失败：{msg}")
+
+    # === 拒绝道具 ===
+
+    @filter.command("拒绝道具")
+    async def cmd_reject_gift(self, event: AstrMessageEvent):
+        """接收方拒绝赠送，无需参数。诸神可带参数指定接收玩家（跳过名片检测）。"""
+        group_id = self._get_group_id(event)
+        is_god = await self._check_perm(event)
+        args = self._get_args(event, "拒绝道具")
+
+        if is_god and args:
+            at_user_id = await self._get_at_user_id(event)
+            receiver_player = None
+            if at_user_id:
+                receiver_player, err = await self._resolve_player_by_at(group_id, at_user_id, event)
+                if err:
+                    yield event.plain_result(err)
+                    return
+            if not receiver_player:
+                cleaned = _CQ_CODE_RE.sub('', args).strip()
+                parts = cleaned.split()
+                if parts:
+                    receiver_player = await self.db_manager.get_player_by_name(group_id, parts[0])
+            if not receiver_player:
+                yield event.plain_result("无法识别接收方，请指定玩家名或 @ 玩家。")
+                return
+            receiver_id = str(receiver_player.player_id)
+        else:
+            receiver_player = await self._resolve_self_player(event)
+            if not receiver_player:
+                name = await self._resolve_player_name(event)
+                if name:
+                    yield event.plain_result(
+                        f"玩家 {name} 尚未绑定 QQ，无法拒绝道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                else:
+                    yield event.plain_result(
+                        "你尚未绑定 QQ，无法拒绝道具。\n"
+                        "请让诸神使用「绑定QQ @你」完成绑定。"
+                    )
+                return
+            receiver_id = str(receiver_player.player_id)
+
+        gift = await self._get_valid_pending_gift(group_id, receiver_id)
+        if not gift:
+            yield event.plain_result("没有待拒绝的赠送（或赠送已超时退回）。")
+            return
+
+        # 退回道具给发送方
+        from astrbot_plugin_faith_ladder.item_utils import format_item_display
+        display = format_item_display(gift["item_name"], gift.get("grade"), gift["quantity"])
+        await self.ladder_service.receive_item(
+            gift["group_id"], gift["sender_id"], gift["sender_name"],
+            gift["item_name"], gift["quantity"], grade=gift.get("grade")
+        )
+
+        self._pending_gifts_receive.pop((group_id, receiver_id), None)
+        await self.db_manager.delete_pending_gift(group_id, receiver_id)
+        yield event.plain_result(f"已拒绝 {gift['sender_name']} 的赠送，{display} 已退回")
+
+    # ── 祷词触发 ──
+        """赠送道具。格式: 赠送道具 <接收方名> <道具*数量>
+        发送方由发送者 QQ 绑定鉴权（防名片冒充），接收方仍按玩家名查找。"""
+        group_id = self._get_group_id(event)
+
+        # 发送方 = 自己（强制 QQ 绑定鉴权）
+        sender_player = await self._resolve_self_player(event)
+        if not sender_player:
+            yield event.plain_result(
+                "你尚未绑定 QQ，无法赠送道具。\n"
+                "请让诸神使用「绑定QQ @你」完成绑定。"
+            )
+            return
+        sender_name = sender_player.player_name
+
+        args = self._get_args(event, "赠送道具")
+        if not args:
+            yield event.plain_result("用法：赠送道具 <接收方名> <道具*数量>\n示例：赠送道具 Bob 铁剑*3")
+            return
+
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            yield event.plain_result("用法：赠送道具 <接收方名> <道具*数量>")
+            return
+
+        receiver_name, item_args = parts[0], parts[1].strip()
+
+        # 解析道具（只支持一种）
+        items = self._parse_item_args(item_args)
+        if not items:
+            yield event.plain_result("未指定有效道具。格式: 道具名*数量")
+            return
+
+        item_raw, quantity = items[0]
+
+        # 查找接收方
+        receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
+        if not receiver_player:
+            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
+            return
+
+        if sender_player.player_id == receiver_player.player_id:
+            yield event.plain_result("不能赠送给自己。")
+            return
+
+        # 检查接收方是否已有待处理的赠送
+        gift_key = (group_id, str(receiver_player.player_id))
         existing_gift = self._pending_gifts_receive.get(gift_key)
         if not existing_gift:
             existing_gift = await self.db_manager.get_pending_gift(group_id, str(receiver_player.player_id))
