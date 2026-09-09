@@ -96,24 +96,27 @@ class FaithLadderPlugin(Star):
         self._load_specific_classes()
 
     def _get_data_dir(self) -> Path:
-        data_path = None
+        """获取插件数据目录，符合 AstrBot 规范：data/plugin_data/<plugin_name>/"""
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            data_path = Path(get_astrbot_data_path())
+            return data_path / "plugin_data" / "astrbot_plugin_faith_ladder"
+        except Exception:
+            pass
+
+        # 回退：尝试从 context 获取
         for method_name in ("get_data_path", "get_astrbot_data_path"):
             method = getattr(self.context, method_name, None)
             if method and callable(method):
                 try:
                     result = method()
                     if result:
-                        data_path = Path(result)
-                        break
+                        return Path(result) / "plugin_data" / "astrbot_plugin_faith_ladder"
                 except Exception:
                     continue
-        if not data_path:
-            plugin_parent = _plugin_dir.parent
-            if plugin_parent.name == "plugins":
-                data_path = plugin_parent.parent
-            else:
-                data_path = Path("data") / "plugin_data"
-        return data_path / "astrbot_plugin_faith_ladder"
+
+        # 最终回退：插件目录下的 data 文件夹
+        return _plugin_dir / "data"
 
     def _load_specific_classes(self):
         """加载具体职业映射文件，构建 具体职业 -> (信仰, 命途, 普通职业) 的反向映射。"""
