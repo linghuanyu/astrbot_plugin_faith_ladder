@@ -4,7 +4,6 @@ A dual-ladder ranking system with class/faith customization for group chats.
 """
 
 import sys
-import re
 import json
 from pathlib import Path
 from typing import Optional, Tuple
@@ -25,9 +24,8 @@ from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.ladder_service import LadderService
 from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
-from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
-from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, FAITH_TO_PATH, Player
-from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity, parse_item_args
+from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, Player
+from astrbot_plugin_faith_ladder.item_utils import parse_item_args
 from astrbot_plugin_faith_ladder import card_utils
 from astrbot_plugin_faith_ladder.text_utils import strip_mentions
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
@@ -284,9 +282,13 @@ class FaithLadderPlugin(
         return await self.db_manager.get_player_by_qq(group_id, qq_id)
 
     async def _resolve_self_player_lenient(self, event: AstrMessageEvent) -> Optional[Player]:
-        """优先 QQ 绑定查找；失败则回退名片识别（兼容未绑定的老玩家）。
-        仅用于只读命令（查询/查储物空间）。
-        不自动绑定 QQ，避免高频触发。"""
+        """宽松的身份解析：先查 QQ 绑定，失败则回退群名片识别（兼容未绑定的老玩家）。
+
+        ⚠️ 回退得到的身份是**弱身份**——群名片由玩家自行修改。调用方不得基于这个
+        结果制造持久化副作用（尤其不要绑定 QQ）：攻击者把名片改成他人名字，就能
+        借用对方身份。绑定只应发生在强身份路径（录入玩家 @用户 / 绑定QQ）。
+        当前调用方：查询类只读命令、祷词触发（仅计分，不绑定）。
+        """
         player = await self._resolve_self_player(event)
         if player:
             return player
@@ -408,25 +410,16 @@ class FaithLadderPlugin(
     async def _resolve_target_or_self(
         self, event: AstrMessageEvent, args: str
     ) -> Tuple[Optional[str], str, Optional[str]]:
-        """解析目标玩家，带权限控制。
-        返回 (player_name, rest_args, error_message)。
-        """
-        user_id = str(event.get_sender_id())
-        has_perm = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
+        """解析诸神/管理员指定的目标玩家名，返回 (player_name, rest_args, error)。
 
-        if has_perm or is_admin:
-            # 诸神/管理员：必须指定目标
-            target, rest = await self._parse_target_name(event, args)
-            if not target:
-                return None, "", "请指定玩家名。"
-            return target, rest, None
-        else:
-            # 非诸神：只能查自己，无视后面的参数（优先 QQ 绑定，回退名片识别）
-            self_player = await self._resolve_self_player_lenient(event)
-            if not self_player:
-                return None, "", "无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。"
-            return self_player.player_name, "", None
+        这里**只处理诸神路径**：唯一调用点（非诸神查询）位于调用方的权限分支内，
+        原"非诸神查自己"的 else 分支永远不可达（方法名里的 or_self 是历史遗留）。
+        该分支已删除，同时省掉一次重复的权限查询。
+        """
+        target, rest = await self._parse_target_name(event, args)
+        if not target:
+            return None, "", "请指定玩家名。"
+        return target, rest, None
 
     async def _find_member_by_name(
         self, event: AstrMessageEvent, player_name: str

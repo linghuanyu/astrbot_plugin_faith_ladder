@@ -243,6 +243,8 @@ class LadderService:
         if not updated:
             return False, "设置失败，请重试。"
 
+        # 榜单会显示职业，改了必须失效缓存
+        self.invalidate_leaderboard_cache(group_id)
         return True, f"职业设置成功! 职业: {class_name}"
 
     async def set_faith(
@@ -270,6 +272,8 @@ class LadderService:
         # 命途换了之后，原具体信仰可能已不属于新命途，对账清掉
         await self._reconcile_specific_faith(group_id, player.player_id, faith_name)
 
+        # 榜单会显示信仰，改了必须失效缓存
+        self.invalidate_leaderboard_cache(group_id)
         oathbreaker_tag = "（弃誓者）" if updated.oathbreaker else ""
         return True, f"立誓成功! {player_name}{oathbreaker_tag} 的信仰: {faith_name}"
 
@@ -337,6 +341,9 @@ class LadderService:
         # 弃誓未指定新命途时命途会被清空，此时具体信仰也必须一起清，
         # 否则玩家档案会显示成「信仰：None | 繁荣」
         await self._reconcile_specific_faith(group_id, player.player_id, new_faith)
+
+        # 榜单会显示"弃誓者"标记 → 失效缓存
+        self.invalidate_leaderboard_cache(group_id)
 
         result_parts = [oath_text]
         if new_faith:
@@ -423,6 +430,8 @@ class LadderService:
 
         # Commit all operations atomically
         await self.db.commit()
+        # 新玩家会影响榜单名次，必须失效缓存（否则榜单最多陈旧 30 秒）
+        self.invalidate_leaderboard_cache(group_id)
 
         # 尝试使用信仰专属文案
         try:

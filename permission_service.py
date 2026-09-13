@@ -67,7 +67,11 @@ class PermissionService:
     def is_admin(self, user_id: str) -> bool:
         """Check if user is in the global admin list (from config)."""
         admin_ids = self._config.get("admin_ids", [])
-        return str(user_id) in [str(aid) for aid in admin_ids]
+        # 配成字符串（如 "123,456"）时逐个字符会被当成管理员 ID：
+        # 用户 "1" 反而成了管理员，真正的 "123,456" 不是。这里统一按列表处理。
+        if isinstance(admin_ids, str):
+            admin_ids = [part.strip() for part in admin_ids.split(",")]
+        return str(user_id) in [str(aid).strip() for aid in admin_ids]
 
     def is_in_config_whitelist(self, user_id: str) -> bool:
         """Check if user is in the config-defined global whitelist."""

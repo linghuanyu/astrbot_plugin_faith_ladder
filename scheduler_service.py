@@ -74,7 +74,12 @@ class SchedulerService:
         last_run_date = None
         while self._running:
             try:
-                today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+                now_bj = datetime.now(BEIJING_TZ)
+                today = now_bj.strftime("%Y-%m-%d")
+                # 除了进程内的记忆，还要看已有备份文件名：插件重启（或当天重启多次）
+                # 时不应把当天的备份与清理重跑一遍
+                if last_run_date != today and self._latest_backup_date() == now_bj.strftime("%Y%m%d"):
+                    last_run_date = today
                 if last_run_date == today:
                     await asyncio.sleep(600)
                     continue
@@ -146,13 +151,32 @@ class SchedulerService:
                 logger.error(f"SchedulerService gift cleanup error: {e}")
                 await asyncio.sleep(60)
 
+    def _latest_backup_date(self) -> Optional[str]:
+        """已有备份文件中最新的一份是哪一天（YYYYMMDD，北京日期）；没有则 None。
+
+        用于判断"今天是否已经备份过"——仅靠进程内变量的话，当天重启会重跑一次。
+        文件名形如 ladder_backup_20260913_120000.db（或带 _2 这类同秒后缀）。
+        """
+        import re
+
+        dates = []
+        try:
+            for f in self.backup_dir.glob("ladder_backup_*.db"):
+                m = re.match(r"ladder_backup_(\d{8})_\d{6}", f.name)
+                if m:
+                    dates.append(m.group(1))
+        except OSError:
+            return None
+        return max(dates) if dates else None
+
     async def _do_backup(self, config: dict):
         """生成备份并清理过期备份。
 
         备份内容交给 backup_db 回调（DB 层用 VACUUM INTO 出一致性快照），
         这里只负责命名、记录日志与按保留天数清理旧文件。
         """
-        retention_days = config.get("backup_retention_days", 7)
+        # 保留天数下限为 1：配置成 0 会让截止时间落在"现在"，把刚生成的备份也删掉
+        retention_days = max(1, int(config.get("backup_retention_days", 7) or 1))
         if not self._backup_db:
             return
 
@@ -160,7 +184,12 @@ class SchedulerService:
         await asyncio.to_thread(backup_dir.mkdir, parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 同一秒内跑两次会撞名（backup_to 会先删同名文件，等于静默覆盖），加计数区分
         backup_path = backup_dir / f"ladder_backup_{timestamp}.db"
+        suffix = 1
+        while backup_path.exists():
+            backup_path = backup_dir / f"ladder_backup_{timestamp}_{suffix}.db"
+            suffix += 1
 
         try:
             await self._backup_db(backup_path)

@@ -325,3 +325,61 @@ class TestRecallHandlerGuards:
         results = [r async for r in self._handler().handle_recall(event)]
         assert results == ["消息已过期或不存在"]
         assert event.stopped is True
+
+
+class TestBackupGuards:
+    """备份的保留期与"当天已跑过"判断。"""
+
+    async def test_retention_zero_keeps_fresh_backup(self, stubbed_astrbot, tmp_path):
+        """保留天数为 0 时，截止时间落在"现在"，会把刚生成的备份也删掉。"""
+        from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
+
+        calls = []
+
+        async def fake_backup(dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("x", encoding="utf-8")
+            calls.append(dest)
+
+        sched = SchedulerService(
+            data_dir=tmp_path,
+            get_config=lambda: {},
+            backup_db=fake_backup,
+        )
+        await sched._do_backup({"backup_retention_days": 0})
+
+        assert len(calls) == 1
+        assert calls[0].exists(), "保留天数被钳到 1，刚生成的备份不应被自己删掉"
+
+    async def test_latest_backup_date_detects_today(self, stubbed_astrbot, tmp_path):
+        """重启后不应重跑当天的备份：靠已有文件名判断。"""
+        from astrbot_plugin_faith_ladder.db_manager import BEIJING_TZ
+        from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
+        from datetime import datetime
+
+        sched = SchedulerService(data_dir=tmp_path, get_config=lambda: {})
+        assert sched._latest_backup_date() is None
+
+        today = datetime.now(BEIJING_TZ).strftime("%Y%m%d")
+        backups = tmp_path / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        (backups / f"ladder_backup_{today}_120000.db").write_text("x", encoding="utf-8")
+        (backups / f"ladder_backup_20200101_000000.db").write_text("x", encoding="utf-8")
+        assert sched._latest_backup_date() == today
+
+    async def test_same_second_backups_do_not_collide(self, stubbed_astrbot, tmp_path):
+        from astrbot_plugin_faith_ladder.db_manager import BEIJING_TZ
+        from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
+        from datetime import datetime
+
+        created = []
+
+        async def fake_backup(dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("x", encoding="utf-8")
+            created.append(dest.name)
+
+        sched = SchedulerService(data_dir=tmp_path, get_config=lambda: {}, backup_db=fake_backup)
+        await sched._do_backup({})
+        await sched._do_backup({})
+        assert len(set(created)) == 2, f"同一秒的两次备份不应同名: {created}"

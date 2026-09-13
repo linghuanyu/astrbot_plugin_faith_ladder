@@ -817,3 +817,54 @@ class TestGiveItemsValidation:
         ok, msg = await svc.give_items("g1", "u1", [("(B)", 1)])
         assert ok is False
         assert await db.get_player_items("g1", "u1") == []
+
+
+class TestLeaderboardCacheInvalidation:
+    """会改变榜单显示的写操作都必须失效缓存（否则最多陈旧 30 秒）。"""
+
+    @pytest.fixture
+    async def service(self, db):
+        return LadderService(db)
+
+    async def test_register_player_invalidates(self, service):
+        await service.get_top_players("g1")          # 先把缓存热起来
+        await service.register_player("g1", "新神", "生命", "战士", 99999, 100, "admin")
+        top = await service.get_top_players("g1")
+        assert any(p.player_name == "新神" for p in top)
+
+    async def test_set_class_invalidates(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.get_top_players("g1")
+        await service.set_class("g1", "u1", "Alice", "法师")
+        top = await service.get_top_players("g1")
+        assert top[0].class_ == "法师"
+
+    async def test_set_faith_invalidates(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.get_top_players("g1")
+        await service.set_faith("g1", "Alice", "混沌")
+        top = await service.get_top_players("g1")
+        assert top[0].faith == "混沌"
+
+    async def test_abandon_oath_invalidates(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.set_player_class("g1", "u1", "战士", "生命")
+        await service.get_top_players("g1")
+        await service.abandon_oath("g1", "Alice", None, {})
+        top = await service.get_top_players("g1")
+        assert top[0].oathbreaker is True
+
+
+class TestAdminStringTolerance:
+    """admin_ids 被配成字符串时不应把单个字符当成管理员。"""
+
+    async def test_string_admin_ids(self, db):
+        svc = PermissionService(db, {"admin_ids": "123456, 789", "whitelist": []})
+        assert svc.is_admin("123456") is True
+        assert svc.is_admin("789") is True
+        assert svc.is_admin("1") is False
+
+    async def test_list_admin_ids_still_work(self, db):
+        svc = PermissionService(db, {"admin_ids": [123456, "789"], "whitelist": []})
+        assert svc.is_admin("123456") is True
+        assert svc.is_admin("789") is True

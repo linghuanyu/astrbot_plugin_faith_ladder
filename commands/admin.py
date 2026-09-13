@@ -96,6 +96,9 @@ class AdminCommandsMixin:
                 yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
                 return
             success, message = await self.db_manager.rename_player_by_name(group_id, old_name, new_name)
+            if success:
+                # 榜单显示玩家名，改名后必须失效缓存
+                self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(message)
             return
 
@@ -111,6 +114,7 @@ class AdminCommandsMixin:
                 yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
                 return
             await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
+            self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已清除 {target_name} 的弃誓者标记。")
             return
 

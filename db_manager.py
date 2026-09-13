@@ -1046,6 +1046,7 @@ class DatabaseManager:
             await self._db.commit()
             return True
         except aiosqlite.IntegrityError:
+            await self.rollback()
             return False
 
     async def remove_from_whitelist(
@@ -1497,8 +1498,13 @@ class DatabaseManager:
             )
             await self._db.commit()
             return True
-        except Exception:
-            return False  # 并发重复触发
+        except aiosqlite.IntegrityError:
+            return False  # 并发重复触发（唯一约束拦住）
+        except Exception as e:
+            # 其它错误（磁盘/表结构等）不能当成"重复"静默吞掉
+            await self.rollback()
+            logger.error(f"[Prayer] 记录祷词触发失败: {e}")
+            return False
 
     # ── Gift Daily Accepts ──
 
@@ -1531,5 +1537,8 @@ class DatabaseManager:
             )
             await self._db.commit()
             return True
-        except Exception:
+        except Exception as e:
+            # 该表没有唯一约束，正常插入不会冲突；出错即真实故障，必须留痕
+            await self.rollback()
+            logger.error(f"[Gift] 记录接受道具次数失败: {e}")
             return False
