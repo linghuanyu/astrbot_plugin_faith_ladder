@@ -118,9 +118,10 @@ def _install_astrbot_stub(data_root: Path):
     return saved
 
 
-@pytest.fixture(scope="module")
-def stubbed_astrbot(tmp_path_factory):
-    data_root = tmp_path_factory.mktemp("astrbot_data")
+@pytest.fixture
+def stubbed_astrbot(tmp_path):
+    # 每个用例独立的数据目录：module 作用域会让数据库状态在用例间泄漏
+    data_root = tmp_path / "astrbot_data"
     saved = _install_astrbot_stub(data_root)
     try:
         yield data_root
@@ -383,3 +384,81 @@ class TestBackupGuards:
         await sched._do_backup({})
         await sched._do_backup({})
         assert len(set(created)) == 2, f"同一秒的两次备份不应同名: {created}"
+
+
+class TestCheckPlayerSelfBindRestriction:
+    """「检测玩家」的自助绑定要求 QQ 昵称与玩家名一致。
+
+    群名片是玩家可随意修改的分组别名；若拿它当凭据，任何人把名片改成他人名字、
+    发一次本指令，就能把自己的 QQ 绑到对方记录上，随后用「赠送道具」取走其库存。
+    """
+
+    class _FakeBot:
+        def __init__(self, nickname, card):
+            self._info = {"nickname": nickname, "card": card}
+
+        async def get_group_member_info(self, group_id=None, user_id=None):
+            return dict(self._info)
+
+    class _FakeEvent:
+        def __init__(self, *, nickname, card, sender="555"):
+            import types
+
+            self.message_obj = types.SimpleNamespace(group_id="1")
+            self.bot = TestCheckPlayerSelfBindRestriction._FakeBot(nickname, card)
+            self._sender = sender
+            self.stopped = False
+
+        def get_sender_id(self):
+            return self._sender
+
+        def plain_result(self, text):
+            return text
+
+        def stop_event(self):
+            self.stopped = True
+
+    @staticmethod
+    async def _make_plugin(stubbed_astrbot, *, player_name="张三"):
+        import astrbot_plugin_faith_ladder.main as m
+
+        plugin = m.FaithLadderPlugin(m.Context(), {})
+        await plugin.db_manager.initialize()
+        await plugin.db_manager.upsert_player("1", f"name:{player_name}", player_name)
+        await plugin.db_manager.commit()
+        return plugin
+
+    async def test_card_only_impersonation_is_blocked(self, stubbed_astrbot):
+        """名片 = 他人名字、但 QQ 昵称不是 → 不得绑定。"""
+        plugin = await self._make_plugin(stubbed_astrbot)
+        try:
+            event = self._FakeEvent(nickname="攻击者", card="张三")
+            replies = [r async for r in plugin._check_player_impl(event)]
+            player = await plugin.db_manager.get_player_by_name("1", "张三")
+            assert player.qq_id is None, "名片冒充不应产生绑定"
+            assert any("无法自动绑定" in r for r in replies)
+        finally:
+            await plugin.terminate()
+
+    async def test_nickname_match_binds(self, stubbed_astrbot):
+        """名片解析出玩家、且 QQ 昵称与玩家名一致 → 允许自助绑定。"""
+        plugin = await self._make_plugin(stubbed_astrbot)
+        try:
+            event = self._FakeEvent(nickname="张三", card="张三")
+            replies = [r async for r in plugin._check_player_impl(event)]
+            player = await plugin.db_manager.get_player_by_name("1", "张三")
+            assert player.qq_id == "555"
+            assert any("已自动绑定" in r for r in replies)
+        finally:
+            await plugin.terminate()
+
+    async def test_already_bound_reports_status(self, stubbed_astrbot):
+        plugin = await self._make_plugin(stubbed_astrbot)
+        try:
+            await plugin.db_manager.set_player_qq("1", "name:张三", "555")
+            await plugin.db_manager.commit()
+            event = self._FakeEvent(nickname="任何人", card="任何人")
+            replies = [r async for r in plugin._check_player_impl(event)]
+            assert any("已绑定 555" in r for r in replies)
+        finally:
+            await plugin.terminate()

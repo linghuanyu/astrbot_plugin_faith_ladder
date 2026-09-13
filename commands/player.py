@@ -201,6 +201,21 @@ class PlayerCommandsMixin:
                 )
                 return
 
+            # 自助绑定要求「QQ 昵称」与玩家名一致：群名片是玩家可随意修改的分组别名，
+            # 若用它当凭据，任何人把名片改成他人名字再发一次本指令，就能把自己的 QQ
+            # 绑到对方记录上，随后用「赠送道具」取走对方库存。
+            # QQ 昵称同样可改，但改它会影响该账号在所有群的显示、更容易被察觉。
+            # 名片与昵称不一致的玩家请让诸神用「绑定QQ」完成绑定。
+            nickname = await self._get_sender_nickname(event)
+            if (nickname or "").strip() != player.player_name:
+                yield event.plain_result(
+                    f"检测玩家: {player.player_name}\n"
+                    f"命途: {player.faith or '未设定'} | 职业: {player.class_ or '未设定'}\n"
+                    f"QQ 状态: 尚未绑定，且无法自动绑定（需 QQ 昵称与玩家名一致）\n"
+                    f"请让诸神使用「绑定QQ @你」完成绑定。"
+                )
+                return
+
             # 自动绑定（并发下可能被别的请求抢先绑定同一 QQ，返回 False）
             bound = await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
             if bound:
