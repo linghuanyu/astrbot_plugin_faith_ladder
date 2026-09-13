@@ -595,6 +595,24 @@ class TestRegisterReply:
         assert ok is True
         assert "取消录入" not in msg
 
+    async def test_reply_layout_class_and_faith_on_separate_lines(self, service):
+        """版式：职业单独一行，信仰另起一行（不再用「职业: X | 信仰：Y」拼一行）。"""
+        ok, msg = await service.register_player(
+            "g1", "张三", "生命", "战士", 1000, 100, "admin", specific_faith="繁荣"
+        )
+        assert ok is True
+        lines = msg.split("\n")
+        assert lines[1].startswith("职业: 战士")
+        assert "|" not in lines[1]
+        assert lines[2].strip() == "信仰：生命 | 繁荣"
+
+    def test_both_reply_branches_use_the_new_layout(self):
+        """回退文案分支也是同一版式——两处都不得再出现「职业: X | 信仰…」。"""
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parent.parent / "ladder_service.py").read_text(encoding="utf-8")
+        assert "职业: {class_name} |" not in src
+
 
 class TestFaithLineFormatter:
     """信仰行的统一渲染。"""

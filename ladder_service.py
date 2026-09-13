@@ -460,7 +460,8 @@ class LadderService:
                 flavor_text = random.choice(faith_messages)
                 return True, (
                     f"「{player_name}」踏入信仰之途\n"
-                    f"职业: {class_name} | {format_faith_line(faith_name, specific_faith)}\n"
+                    f"职业: {class_name} \n"
+                    f" {format_faith_line(faith_name, specific_faith)}\n"
                     f"登神之路: {ladder_score}\n"
                     f"觐见之梯: {pilgrimage_score}\n"
                     f"{flavor_text}"
@@ -479,7 +480,8 @@ class LadderService:
 
         return True, (
             f"「{player_name}」踏入信仰之途\n"
-            f"职业: {class_name} | {format_faith_line(faith_name, specific_faith)}\n"
+            f"职业: {class_name} \n"
+            f" {format_faith_line(faith_name, specific_faith)}\n"
             f"登神之路: {ladder_score} {' '.join(tags[:1])}\n"
             f"觐见之梯: {pilgrimage_score} {' '.join(tags[1:])}\n"
             f"愿神明不要愚弄你。"
