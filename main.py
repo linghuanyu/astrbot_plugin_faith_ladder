@@ -53,7 +53,7 @@ _CARD_CONTENT_RE = re.compile(r'^【([^】]*)】\s*(.*)')
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.3"
+    "3.6.4"
 )
 class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
     """信仰游戏天梯排行榜插件。
@@ -945,15 +945,23 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             ladder_score, pilgrimage_score, user_id, qq_id=qq_to_bind
         )
 
-        # 注册成功时，如果使用了@，则@被录入玩家并提醒
+        # 回复统一：注册结果（玩家名/职业/命途/分数/信仰文案）两条路径都要给出。
+        # @ 路径额外 @ 被录入者并说明已自动绑定 QQ，其余内容与非 @ 路径完全一致。
+        # 此前 @ 分支把 message 整个丢弃，只回一句提醒，导致用 @ 录入时看不到
+        # 录了谁、什么职业命途、分数录成了多少；那句"否则将取消录入"所依赖的
+        # 祷词确认机制早已移除，属于不存在的后果，一并去掉。
+        reply = message
+        if target_info:
+            reply += f"\n{target_info}"
+
         if success and at_user_id:
             from astrbot.core.message.components import At, Plain
             yield event.chain_result([
                 At(qq=int(at_user_id)),
-                Plain(text=" 请及时进行谕行（或说出祷词），否则将取消录入\n已自动绑定你的 QQ，后续可使用需鉴权的指令。")
+                Plain(text=f" {reply}\n已自动绑定你的 QQ，后续可使用需鉴权的指令。")
             ])
         else:
-            yield event.plain_result(message + target_info)
+            yield event.plain_result(reply)
 
     # === 检测玩家 ===
 
