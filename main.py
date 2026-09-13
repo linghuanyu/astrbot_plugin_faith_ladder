@@ -1936,13 +1936,14 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 return
             receiver_id = str(receiver_player.player_id)
 
-        # 检查今日接受道具次数（可配置上限，0 为不限制）
-        daily_limit = self.config.get("gift_daily_accept_limit", 1)
-        if daily_limit > 0:
-            accept_count = await self.db_manager.count_gift_accepts_today(group_id, receiver_id)
-            if accept_count >= daily_limit:
-                yield event.plain_result(f"今日接受道具次数已达上限（{daily_limit} 次/天）。")
-                return
+        # 检查今日接受道具次数（可配置上限，0 为不限制）。诸神代收不受此上限约束。
+        if not is_god:
+            daily_limit = self.config.get("gift_daily_accept_limit", 1)
+            if daily_limit > 0:
+                accept_count = await self.db_manager.count_gift_accepts_today(group_id, receiver_id)
+                if accept_count >= daily_limit:
+                    yield event.plain_result(f"今日接受道具次数已达上限（{daily_limit} 次/天）。")
+                    return
 
         gift = await self._get_valid_pending_gift(group_id, receiver_id)
         if not gift:
@@ -1955,11 +1956,12 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield event.plain_result("没有待接受的赠送（或赠送已被处理）。")
             return
 
-        # 记录今日已接受道具（用于计数）
-        if not await self.db_manager.record_gift_accept(group_id, receiver_id):
-            logger.warning(
-                f"[Gift] 接受计数写入失败: group={group_id} receiver={receiver_id}"
-            )
+        # 记录今日已接受道具（用于计数）。诸神不受上限约束，也不占用接收方的配额。
+        if not is_god:
+            if not await self.db_manager.record_gift_accept(group_id, receiver_id):
+                logger.warning(
+                    f"[Gift] 接受计数写入失败: group={group_id} receiver={receiver_id}"
+                )
 
         from astrbot_plugin_faith_ladder.item_utils import format_item_display
         success, msg = await self.ladder_service.receive_item(

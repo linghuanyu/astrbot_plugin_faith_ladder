@@ -25,6 +25,7 @@
 - 删除重复定义：`ladder_service.take_items`（两份逐字相同）、`qq_admin_handle._check_permission`（两份逐字相同）、`ladder_service` 的重复 import
 - 删除 `main.py` 中重复的 `cmd_accept_gift` / `cmd_reject_gift` 死代码共 225 行（含误粘进 `拒绝道具` 的赠送实现）
 - 删除 `main.py` 中 5 个无引用的导入与 1 个无引用正则
+- **诸神代收道具不再受每日上限约束** — 此前诸神用「接受道具」代收同样受 `gift_daily_accept_limit` 限制，且会占用接收方的当日配额（导致接收方自己反而无法再接受）；现诸神代收既不受上限约束，也不计入接收方配额
 - 版本号与 `metadata.yaml` 对齐（此前 `@register` 写 2.1.0、metadata 写 v3.6.0），插件描述同步移除已删除的功能
 
 ### 移除
