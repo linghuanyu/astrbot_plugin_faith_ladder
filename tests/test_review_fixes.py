@@ -320,6 +320,78 @@ class TestGradePrimaryKeyMigration:
             await db.close()
 
 
+class TestRegisterReply:
+    """录入玩家的回复内容与具体信仰落库。"""
+
+    @pytest.fixture
+    async def service(self, db):
+        return LadderService(db)
+
+    async def test_reply_shows_path_and_specific_faith(self, service):
+        """回复里应是「信仰：命途 | 具体信仰」，而不是旧的「命途: X」。"""
+        ok, msg = await service.register_player(
+            "g1", "张三", "生命", "战士", 1000, 100, "admin", specific_faith="繁荣"
+        )
+        assert ok is True
+        assert "信仰：生命 | 繁荣" in msg
+        assert "命途" not in msg
+
+    async def test_specific_faith_is_persisted(self, service):
+        """名片里解析到的具体信仰要落库，不能只出现在回复里。"""
+        await service.register_player(
+            "g1", "张三", "生命", "战士", 1000, 100, "admin", specific_faith="繁荣"
+        )
+        player = await service.db.get_player_by_name("g1", "张三")
+        assert player.specific_faith == "繁荣"
+        assert player.faith == "生命"
+
+    async def test_reply_without_specific_faith(self, service):
+        """只给命途时（非 @ 录入路径）不应出现多余的竖线。"""
+        ok, msg = await service.register_player("g1", "李四", "虚无", "法师", 1000, 100, "admin")
+        assert ok is True
+        assert "信仰：虚无" in msg
+        assert "信仰：虚无 |" not in msg
+
+    async def test_per_faith_flavor_text_is_used(self, service):
+        """信仰文案按具体信仰抽取。
+
+        FAITH_MESSAGES 的键是 16 个具体信仰，此前用命途去查永远查不到，
+        「录入玩家仪式化」实际一直退回通用文案。
+        """
+        from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES
+        pool = FAITH_MESSAGES["繁荣"]["register_success"]
+        for _ in range(8):  # 文案是随机抽的，多跑几次确保落在该信仰的池子里
+            ok, msg = await service.register_player(
+                "g1", f"测试{_}", "生命", "战士", 1000, 100, "admin", specific_faith="繁荣"
+            )
+            assert ok is True
+            assert any(line in msg for line in pool)
+
+    async def test_no_cancel_promise_in_reply(self, service):
+        """回复不应再承诺"否则将取消录入"（该机制早已移除）。"""
+        ok, msg = await service.register_player(
+            "g1", "张三", "生命", "战士", 1000, 100, "admin", specific_faith="繁荣"
+        )
+        assert ok is True
+        assert "取消录入" not in msg
+
+
+class TestFaithLineFormatter:
+    """信仰行的统一渲染。"""
+
+    def test_with_specific(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_faith_line
+        assert format_faith_line("生命", "繁荣") == "信仰：生命 | 繁荣"
+
+    def test_path_only(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_faith_line
+        assert format_faith_line("虚无", None) == "信仰：虚无"
+
+    def test_neither(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_faith_line
+        assert format_faith_line(None, None) == "信仰：未设定"
+
+
 class TestUpsertAndBindingConcurrency:
     """并发注册/绑定不应把 IntegrityError 抛给调用方。"""
 

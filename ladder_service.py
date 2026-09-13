@@ -13,6 +13,7 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_player_card,
     format_score_result,
     format_inventory,
+    format_faith_line,
 )
 from astrbot_plugin_faith_ladder.item_utils import (
     parse_item_full_name,
@@ -330,6 +331,7 @@ class LadderService:
         pilgrimage_score: int,
         operator_id: str,
         qq_id: Optional[str] = None,
+        specific_faith: Optional[str] = None,
     ) -> tuple[bool, str]:
         """
         Register a new player with class, faith, and initial scores.
@@ -372,6 +374,13 @@ class LadderService:
         # Set class and faith
         await self.db.set_player_class(group_id, player_id, class_name, faith_name, commit=False)
 
+        # 具体信仰（如"繁荣"）：名片里解析到就一并落库，查询/文案/主题消息都用它；
+        # 放在同一事务内，失败时随其它步骤一起回滚
+        if specific_faith:
+            await self.db.set_player_specific_faith(
+                group_id, player_id, specific_faith, commit=False
+            )
+
         # Record in score history
         await self.db.update_scores(
             group_id, player_id, 0, 0,
@@ -394,14 +403,17 @@ class LadderService:
         try:
             from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
             import random
-            faith_messages = FAITH_MESSAGES.get(faith_name, {}).get("register_success", [])
+            # 按具体信仰取文案；FAITH_MESSAGES 的键是 16 个具体信仰，
+            # 而 faith_name 是 6 个命途之一，直接用它查永远查不到，只能退回通用文案
+            faith_key = specific_faith or faith_name
+            faith_messages = FAITH_MESSAGES.get(faith_key, {}).get("register_success", [])
             if not faith_messages:
                 faith_messages = GENERIC_GOD_MESSAGES.get("register_success", [])
             if faith_messages:
                 flavor_text = random.choice(faith_messages)
                 return True, (
                     f"「{player_name}」踏入信仰之途\n"
-                    f"职业: {class_name} | 命途: {faith_name}\n"
+                    f"职业: {class_name} | {format_faith_line(faith_name, specific_faith)}\n"
                     f"登神之路: {ladder_score}\n"
                     f"觐见之梯: {pilgrimage_score}\n"
                     f"{flavor_text}"
@@ -420,7 +432,7 @@ class LadderService:
 
         return True, (
             f"「{player_name}」踏入信仰之途\n"
-            f"职业: {class_name} | 命途: {faith_name}\n"
+            f"职业: {class_name} | {format_faith_line(faith_name, specific_faith)}\n"
             f"登神之路: {ladder_score} {' '.join(tags[:1])}\n"
             f"觐见之梯: {pilgrimage_score} {' '.join(tags[1:])}\n"
             f"愿神明不要愚弄你。"

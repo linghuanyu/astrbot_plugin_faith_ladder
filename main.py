@@ -53,7 +53,7 @@ _CARD_CONTENT_RE = re.compile(r'^【([^】]*)】\s*(.*)')
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.4"
+    "3.6.5"
 )
 class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
     """信仰游戏天梯排行榜插件。
@@ -567,16 +567,20 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         return None
 
     def _parse_card_info(self, card: str) -> dict:
-        """从群名片中提取命途、职业、玩家名。
-        返回 {"faith": str|None, "class_": str|None, "player_name": str|None}
-        注意：faith 字段存储的是命途（如"生命"），不是具体信仰（如"繁荣"）
-        规则：
-        1. 【标签】若在 VALID_FAITHS（16个具体信仰）中 → 映射到命途
-        2. 找到具体职业或普通职业（支持职业名后紧跟数字的情况，如"魔术师1218"）
-        3. 剩余非关键词拼接为玩家名
+        """从群名片中提取具体信仰、命途、职业、玩家名。
+
+        返回 {"specific_faith": 具体信仰, "faith": 命途, "class_": 职业, "player_name": 玩家名}
+        specific_faith 是具体信仰（如"繁荣"，16 个之一），faith 是由它推出的命途
+        （如"生命"，6 个之一）；两者都可为 None。
+
+        具体信仰有三个来源，任一命中即可：
+        1. 【标签】本身是具体信仰（如【繁荣】）
+        2. 具体职业名（specific_classes.json 里每个具体职业都对应一个信仰）
+        3. 名片中直接出现的具体信仰词
+        规则 3 之前只把这类词从玩家名里剔除、没有利用，等于白丢信息。
         """
         from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, VALID_FAITHS as SPECIFIC_FAITHS
-        result = {"faith": None, "class_": None, "player_name": None}
+        result = {"specific_faith": None, "faith": None, "class_": None, "player_name": None}
         card = card.strip()
 
         # 1. 提取标签
@@ -588,8 +592,9 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         else:
             remaining = card.strip()
 
-        # 标签是具体信仰（如"繁荣"），映射到命途（如"生命"）
+        # 标签是具体信仰（如"繁荣"），同时记录信仰与命途
         if tag and tag in SPECIFIC_FAITHS:
+            result["specific_faith"] = tag
             result["faith"] = FAITH_TO_PATH.get(tag)
 
         # 2. 提取非数字词
@@ -609,6 +614,8 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 if word == specific_name:
                     # 完全匹配
                     result["class_"] = specific_class
+                    if result["specific_faith"] is None:
+                        result["specific_faith"] = specific_faith
                     if result["faith"] is None:
                         result["faith"] = specific_path
                     class_word = word
@@ -617,6 +624,8 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 elif word.startswith(specific_name) and len(word) > len(specific_name):
                     # 以具体职业开头（如"魔术师1218"）
                     result["class_"] = specific_class
+                    if result["specific_faith"] is None:
+                        result["specific_faith"] = specific_faith
                     if result["faith"] is None:
                         result["faith"] = specific_path
                     class_word = word
@@ -636,9 +645,22 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 class_word = word
                 continue
 
+            # 具体信仰词：记录信仰（并推出命途），不计入玩家名
+            if word in SPECIFIC_FAITHS:
+                if result["specific_faith"] is None:
+                    result["specific_faith"] = word
+                if result["faith"] is None:
+                    result["faith"] = FAITH_TO_PATH.get(word)
+                continue
+
+            # 命途词：只推出命途，不计入玩家名
+            if word in VALID_PATHS:
+                if result["faith"] is None:
+                    result["faith"] = word
+                continue
+
             # 其他非关键词加入玩家名
-            if word not in SPECIFIC_FAITHS and word not in VALID_PATHS:
-                name_parts.append(word)
+            name_parts.append(word)
 
         if name_parts:
             result["player_name"] = "".join(name_parts)
@@ -812,7 +834,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         auto_faith = None
         auto_class = None
         auto_name = None
-        target_member = None
+        auto_specific_faith = None
 
         if at_user_id:
             # 获取 @ 用户的群名片
@@ -826,7 +848,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                     auto_faith = parsed["faith"]
                     auto_class = parsed["class_"]
                     auto_name = parsed["player_name"]
-                target_member = member_info
+                    auto_specific_faith = parsed["specific_faith"]
             except Exception:
                 pass
 
@@ -927,41 +949,29 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield event.plain_result(f"玩家 {player_name} 已存在。")
             return
 
-        # 如果没有通过 @ 找到目标，尝试通过玩家名匹配
-        if not target_member:
-            target_member = await self._find_member_by_name(event, player_name)
-
-        target_info = ""
-        if target_member:
-            member_id = str(target_member.get("user_id", at_user_id or ""))
-            target_card = target_member.get("card") or target_member.get("nickname") or member_id
-            target_info = f"（对应群名片：{target_card}，QQ: {member_id}）"
-
         # 直接注册玩家
         # @ 路径：绑定被录入者的 QQ；无 @ 路径：不自动绑定（避免诸神录入者自己的 QQ 被占用）
         qq_to_bind = at_user_id if at_user_id else None
         success, message = await self.ladder_service.register_player(
             group_id, player_name, faith_name, class_name,
-            ladder_score, pilgrimage_score, user_id, qq_id=qq_to_bind
+            ladder_score, pilgrimage_score, user_id,
+            qq_id=qq_to_bind,
+            # 具体信仰来自名片解析（@ 路径才有）；显式参数只能给命途
+            specific_faith=auto_specific_faith,
         )
 
-        # 回复统一：注册结果（玩家名/职业/命途/分数/信仰文案）两条路径都要给出。
-        # @ 路径额外 @ 被录入者并说明已自动绑定 QQ，其余内容与非 @ 路径完全一致。
-        # 此前 @ 分支把 message 整个丢弃，只回一句提醒，导致用 @ 录入时看不到
-        # 录了谁、什么职业命途、分数录成了多少；那句"否则将取消录入"所依赖的
-        # 祷词确认机制早已移除，属于不存在的后果，一并去掉。
-        reply = message
-        if target_info:
-            reply += f"\n{target_info}"
-
+        # 回复统一：注册结果（玩家名/职业/信仰/分数/信仰文案）两条路径都要给出，
+        # @ 路径只是额外 @ 被录入者，不再像以前那样把结果整条丢弃。
+        # 曾在此拼过「（对应群名片：X，QQ: Y）」与「已自动绑定你的 QQ」，按需求去掉；
+        # 后者依赖的"祷词确认后取消录入"机制早已移除，那句后果本就不成立。
         if success and at_user_id:
             from astrbot.core.message.components import At, Plain
             yield event.chain_result([
                 At(qq=int(at_user_id)),
-                Plain(text=f" {reply}\n已自动绑定你的 QQ，后续可使用需鉴权的指令。")
+                Plain(text=f" {message}")
             ])
         else:
-            yield event.plain_result(reply)
+            yield event.plain_result(message)
 
     # === 检测玩家 ===
 

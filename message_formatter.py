@@ -19,13 +19,21 @@ def _faith_display(player: Player) -> str:
     return "未设定"
 
 
+def format_faith_line(faith: Optional[str], specific_faith: Optional[str]) -> str:
+    """信仰展示：`信仰：命途 | 具体信仰`；只有命途时省略后者，都没有则「未设定」。
+
+    录入结果、玩家卡片等所有展示信仰的地方都用它，避免同一句话在多处各写一遍。
+    """
+    if specific_faith:
+        return f"信仰：{faith} | {specific_faith}"
+    if faith:
+        return f"信仰：{faith}"
+    return "信仰：未设定"
+
+
 def _faith_card_display(player: Player) -> str:
     """玩家卡片显示信仰：信仰：命途 | 具体信仰"""
-    if player.specific_faith:
-        return f"信仰：{player.faith} | {player.specific_faith}"
-    elif player.faith:
-        return f"信仰：{player.faith}"
-    return "信仰：未设定"
+    return format_faith_line(player.faith, player.specific_faith)
 
 
 def format_leaderboard(players: List[Player], limit: int = 10) -> str:

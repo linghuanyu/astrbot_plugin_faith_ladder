@@ -741,9 +741,14 @@ class DatabaseManager:
         return await self.get_player(group_id, player_id)
 
     async def set_player_specific_faith(
-        self, group_id: str, player_id: str, specific_faith: str
+        self, group_id: str, player_id: str, specific_faith: str, commit: bool = True
     ) -> Optional[Player]:
-        """Set a player's specific faith. Returns updated player or None if not found."""
+        """设置玩家的具体信仰（如"繁荣"），并同步推导出的命途。
+
+        命途由具体信仰映射而来；无法识别的信仰只写具体信仰、不动原有命途
+        （否则 FAITH_TO_PATH.get 返回 None 会把已有命途清成 NULL）。
+        commit=False 供需要多步原子写入的调用方使用（见 register_player）。
+        """
         async with self._db.execute(
             "SELECT player_id FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
@@ -751,11 +756,21 @@ class DatabaseManager:
             if not await cursor.fetchone():
                 return None
 
-        await self._db.execute(
-            "UPDATE players SET specific_faith = ?, faith = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
-            (specific_faith, FAITH_TO_PATH.get(specific_faith), player_id, group_id)
-        )
-        await self._db.commit()
+        path = FAITH_TO_PATH.get(specific_faith)
+        if path:
+            await self._db.execute(
+                "UPDATE players SET specific_faith = ?, faith = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE player_id = ? AND group_id = ?",
+                (specific_faith, path, player_id, group_id)
+            )
+        else:
+            await self._db.execute(
+                "UPDATE players SET specific_faith = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE player_id = ? AND group_id = ?",
+                (specific_faith, player_id, group_id)
+            )
+        if commit:
+            await self._db.commit()
         return await self.get_player(group_id, player_id)
 
     async def set_oathbreaker(
