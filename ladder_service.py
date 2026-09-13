@@ -14,7 +14,11 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_score_result,
     format_inventory,
 )
-from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name, format_item_display
+from astrbot_plugin_faith_ladder.item_utils import (
+    parse_item_full_name,
+    format_item_display,
+    extract_item_quantity,
+)
 
 try:
     from astrbot.api import logger
@@ -434,7 +438,7 @@ class LadderService:
             else:
                 pilgrimage_delta = 0
 
-            # 提取道具（【获得道具：名称】，支持空格分隔多个道具，支持 *数量 后缀）
+            # 提取道具（【获得道具：名称】，空格分隔多个道具，数量写作 *N 或 ×N）
             raw_items = re.findall(r'获得道具[：:]\s*([^】]+)', part)
             items = []
             for raw in raw_items:
@@ -443,16 +447,13 @@ class LadderService:
                     item = item.strip()
                     if not item or item == "无":
                         continue
-                    # 解析 *数量 后缀（如 美味糖果（C级）*3）
-                    qty_match = re.match(r'^(.+)\*(\d+)$', item)
-                    if qty_match:
-                        name_part = qty_match.group(1).strip()
-                        qty = int(qty_match.group(2))
-                        if name_part and qty > 0:
-                            # 添加 qty 次，让 Counter 正确统计
-                            items.extend([name_part] * qty)
-                    else:
-                        items.append(item)
+                    # 数量标记位置不限：'测试*10（b）' 与 '测试（b）*10' 都识别
+                    name_part, qty = extract_item_quantity(item)
+                    if qty is None:
+                        qty = 1
+                    if name_part and qty > 0:
+                        # 展开 qty 次，让下游 Counter 正确统计
+                        items.extend([name_part] * qty)
 
             if ladder_delta != 0 or pilgrimage_delta != 0 or items:
                 results.append({

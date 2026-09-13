@@ -27,6 +27,7 @@ from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, FAITH_TO_PATH, Player
+from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 from astrbot_plugin_faith_ladder.messages import (
     PERMISSION_DENIED, PLAYER_NOT_FOUND,
@@ -51,7 +52,7 @@ _CARD_CONTENT_RE = re.compile(r'^【([^】]*)】\s*(.*)')
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.1"
+    "3.6.2"
 )
 class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
     """信仰游戏天梯排行榜插件。
@@ -1453,20 +1454,31 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield result
 
     def _parse_item_args(self, text: str) -> list:
-        """解析道具参数。格式: 道具名 数量，空格分隔多个。
-        返回: [(道具名, 数量), ...]
-        道具名可包含（）括号，数量紧跟名字后（默认1）。
+        """解析道具参数。返回 [(道具名, 数量), ...]，空格分隔多个道具。
+
+        数量有两种写法，可混用：
+        - 紧跟名字（空格分隔）: '铁剑 2 生命药水 3'、'共生噬刃（C级） 2'
+        - 用 * 或 × 标注，位置不限: '铁剑*2'、'测试（b）*10'、'测试*10（b）'
 
         示例:
-            '铁剑 2 生命药水 3' → [('铁剑', 2), ('生命药水', 3)]
-            '共生噬刃（C级） 2' → [('共生噬刃（C级）', 2)]
-            '铁剑' → [('铁剑', 1)]
+            '铁剑 2 生命药水 3'  → [('铁剑', 2), ('生命药水', 3)]
+            '共生噬刃（C级） 2'  → [('共生噬刃（C级）', 2)]
+            '测试*10（b）'       → [('测试（b）', 10)]
+            '测试（b）*10'       → [('测试（b）', 10)]
+            '铁剑'               → [('铁剑', 1)]
         """
         items = []
         parts = text.strip().split()
         i = 0
         while i < len(parts):
-            # 尝试看下一个是否是数字（数量）
+            # 先看是否用 *N / ×N 标注了数量（等级括号前后都可以）
+            name, qty = extract_item_quantity(parts[i])
+            if qty is not None:
+                if name:
+                    items.append((name, qty))
+                i += 1
+                continue
+            # 否则看下一个是否是数字（数量）
             if i + 1 < len(parts):
                 try:
                     qty = int(parts[i + 1])
@@ -1482,7 +1494,8 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
     @filter.command("赐予道具")
     async def cmd_give_item(self, event: AstrMessageEvent):
-        """赐予道具。格式: 赐予道具 <玩家名> <道具1> <数量1> [道具2] [数量2] ..."""
+        """赐予道具。格式: 赐予道具 <玩家名> <道具1> <数量1> [道具2] [数量2] ...
+        数量也可写作 道具*数量 或 道具×数量（位置不限，可写在等级括号前后）。"""
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -1492,7 +1505,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         args = self._get_args(event, "赐予道具")
         if not args:
-            yield event.plain_result("用法：赐予道具 <玩家名> <道具> <数量> ...\n示例：赐予道具 张三 铁剑 2 生命药水 3")
+            yield event.plain_result("用法：赐予道具 <玩家名> <道具> <数量> ...\n示例：赐予道具 张三 铁剑 2 生命药水 3\n      或：赐予道具 张三 铁剑*2 生命药水*3")
             return
 
         parts = args.split(None, 1)  # 分割为玩家名 + 剩余
@@ -1566,21 +1579,13 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 yield event.plain_result(f"编号 {', '.join(invalid_nums)} 超出范围（1-{len(inventory)}）")
                 return
         else:
-            # 道具名模式：支持 道具*数量 或 道具
+            # 道具名模式：支持 道具名*数量 / 道具名×数量 / 道具名（不带数量=全部收回）
             items = []
             for part in raw_parts:
-                if '*' in part:
-                    idx = part.rfind('*')
-                    name = part[:idx].strip()
-                    qty_str = part[idx+1:].strip()
-                    try:
-                        qty = int(qty_str)
-                        items.append((name, qty))
-                    except ValueError:
-                        items.append((part, None))
-                else:
-                    if part:
-                        items.append((part, None))
+                name, qty = extract_item_quantity(part)
+                if not name:
+                    continue
+                items.append((name, qty))
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
         if success:
@@ -1814,7 +1819,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         args = self._get_args(event, "赠送道具")
         if not args:
-            yield event.plain_result("用法：赠送道具 <接收方名> <道具名> [数量]\n示例：赠送道具 Bob 铁剑 3")
+            yield event.plain_result("用法：赠送道具 <接收方名> <道具名> [数量]\n示例：赠送道具 Bob 铁剑 3\n      或：赠送道具 Bob 铁剑*3")
             return
 
         parts = args.split(None, 1)

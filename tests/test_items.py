@@ -198,6 +198,51 @@ class TestBatchParseWithItems:
         assert results[0]["items"] == ["美味糖果（C级）", "美味糖果（C级）", "美味糖果（C级）"]
         assert results[0]["ladder_delta"] == 10
 
+    def test_parse_quantity_before_grade(self, service):
+        """数量标记写在等级括号之前：'测试*10（b）'。"""
+        text = (
+            "【玩家：张三】\n"
+            "【获得道具：测试*10（b）】\n"
+            "【登神之路+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert results[0]["items"] == ["测试（b）"] * 10
+
+    def test_parse_quantity_after_grade(self, service):
+        """数量标记写在等级括号之后：'测试（b）*10'。"""
+        text = (
+            "【玩家：张三】\n"
+            "【获得道具：测试（b）*10】\n"
+            "【登神之路+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert results[0]["items"] == ["测试（b）"] * 10
+
+    def test_parse_display_format_with_multiply_sign(self, service):
+        """直接粘贴插件自身的展示格式（×数量）也应解析。"""
+        text = (
+            "【玩家：张三】\n"
+            "【获得道具：共生噬刃×3（C级）】\n"
+            "【登神之路+1】\n"
+        )
+        results, err = service.parse_batch_scores(text)
+        assert err is None
+        assert results[0]["items"] == ["共生噬刃（C级）"] * 3
+
+    def test_parse_item_quantity_resolves_to_grade_in_db(self, service):
+        """两种写法最终都应落成 10 个 B 级「测试」。"""
+        from collections import Counter
+        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name
+        for written in ("测试*10（b）", "测试（b）*10"):
+            results, err = service.parse_batch_scores(
+                f"【玩家：张三】\n【获得道具：{written}】\n【登神之路+1】\n"
+            )
+            assert err is None, written
+            resolved = Counter(parse_item_full_name(x) for x in results[0]["items"])
+            assert resolved == {("测试", "B"): 10}, written
+
     def test_parse_alternative_ladder_name(self, service):
         """Test '封神之路' (alternative name) and colon format."""
         text = (
@@ -359,6 +404,45 @@ class TestGiveAndTakeItems:
         assert "铁剑×5" in msg
         items = await service.db.get_player_items("g1", "u1")
         assert len(items) == 0
+
+
+class TestExtractItemQuantity:
+    """数量标记（*N / ×N）的分离，位置不限。"""
+
+    def _parse(self, text):
+        from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity
+        return extract_item_quantity(text)
+
+    def test_quantity_after_grade(self):
+        assert self._parse("测试（b）*10") == ("测试（b）", 10)
+
+    def test_quantity_before_grade(self):
+        """本次修复的核心场景：*数量 写在等级括号之前。"""
+        assert self._parse("测试*10（b）") == ("测试（b）", 10)
+
+    def test_multiply_sign_after_grade(self):
+        assert self._parse("共生噬刃×3（C级）") == ("共生噬刃（C级）", 3)
+
+    def test_multiply_sign_before_grade(self):
+        assert self._parse("测试×10（b）") == ("测试（b）", 10)
+
+    def test_quantity_without_grade(self):
+        assert self._parse("生命药水*2") == ("生命药水", 2)
+
+    def test_no_quantity_returns_none(self):
+        assert self._parse("测试（b）") == ("测试（b）", None)
+        assert self._parse("铁剑") == ("铁剑", None)
+
+    def test_non_numeric_star_stays_in_name(self):
+        """* 后面不是数字时不当作数量，整段仍是名字。"""
+        assert self._parse("铁剑*abc") == ("铁剑*abc", None)
+
+    def test_display_format_roundtrip(self):
+        """format_item_display 的输出能被反向解析（无等级标记也保留）。"""
+        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name
+        rest, qty = self._parse("淬锋砺剑×3（无等级）")
+        assert qty == 3
+        assert parse_item_full_name(rest) == ("淬锋砺剑", "")
 
 
 class TestParseItemFullName:

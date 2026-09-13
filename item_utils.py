@@ -12,6 +12,31 @@ VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
 # 从括号内容中提取开头的字母作为等级，忽略中文和其他字符
 _GRADE_RE = re.compile(r'^(.*)[（(]([^)）]*)[)）]$')
 
+# 数量标记：*数字 或 ×数字（× 是本插件展示格式用的乘号，便于直接复制粘贴）
+_QTY_RE = re.compile(r'[*×](\d+)')
+
+
+def extract_item_quantity(text: str) -> Tuple[str, Optional[int]]:
+    """从单个道具标记中分离数量，返回 (去掉数量后的标记, 数量)。
+
+    数量写作「*数字」或「×数字」，**位置不限**，等级括号之前或之后都能识别。
+    没有数量标记时第二个返回值为 None（由调用方决定默认值：多为 1，
+    「收回道具」中表示全部收回）。
+
+    '测试*10（b）'      → ('测试（b）', 10)
+    '测试（b）*10'      → ('测试（b）', 10)
+    '测试×10（b）'      → ('测试（b）', 10)
+    '共生噬刃×3（C级）' → ('共生噬刃（C级）', 3)
+    '测试*10'           → ('测试', 10)
+    '测试（b）'          → ('测试（b）', None)
+    '铁剑'              → ('铁剑', None)
+    """
+    m = _QTY_RE.search(text)
+    if not m:
+        return text.strip(), None
+    rest = (text[:m.start()] + text[m.end():]).strip()
+    return rest, int(m.group(1))
+
 
 def parse_item_full_name(full_name: str) -> Tuple[str, Optional[str]]:
     """从完整名解析出 (基础名, 等级)。
