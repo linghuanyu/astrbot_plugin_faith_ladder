@@ -365,20 +365,6 @@ class FaithLadderPlugin(
 
         return None
 
-    async def _get_sender_nickname(self, event: AstrMessageEvent) -> Optional[str]:
-        """取发送者的 **QQ 昵称**（注意不是群名片 card）。
-
-        用于「检测玩家」的自助绑定校验：群名片是玩家可随意修改的分组别名，
-        不能作为身份凭据；QQ 昵称虽也可改，但会影响该账号在所有群的显示。
-        """
-        try:
-            info = await event.bot.get_group_member_info(
-                group_id=int(self._get_group_id(event)), user_id=int(event.get_sender_id())
-            )
-            return ((info or {}).get("nickname") or "").strip() or None
-        except Exception:
-            return None
-
     async def _resolve_player_name(self, event: AstrMessageEvent) -> Optional[str]:
         """自动识别发送者自己的群名片中的玩家名，并提取保存具体信仰。"""
         try:

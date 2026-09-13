@@ -201,17 +201,25 @@ class PlayerCommandsMixin:
                 )
                 return
 
-            # 自助绑定要求「QQ 昵称」与玩家名一致：群名片是玩家可随意修改的分组别名，
-            # 若用它当凭据，任何人把名片改成他人名字再发一次本指令，就能把自己的 QQ
-            # 绑到对方记录上，随后用「赠送道具」取走对方库存。
-            # QQ 昵称同样可改，但改它会影响该账号在所有群的显示、更容易被察觉。
-            # 名片与昵称不一致的玩家请让诸神用「绑定QQ」完成绑定。
-            nickname = await self._get_sender_nickname(event)
-            if (nickname or "").strip() != player.player_name:
+            # 自助绑定只允许作用于「尚未参与游戏」的记录：没有道具、分数仍是初始值。
+            # 原因：这里的身份来自"名片回退"（弱身份，名片由玩家自行修改），无法作为
+            # 可靠凭据——任何可变的显示名（名片、QQ 昵称）都不该拿来当凭证。
+            # 于是改为限制可绑定的**记录范围**：攻击者即使冒名绑到一条空记录，也拿不到
+            # 任何可转移的资产；而真正刚被录入、还没开始玩的新人仍可自助绑定。
+            # 已有道具或分数的记录（冒名的真正目标）请让诸神使用「绑定QQ @你」。
+            items = await self.db_manager.get_player_items(group_id, player.player_id)
+            init_ladder = self.config.get("init_ladder_score", 1000)
+            init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
+            is_untouched = (
+                not items
+                and player.ladder_score == init_ladder
+                and player.pilgrimage_score == init_pilgrimage
+            )
+            if not is_untouched:
                 yield event.plain_result(
                     f"检测玩家: {player.player_name}\n"
                     f"命途: {player.faith or '未设定'} | 职业: {player.class_ or '未设定'}\n"
-                    f"QQ 状态: 尚未绑定，且无法自动绑定（需 QQ 昵称与玩家名一致）\n"
+                    f"QQ 状态: 尚未绑定。该玩家已有游戏记录，无法自助绑定\n"
                     f"请让诸神使用「绑定QQ @你」完成绑定。"
                 )
                 return

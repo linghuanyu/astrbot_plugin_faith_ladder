@@ -387,10 +387,11 @@ class TestBackupGuards:
 
 
 class TestCheckPlayerSelfBindRestriction:
-    """「检测玩家」的自助绑定要求 QQ 昵称与玩家名一致。
+    """「检测玩家」的自助绑定只允许作用于"尚未参与游戏"的记录。
 
-    群名片是玩家可随意修改的分组别名；若拿它当凭据，任何人把名片改成他人名字、
-    发一次本指令，就能把自己的 QQ 绑到对方记录上，随后用「赠送道具」取走其库存。
+    身份来自"名片回退"（弱身份），任何可变的显示名（名片、QQ 昵称）都不能当凭据，
+    因此改为限制可绑定的记录范围：冒名绑定到一条空记录拿不到任何资产，
+    而已有道具/分数的记录（冒名的真正目标）必须由诸神绑定。
     """
 
     class _FakeBot:
@@ -401,7 +402,7 @@ class TestCheckPlayerSelfBindRestriction:
             return dict(self._info)
 
     class _FakeEvent:
-        def __init__(self, *, nickname, card, sender="555"):
+        def __init__(self, *, card, nickname="任意昵称", sender="555"):
             import types
 
             self.message_obj = types.SimpleNamespace(group_id="1")
@@ -428,23 +429,48 @@ class TestCheckPlayerSelfBindRestriction:
         await plugin.db_manager.commit()
         return plugin
 
-    async def test_card_only_impersonation_is_blocked(self, stubbed_astrbot):
-        """名片 = 他人名字、但 QQ 昵称不是 → 不得绑定。"""
+    async def test_untouched_record_binds(self, stubbed_astrbot):
+        """刚录入、没有任何道具、分数还是初始值 → 允许自助绑定。"""
         plugin = await self._make_plugin(stubbed_astrbot)
         try:
-            event = self._FakeEvent(nickname="攻击者", card="张三")
-            replies = [r async for r in plugin._check_player_impl(event)]
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
             player = await plugin.db_manager.get_player_by_name("1", "张三")
-            assert player.qq_id is None, "名片冒充不应产生绑定"
-            assert any("无法自动绑定" in r for r in replies)
+            assert player.qq_id == "555"
+            assert any("已自动绑定" in r for r in replies)
         finally:
             await plugin.terminate()
 
-    async def test_nickname_match_binds(self, stubbed_astrbot):
-        """名片解析出玩家、且 QQ 昵称与玩家名一致 → 允许自助绑定。"""
+    async def test_record_with_items_cannot_self_bind(self, stubbed_astrbot):
+        """有道具的记录（冒名的真正目标）不得被自助绑定。"""
         plugin = await self._make_plugin(stubbed_astrbot)
         try:
-            event = self._FakeEvent(nickname="张三", card="张三")
+            await plugin.db_manager.add_item("1", "name:张三", "铁剑", 3)
+            await plugin.db_manager.commit()
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
+            player = await plugin.db_manager.get_player_by_name("1", "张三")
+            assert player.qq_id is None, "有资产的记录不应被冒名绑定"
+            assert any("无法自助绑定" in r for r in replies)
+        finally:
+            await plugin.terminate()
+
+    async def test_record_with_scores_cannot_self_bind(self, stubbed_astrbot):
+        """分数已变动过的记录同样不得被自助绑定。"""
+        plugin = await self._make_plugin(stubbed_astrbot)
+        try:
+            await plugin.db_manager.update_scores("1", "name:张三", 50, 0, "admin")
+            await plugin.db_manager.commit()
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
+            player = await plugin.db_manager.get_player_by_name("1", "张三")
+            assert player.qq_id is None
+            assert any("无法自助绑定" in r for r in replies)
+        finally:
+            await plugin.terminate()
+
+    async def test_nickname_is_irrelevant(self, stubbed_astrbot):
+        """昵称不参与判断：它不固定，不能作为凭据，也不应成为门槛。"""
+        plugin = await self._make_plugin(stubbed_astrbot)
+        try:
+            event = self._FakeEvent(card="张三", nickname="完全无关的昵称")
             replies = [r async for r in plugin._check_player_impl(event)]
             player = await plugin.db_manager.get_player_by_name("1", "张三")
             assert player.qq_id == "555"
@@ -457,8 +483,7 @@ class TestCheckPlayerSelfBindRestriction:
         try:
             await plugin.db_manager.set_player_qq("1", "name:张三", "555")
             await plugin.db_manager.commit()
-            event = self._FakeEvent(nickname="任何人", card="任何人")
-            replies = [r async for r in plugin._check_player_impl(event)]
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="任意"))]
             assert any("已绑定 555" in r for r in replies)
         finally:
             await plugin.terminate()
