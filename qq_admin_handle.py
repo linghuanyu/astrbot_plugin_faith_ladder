@@ -24,25 +24,6 @@ def get_ats(event: AiocqhttpMessageEvent) -> list:
     ]
 
 
-async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
-    """获取群成员昵称（群名片 > QQ昵称 > UID）"""
-    user_id = int(user_id)
-    group_id = event.get_group_id()
-    info = {}
-    try:
-        info = await event.bot.get_group_member_info(
-            group_id=int(group_id), user_id=user_id
-        ) or {}
-    except Exception:
-        pass
-    if not info:
-        try:
-            info = await event.bot.get_stranger_info(user_id=user_id) or {}
-        except Exception:
-            pass
-    return info.get("card") or info.get("nickname") or info.get("nick") or str(user_id)
-
-
 class QQAdminHandler:
     """QQ 群管命令实现。成功显示信仰主题消息，错误保留提示。"""
 
@@ -52,6 +33,7 @@ class QQAdminHandler:
         check_admin_fn,  # (event) -> bool
         get_faith_fn=None,  # async (user_id: str) -> str|None
     ):
+        """注入权限/信仰/管理员判定回调，使群管逻辑不直接依赖插件实例，便于单独复用与测试。"""
         self._check_perm = check_perm_fn
         self._is_admin = check_admin_fn
         self._get_faith = get_faith_fn or (lambda uid: None)
@@ -93,7 +75,7 @@ class QQAdminHandler:
 
     # === 禁言 ===
 
-    async def handle_ban(self, event: AiocqhttpMessageEvent, ban_time: int = None):
+    async def handle_ban(self, event: AiocqhttpMessageEvent):
         """禁言 <秒数> @用户 — 成功静默，错误保留"""
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
@@ -141,9 +123,10 @@ class QQAdminHandler:
             except Exception as e:
                 errors.append(f"禁言失败：{e}")
 
+        # 错误与成功都要报：只报错误会让人以为成功的那些也没执行
         if errors:
             yield event.plain_result("\n".join(errors))
-        elif success_targets:
+        if success_targets:
             # 成功：显示信仰主题消息
             for name in success_targets:
                 msg = await self._get_faith_message(event, "ban_success", target_name=name)
@@ -167,6 +150,7 @@ class QQAdminHandler:
             event.stop_event()
             return
 
+        errors = []
         success_targets = []
         for uid in targets:
             info = await self._get_member_info(event, uid)
@@ -178,9 +162,13 @@ class QQAdminHandler:
                     duration=0,
                 )
                 success_targets.append(nickname)
-            except Exception:
-                pass
+            except Exception as e:
+                # 此前这里是 except: pass —— 机器人没有群管权限时用户得不到任何反馈，
+                # 无法区分「已解禁但静默」和「根本没执行」
+                errors.append(f"解禁失败：{e}")
 
+        if errors:
+            yield event.plain_result("\n".join(errors))
         if success_targets:
             for name in success_targets:
                 msg = await self._get_faith_message(event, "unban_success", target_name=name)
@@ -229,9 +217,10 @@ class QQAdminHandler:
             except Exception as e:
                 errors.append(f"踢出失败：{e}")
 
+        # 同上：部分成功时成功项也要报出来
         if errors:
             yield event.plain_result("\n".join(errors))
-        elif success_targets:
+        if success_targets:
             for name in success_targets:
                 msg = await self._get_faith_message(event, "kick_success", target_name=name)
                 if msg:
@@ -292,6 +281,7 @@ class QQAdminHandler:
             sem = asyncio.Semaphore(10)
 
             async def try_delete(message):
+                """删除单条消息，失败静默（消息可能已被撤回或权限不足）。"""
                 if str(message["sender"]["user_id"]) not in target_ids:
                     return
                 async with sem:
@@ -315,7 +305,7 @@ class QQAdminHandler:
     async def handle_mute_all(self, event: AiocqhttpMessageEvent):
         """全员禁言 — 成功静默"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯执棋者方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
         try:
@@ -332,7 +322,7 @@ class QQAdminHandler:
     async def handle_unmute_all(self, event: AiocqhttpMessageEvent):
         """关闭全员禁言 — 成功静默"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯执棋者方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
         try:
@@ -349,7 +339,7 @@ class QQAdminHandler:
     async def handle_set_essence(self, event: AiocqhttpMessageEvent):
         """设置精华消息 — 引用一条消息设置为精华，成功静默"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯执棋者方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
 
@@ -373,7 +363,7 @@ class QQAdminHandler:
     async def handle_remove_essence(self, event: AiocqhttpMessageEvent):
         """移除精华消息 — 引用一条消息移除精华，成功静默"""
         if not await self._check_permission(event):
-            yield event.plain_result("此等权柄，唯执棋者方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
             return
 

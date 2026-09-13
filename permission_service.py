@@ -22,6 +22,7 @@ class PermissionService:
     CACHE_TTL = 300  # 5 分钟
 
     def __init__(self, db_manager: DatabaseManager, config: Optional[dict] = None, config_getter: Optional[Callable[[], dict]] = None):
+        """config 与 config_getter 二选一：前者为静态快照，后者用于配置热重载且优先级更高。"""
         self.db = db_manager
         self._config_getter = config_getter
         self._config_static = config or {}
@@ -64,7 +65,9 @@ class PermissionService:
         for entry in whitelist:
             if not isinstance(entry, dict):
                 continue
-            entry_type = str(entry.get("type", ""))
+            # 缺省 type 视为 user：与 _get_config_whitelist_entries 的展示逻辑保持一致，
+            # 否则 WebUI 里不填 type 的条目会「显示在诸神列表里但不生效」
+            entry_type = str(entry.get("type") or "user")
             entry_id = str(entry.get("id", ""))
             if entry_type == "user" and entry_id == str(user_id):
                 return True
@@ -77,12 +80,14 @@ class PermissionService:
         group_id is accepted but ignored (kept for backward compatibility).
         结果缓存 5 分钟，减少 DB 查询。
         """
-        # 检查缓存
+        # 检查缓存（过期条目顺手删掉，避免字典无上限增长）
         now = time.time()
-        if user_id in self._permission_cache:
-            result, timestamp = self._permission_cache[user_id]
+        cached = self._permission_cache.get(user_id)
+        if cached is not None:
+            result, timestamp = cached
             if now - timestamp < self.CACHE_TTL:
                 return result
+            del self._permission_cache[user_id]
 
         # 原有逻辑
         if self.is_admin(user_id):
@@ -139,8 +144,18 @@ class PermissionService:
             return False, f"未找到 {user_id}。"
 
     async def get_god_faith(self, user_id: str) -> Optional[str]:
-        """获取诸神对应的信仰名。"""
-        return await self.db.get_whitelist_faith(user_id)
+        """获取诸神对应的信仰名（用于选取信仰主题文案）。
+
+        先查 DB（指令添加的诸神），再回退到 WebUI 配置里的同名条目——
+        配置里配了信仰却只显示在列表、执行操作时走通用文案，是之前的不一致来源。
+        """
+        faith = await self.db.get_whitelist_faith(user_id)
+        if faith:
+            return faith
+        for entry in self._get_config_whitelist_entries():
+            if entry["entry_id"] == str(user_id):
+                return entry.get("faith") or None
+        return None
 
     async def remove_from_whitelist(
         self, user_id: str

@@ -14,6 +14,7 @@ class CooldownManager:
     """Manages per-user query cooldowns."""
 
     def __init__(self):
+        """内存态冷却表 {key: 上次触发时间戳}。进程重启即清空，故冷却不跨重启。"""
         self._cooldowns: Dict[str, float] = {}
 
     def check_cooldown(self, user_id: str, cooldown_seconds: int) -> bool:

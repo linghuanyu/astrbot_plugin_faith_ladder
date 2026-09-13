@@ -27,12 +27,13 @@ from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.cooldown import CooldownManager
 from astrbot_plugin_faith_ladder.message_formatter import format_help, format_prayer_trigger
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS, VALID_PATHS, FAITH_TO_PATH, Player
-from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity
+from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity, parse_item_args
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 from astrbot_plugin_faith_ladder.messages import (
     PERMISSION_DENIED, PLAYER_NOT_FOUND,
     INVALID_ITEM_FORMAT,
     BATCH_ALL_SUCCESS, BATCH_PARTIAL_SKIP,
+    COOLDOWN_MSG, BATCH_COOLDOWN_MSG, OATH_COOLDOWN_MSG,
 )
 from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 from astrbot_plugin_faith_ladder.commands import QueryCommandsMixin, SharedSendMixin
@@ -52,7 +53,7 @@ _CARD_CONTENT_RE = re.compile(r'^【([^】]*)】\s*(.*)')
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.2"
+    "3.6.3"
 )
 class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
     """信仰游戏天梯排行榜插件。
@@ -62,6 +63,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
     """
 
     def __init__(self, context: Context, config=None):
+        """初始化插件：解析数据目录、装配各服务与缓存（不含 IO，实际初始化见 initialize）。"""
         super().__init__(context)
         self.config = config or {}
         self.data_dir = self._get_data_dir()
@@ -96,6 +98,9 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         # 加载具体职业映射
         self._specific_classes = {}  # specific_class_name -> (faith, basic_class)
+        # 先给排序结果一个空默认值：_load_specific_classes 失败时只 log 不抛，
+        # 若这里不初始化，后续 _parse_card_info 访问它会是 AttributeError
+        self._sorted_specific_classes = []
         self._load_specific_classes()
 
     def _get_data_dir(self) -> Path:
@@ -143,6 +148,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             logger.warning(f"[SpecificClasses] 加载具体职业映射失败: {e}")
 
     async def initialize(self):
+        """插件加载：建库与迁移、启动调度器、注册群成员变动监听。"""
         await self.db_manager.initialize()
         from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
 
@@ -171,20 +177,30 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
             notify_gift_timeout=send_to_group,
             on_gift_refunded=self._forget_pending_gift_cache,
+            backup_db=self.db_manager.backup_to,
         )
         await self._scheduler.start()
 
         # 注册群成员变动监听（白名单自动同步）
+        # 注意：不同 AstrBot 版本的 Context 不一定提供 register_event_handler。
+        # 缺失时此前是静默跳过（连日志都没有），表现为「自动白名单看似开着却从不同步」，
+        # 因此这里显式告警，方便判断该功能是否真的生效。
         try:
             if hasattr(self.context, 'register_event_handler'):
                 self.context.register_event_handler(self.on_group_member_change)
                 logger.info("[AutoWhitelist] 群成员变动监听已注册")
+            else:
+                logger.warning(
+                    "[AutoWhitelist] 当前 AstrBot 版本不支持 register_event_handler，"
+                    "群成员加入/退出不会自动同步白名单；可用「同步白名单」命令手动同步"
+                )
         except Exception as e:
             logger.warning(f"[AutoWhitelist] 事件监听注册失败（可用'同步白名单'命令手动同步）: {e}")
 
         logger.info("FaithLadder plugin initialized")
 
     async def terminate(self):
+        """插件卸载：停止调度任务并关闭数据库连接。"""
         if self._scheduler:
             await self._scheduler.stop()
         await self.db_manager.close()
@@ -193,16 +209,26 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
     # === Helpers ===
 
     def _get_group_id(self, event: AstrMessageEvent) -> str:
+        """取事件所属群号（字符串）。插件仅支持群聊，私聊场景会取不到 group_id。"""
         return str(event.message_obj.group_id)
 
     def _get_args(self, event: AstrMessageEvent, cmd_name: str) -> str:
-        """Extract arguments after the command name using exact prefix match."""
+        """取命令名之后的参数文本（精确前缀匹配）。
+
+        会先剥掉 CQ 码与 @ 提及文本：aiocqhttp 适配器会把 "@昵称(QQ)" 拼进
+        message_str，不剥掉的话「录入积分 @张三 100 50」会把目标解析成
+        "@张三(12345)"，各种「玩家不存在」。需要 @ 目标的指令另有
+        _get_at_user_id() 从消息段里取真实 QQ，不受这里影响。
+        """
         text = event.message_str.strip()
-        if text.startswith(cmd_name):
-            return text[len(cmd_name):].strip()
-        return ""
+        if not text.startswith(cmd_name):
+            return ""
+        args = text[len(cmd_name):].strip()
+        args = _CQ_CODE_RE.sub('', args)
+        return _AT_MENTION_RE.sub('', args).strip()
 
     def _is_plugin_admin(self, event: AstrMessageEvent) -> bool:
+        """是否为插件管理员（config.admin_ids）。与白名单权限是两套：管理员看配置，诸神看白名单。"""
         user_id = str(event.get_sender_id())
         if self.permission_service.is_admin(user_id):
             return True
@@ -342,7 +368,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         # Permission check
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足：区区凡人")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         # Cooldown check
@@ -350,7 +376,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         cd_key = f"{user_id}:ladder"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
-            yield event.plain_result(f"排行榜冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(COOLDOWN_MSG.format(seconds=f"{remaining:.0f}"))
             return
         self.cooldown_manager.set_cooldown(cd_key)
 
@@ -373,7 +399,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         # Permission check
         if not await self._check_perm(event):
-            yield event.plain_result("权限不足：区区凡人")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         # Cooldown check
@@ -381,7 +407,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         cd_key = f"{user_id}:pilgrimage"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
-            yield event.plain_result(f"排行榜冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(COOLDOWN_MSG.format(seconds=f"{remaining:.0f}"))
             return
         self.cooldown_manager.set_cooldown(cd_key)
 
@@ -525,12 +551,17 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         return None
 
     async def _get_at_user_id(self, event: AstrMessageEvent) -> Optional[str]:
-        """获取消息中第一个 @ 的用户 ID（排除机器人自身）。"""
+        """获取消息中第一个 @ 的用户 ID（排除机器人自身与 @全体成员）。"""
         try:
             from astrbot.core.message.components import At
             for seg in event.get_messages():
-                if isinstance(seg, At) and str(seg.qq) != str(event.get_self_id()):
-                    return str(seg.qq)
+                if not isinstance(seg, At):
+                    continue
+                qq = str(seg.qq)
+                # "all" 是 @全体成员 的标识，不是真实 QQ；此前会被当成用户 ID 写进绑定
+                if qq == "all" or qq == str(event.get_self_id()):
+                    continue
+                return qq
         except Exception:
             pass
         return None
@@ -683,14 +714,14 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
-        # Cooldown check
+        # Cooldown check（先查冷却，但等参数校验通过后才真正占用 —
+        # 否则一条写错的指令会白白烧掉 600 秒冷却，改对了也发不出去）
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
         cd_key = f"{user_id}:batch"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
-            yield event.plain_result(f"批量录入冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(BATCH_COOLDOWN_MSG.format(seconds=f"{remaining:.0f}"))
             return
-        self.cooldown_manager.set_cooldown(cd_key)
 
         # Extract text after command name
         args = self._get_args(event, "批量录入")
@@ -710,10 +741,21 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield event.plain_result(f"解析失败：{parse_err}")
             return
 
+        # 参数与文本都有效，此时才占用冷却
+        self.cooldown_manager.set_cooldown(cd_key)
+
         # Execute batch update
         success_count, success_details, skipped = await self.ladder_service.batch_add_scores(
             group_id, parsed_list, user_id
         )
+
+        if success_count == 0 and not skipped:
+            # 零成功且零跳过：只可能是事务失败回滚（玩家全不存在时 skipped 会带回名字）
+            yield event.plain_result(
+                "批量录入未能写入任何数据（数据库错误，已回滚）。\n"
+                "请稍后重试；若反复失败请查看日志。"
+            )
+            return
 
         # Build reply
         if skipped:
@@ -727,7 +769,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         if skipped:
             reply_parts.append(f"\n以下玩家不存在，已跳过: {', '.join(skipped)}")
 
-        # 自动将批量录入消息设置为精华消息
+        # 自动将批量录入消息设置为精华消息（仅在确有写入时才标记）
         await self._try_set_essence(event)
 
         yield event.plain_result("\n".join(reply_parts))
@@ -789,35 +831,40 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 pass
 
         # 从参数文本中提取显式值
-        # 当使用 @ 且名片解析成功时，不再从 args 提取参数（避免名片内容被误识别为显式参数）
+        # 先剥掉参数里的 @ 提及（aiocqhttp 会把 "@昵称(QQ)" 拼进 message_str），
+        # 否则昵称会被当成玩家名。剥掉之后就可以正常解析显式参数了 ——
+        # 此前在「@ 且名片解析出姓名」时整段跳过解析，导致显式参数永远无效：
+        # 名片里只有姓名时，「录入玩家 @张三 生命 战士」会一直报缺少参数。
         explicit_name = None
         explicit_faith = None
         explicit_class = None
         scores = []
 
-        if not (at_user_id and auto_name):
-            # 只有非 @ 模式，或名片解析失败时，才从 args 提取显式参数
-            clean_args = _AT_MENTION_RE.sub('', args).strip()
-            clean_args = _CQ_CODE_RE.sub('', clean_args).strip()
+        clean_args = _AT_MENTION_RE.sub('', args).strip()
+        clean_args = _CQ_CODE_RE.sub('', clean_args).strip()
 
-            parts = clean_args.split() if clean_args else []
+        parts = clean_args.split() if clean_args else []
 
-            # 分类参数：数字→分数，VALID_PATHS→命途，VALID_CLASSES→职业，其他→姓名
-            other_words = []
+        # 分类参数：数字→分数，VALID_PATHS→命途，VALID_CLASSES→职业，其他→姓名
+        other_words = []
 
-            for p in parts:
-                if p.isdigit():
-                    scores.append(int(p))
-                elif p in VALID_PATHS:
-                    explicit_faith = p
-                elif p in VALID_CLASSES:
-                    explicit_class = p
-                else:
-                    other_words.append(p)
+        for p in parts:
+            try:
+                # 用 int() 而非 isdigit()，以支持 +500 / -5 这类带符号分数
+                scores.append(int(p))
+                continue
+            except ValueError:
+                pass
+            if p in VALID_PATHS:
+                explicit_faith = p
+            elif p in VALID_CLASSES:
+                explicit_class = p
+            else:
+                other_words.append(p)
 
-            # 非数字/信仰/职业的词，第一个作为玩家名
-            if other_words:
-                explicit_name = other_words[0]
+        # 非数字/信仰/职业的词，第一个作为玩家名
+        if other_words:
+            explicit_name = other_words[0]
 
         # 合并：显式 > 自动提取
         player_name = explicit_name or auto_name
@@ -938,9 +985,15 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 )
                 return
 
-            # 自动绑定
-            await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
-            status_line = f"QQ 状态: 已自动绑定 {sender_qq}"
+            # 自动绑定（并发下可能被别的请求抢先绑定同一 QQ，返回 False）
+            bound = await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
+            if bound:
+                status_line = f"QQ 状态: 已自动绑定 {sender_qq}"
+            else:
+                status_line = (
+                    f"QQ 状态: 自动绑定失败（该 QQ 可能刚被其他玩家绑定）\n"
+                    f"如需换绑请联系诸神使用「换绑QQ」。"
+                )
         else:
             status_line = f"QQ 状态: 已绑定 {player.qq_id}"
 
@@ -969,6 +1022,9 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         at_user_id = await self._get_at_user_id(event)
         args = self._get_args(event, "绑定QQ")
+        if not args:
+            # 与其它指令一致地支持别名调用（此前用 bindqq 会让参数整个丢掉）
+            args = self._get_args(event, "bindqq") or self._get_args(event, "绑定qq")
 
         # 解析目标 QQ 和目标玩家
         target_qq = None
@@ -989,7 +1045,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             # @ 解析不出 → 尝试参数里的玩家名
             player = await self.db_manager.get_player_by_name(group_id, player_name_arg)
             if not player:
-                yield event.plain_result(get_message("PLAYER_NOT_FOUND", name=player_name_arg))
+                yield event.plain_result(PLAYER_NOT_FOUND.format(name=player_name_arg))
                 return
             if not target_qq:
                 # 没 @ 走的是玩家名路径 → 反查其 QQ
@@ -1046,6 +1102,9 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             return
 
         args = self._get_args(event, "换绑QQ")
+        if not args:
+            # 别名调用同样要取到参数（此前用 rebindqq 时参数为空 → 每次都只回用法）
+            args = self._get_args(event, "rebindqq") or self._get_args(event, "换绑qq")
         cleaned = _CQ_CODE_RE.sub('', args).strip() if args else ""
         parts = cleaned.split()
         at_user_id = await self._get_at_user_id(event)
@@ -1079,6 +1138,10 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 yield event.plain_result(f"玩家 {parts[0]} 不存在。")
                 return
             new_qq = parts[1]
+            if not new_qq.isdigit():
+                # 非数字会写进 qq_id，直接破坏该玩家后续的 QQ 鉴权
+                yield event.plain_result(f"新 QQ 号必须是纯数字，收到: {new_qq}")
+                return
 
         # 执行换绑
         ok, msg, old_qq = await self.db_manager.rebind_player_qq(
@@ -1123,7 +1186,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         target_name, class_name = parts
         target_player = await self.db_manager.get_player_by_name(group_id, target_name)
         if not target_player:
-            yield event.plain_result(get_message("PLAYER_NOT_FOUND", name=target_name))
+            yield event.plain_result(PLAYER_NOT_FOUND.format(name=target_name))
             return
 
         success, message = await self.ladder_service.set_class(
@@ -1142,15 +1205,14 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
-        # Cooldown
+        # Cooldown（先检查，参数校验通过后才占用，避免写错格式就烧掉 600 秒冷却）
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
         user_id = str(event.get_sender_id())
         cd_key = f"{user_id}:oath"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
-            yield event.plain_result(f"冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(OATH_COOLDOWN_MSG.format(seconds=f"{remaining:.0f}"))
             return
-        self.cooldown_manager.set_cooldown(cd_key)
 
         args = self._get_args(event, "立誓")
         if not args:
@@ -1164,6 +1226,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             )
             return
 
+        self.cooldown_manager.set_cooldown(cd_key)
         target_name, faith_name = parts
         success, message = await self.ladder_service.set_faith(group_id, target_name, faith_name)
         yield event.plain_result(message)
@@ -1180,14 +1243,13 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
-        # Cooldown
+        # Cooldown（参数校验通过后才占用）
         cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
         cd_key = f"{user_id}:oath"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
-            yield event.plain_result(f"冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(OATH_COOLDOWN_MSG.format(seconds=f"{remaining:.0f}"))
             return
-        self.cooldown_manager.set_cooldown(cd_key)
 
         args = self._get_args(event, "弃誓")
         if not args:
@@ -1202,6 +1264,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             )
             return
 
+        self.cooldown_manager.set_cooldown(cd_key)
         target_name = parts[0]
         new_faith = parts[1] if len(parts) > 1 else None
         success, message = await self.ladder_service.abandon_oath(
@@ -1228,10 +1291,10 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 f"==天梯榜管理==\n"
                 f"\n"
                 f"重置/ reset <玩家名> — 重置单个玩家积分 (管理员)\n"
-                f"全部重置/ resetall — 重置本群所有玩家积分 (管理员)\n"
+                f"全部重置/ resetall 确认 — 重置本群所有玩家积分 (管理员)\n"
                 f"删除/ delete <玩家名> — 删除单个玩家 (诸神/管理员)\n"
                 f"改名/ rename <旧名> <新名> — 改名 (诸神/管理员)\n"
-                f"清空/ clear — 清空本群所有玩家和数据 (管理员)\n"
+                f"清空/ clear 确认 — 清空本群所有玩家和数据 (管理员)\n"
                 f"清除弃誓/ clearoath <玩家名> — 清除弃誓者标记 (管理员)\n"
                 f"迁移储物空间/ migrate_inventory — 迁移储物空间格式（一次性）\n"
             )
@@ -1254,7 +1317,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         # delete: whitelist or admin
         if action == "delete":
             if not await self._check_perm(event):
-                yield event.plain_result("此等权柄，唯诸神方可执掌。")
+                yield event.plain_result(PERMISSION_DENIED["god_only"])
                 return
             if len(parts) < 2:
                 yield event.plain_result("用法：天梯榜管理 删除 <玩家名>")
@@ -1271,7 +1334,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         # rename: whitelist or admin
         if action == "rename":
             if not await self._check_perm(event):
-                yield event.plain_result("此等权柄，唯诸神方可执掌。")
+                yield event.plain_result(PERMISSION_DENIED["god_only"])
                 return
             if len(parts) < 3:
                 yield event.plain_result("用法：天梯榜管理 改名 <旧名> <新名>")
@@ -1287,7 +1350,7 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
         # Other actions: admin only
         if not is_admin:
-            yield event.plain_result("此等权柄，唯诸神方可执掌。")
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
         if action == "clearoath" and len(parts) >= 2:
@@ -1319,19 +1382,45 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
                 -target_player.pilgrimage_score + init_pilgrimage,
                 user_id, "管理员重置"
             )
+            self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已重置玩家 {target_name} 的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")
 
         elif action == "resetall":
+            # 影响全群玩家，要求二次确认，避免一条误发就重置所有人
+            if len(parts) < 2 or parts[1] != "确认":
+                yield event.plain_result(
+                    f"此操作会重置本群所有玩家的积分，不可撤销。\n"
+                    f"确认请发送：天梯榜管理 全部重置 确认"
+                )
+                return
             init_ladder = self.config.get("init_ladder_score", 1000)
             init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
-            count = await self.db_manager.reset_all_scores(group_id)
+            # 必须把配置里的初始分传下去：reset_all_scores 的默认值是硬编码的 1000/100，
+            # 不改配置时看不出差别，改过初始分的群会出现「回复写 A、实际重置成 B」
+            count = await self.db_manager.reset_all_scores(
+                group_id, initial_ladder=init_ladder, initial_pilgrimage=init_pilgrimage
+            )
             self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已重置本群 {count} 名玩家的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")
 
         elif action == "clear":
+            # 删光本群玩家/道具/状态，同样要求二次确认
+            if len(parts) < 2 or parts[1] != "确认":
+                yield event.plain_result(
+                    f"此操作会删除本群所有玩家及其道具、状态、积分历史，不可撤销。\n"
+                    f"确认请发送：天梯榜管理 清空 确认"
+                )
+                return
             count = await self.db_manager.delete_all_players(group_id)
             self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已清空本群所有数据，共删除 {count} 名玩家。")
+
+        elif action in ("reset", "clearoath"):
+            # 缺目标参数时给出用法，而不是落到下面报「未知操作」（此前的行为）
+            yield event.plain_result(
+                f"用法：天梯榜管理 {action} <玩家名>\n"
+                f"发送「天梯榜管理」查看所有可用操作。"
+            )
 
         else:
             yield event.plain_result(f"未知操作: {action}\n发送「天梯榜管理」查看所有可用操作。")
@@ -1368,6 +1457,11 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         elif action == "add" and len(parts) >= 2:
             target_id = parts[1]
             faith = parts[2] if len(parts) >= 3 else None
+            # 与 setfaith 保持一致地校验：信仰文案按 16 具体信仰索引，
+            # 写入无效值时不会报错，只会在之后静默退回通用文案
+            if faith is not None and faith not in VALID_FAITHS:
+                yield event.plain_result(f"无效信仰。可选：{'/'.join(VALID_FAITHS)}")
+                return
             _, message = await self.permission_service.add_to_whitelist(target_id, user_id, faith=faith)
             # 白名单变更后失效权限缓存（让新权限立即生效）
             self.permission_service.invalidate_cache()
@@ -1407,41 +1501,49 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
 
     @filter.command("禁言")
     async def cmd_w_ban(self, event: AstrMessageEvent):
+        """禁言指令入口，逻辑委托给 QQAdminHandler.handle_ban。"""
         async for result in self._qq_admin.handle_ban(event):
             yield result
 
     @filter.command("解禁")
     async def cmd_w_unban(self, event: AstrMessageEvent):
+        """解禁指令入口，逻辑委托给 QQAdminHandler.handle_unban。"""
         async for result in self._qq_admin.handle_unban(event):
             yield result
 
     @filter.command("踢人")
     async def cmd_w_kick(self, event: AstrMessageEvent):
+        """踢人指令入口，逻辑委托给 QQAdminHandler.handle_kick。"""
         async for result in self._qq_admin.handle_kick(event):
             yield result
 
     @filter.command("撤回")
     async def cmd_w_recall(self, event: AstrMessageEvent):
+        """撤回指令入口，逻辑委托给 QQAdminHandler.handle_recall。"""
         async for result in self._qq_admin.handle_recall(event):
             yield result
 
     @filter.command("全员禁")
     async def cmd_w_mute_all(self, event: AstrMessageEvent):
+        """全员禁言入口，逻辑委托给 QQAdminHandler.handle_mute_all。"""
         async for result in self._qq_admin.handle_mute_all(event):
             yield result
 
     @filter.command("全员解")
     async def cmd_w_unmute_all(self, event: AstrMessageEvent):
+        """解除全员禁言入口，逻辑委托给 QQAdminHandler.handle_unmute_all。"""
         async for result in self._qq_admin.handle_unmute_all(event):
             yield result
 
     @filter.command("设置精华")
     async def cmd_set_essence(self, event: AstrMessageEvent):
+        """设置精华消息入口，逻辑委托给 QQAdminHandler.handle_set_essence。"""
         async for result in self._qq_admin.handle_set_essence(event):
             yield result
 
     @filter.command("移除精华")
     async def cmd_remove_essence(self, event: AstrMessageEvent):
+        """移除精华消息入口，逻辑委托给 QQAdminHandler.handle_remove_essence。"""
         async for result in self._qq_admin.handle_remove_essence(event):
             yield result
 
@@ -1454,43 +1556,13 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             yield result
 
     def _parse_item_args(self, text: str) -> list:
-        """解析道具参数。返回 [(道具名, 数量), ...]，空格分隔多个道具。
+        """解析道具参数，返回 [(道具名（可能含等级）, 数量), ...]。
 
-        数量有两种写法，可混用：
-        - 紧跟名字（空格分隔）: '铁剑 2 生命药水 3'、'共生噬刃（C级） 2'
-        - 用 * 或 × 标注，位置不限: '铁剑*2'、'测试（b）*10'、'测试*10（b）'
-
-        示例:
-            '铁剑 2 生命药水 3'  → [('铁剑', 2), ('生命药水', 3)]
-            '共生噬刃（C级） 2'  → [('共生噬刃（C级）', 2)]
-            '测试*10（b）'       → [('测试（b）', 10)]
-            '测试（b）*10'       → [('测试（b）', 10)]
-            '铁剑'               → [('铁剑', 1)]
+        实现放在 item_utils.parse_item_args（纯函数，测试可直接调用；
+        main.py 依赖 astrbot，测试环境导入不了）。这里只做转发，
+        保持类内既有调用点不变。数量非正时抛 ValueError，由调用方转成提示。
         """
-        items = []
-        parts = text.strip().split()
-        i = 0
-        while i < len(parts):
-            # 先看是否用 *N / ×N 标注了数量（等级括号前后都可以）
-            name, qty = extract_item_quantity(parts[i])
-            if qty is not None:
-                if name:
-                    items.append((name, qty))
-                i += 1
-                continue
-            # 否则看下一个是否是数字（数量）
-            if i + 1 < len(parts):
-                try:
-                    qty = int(parts[i + 1])
-                    items.append((parts[i], qty))
-                    i += 2
-                    continue
-                except ValueError:
-                    pass
-            # 下一个不是数字，当前作为独立道具（数量1）
-            items.append((parts[i], 1))
-            i += 1
-        return items
+        return parse_item_args(text)
 
     @filter.command("赐予道具")
     async def cmd_give_item(self, event: AstrMessageEvent):
@@ -1514,9 +1586,13 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             return
 
         player_name = parts[0]
-        items = self._parse_item_args(parts[1])
+        try:
+            items = self._parse_item_args(parts[1])
+        except ValueError as e:
+            yield event.plain_result(f"道具格式有误：{e}")
+            return
         if not items:
-            yield event.plain_result(INPUT_ERRORS["invalid_item_format"])
+            yield event.plain_result(INVALID_ITEM_FORMAT)
             return
 
         success, message = await self.ladder_service.give_items(group_id, player_name, items)
@@ -1581,11 +1657,21 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         else:
             # 道具名模式：支持 道具名*数量 / 道具名×数量 / 道具名（不带数量=全部收回）
             items = []
+            bad_parts = []
             for part in raw_parts:
                 name, qty = extract_item_quantity(part)
-                if not name:
+                if not name or (qty is not None and qty <= 0):
+                    bad_parts.append(part)
                     continue
                 items.append((name, qty))
+            if bad_parts:
+                yield event.plain_result(
+                    f"格式有误：{'、'.join(bad_parts)}（需带道具名，数量必须为正整数）"
+                )
+                return
+            if not items:
+                yield event.plain_result("用法：收回道具 <玩家名> <道具*数量> ...\n      或：收回道具 <玩家名> <编号> ...（如 1 2 3）")
+                return
 
         success, message = await self.ladder_service.take_items(group_id, player_name, items)
         if success:
@@ -1830,9 +1916,17 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
         receiver_name, item_args = parts[0], parts[1].strip()
 
         # 解析道具（只支持一种）
-        items = self._parse_item_args(item_args)
+        try:
+            items = self._parse_item_args(item_args)
+        except ValueError as e:
+            yield event.plain_result(f"道具格式有误：{e}")
+            return
         if not items:
-            yield event.plain_result("未指定有效道具。格式: 道具名*数量")
+            yield event.plain_result("未指定有效道具。格式: 道具名 [数量] 或 道具名*数量")
+            return
+        if len(items) > 1:
+            # 此前会静默丢弃除第一件以外的道具，玩家以为都送出去了
+            yield event.plain_result("一次只能赠送一种道具。")
             return
 
         item_raw, quantity = items[0]
@@ -2161,6 +2255,9 @@ class FaithLadderPlugin(QueryCommandsMixin, SharedSendMixin, Star):
             sf = self._extract_specific_faith(card)
             if sf:
                 await self.db_manager.set_player_specific_faith(group_id, player.player_id, sf)
+                # 同步内存对象：下面马上要用它判断"有无具体信仰"，
+                # 不同步的话本次祷词会被当成无信仰直接丢弃，只能等下一次触发
+                player.specific_faith = sf
                 logger.info(f"[PrayerTrigger] 补全信仰: {player.player_name} ← {sf}")
 
         # 补全职业（从名片中提取职业关键词）

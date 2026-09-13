@@ -26,6 +26,10 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
+# 单个道具一次批量录入的数量上限。解析时按数量展开成列表，不设上限的话
+# 一条 `铁剑*2000000` 就能让插件吃掉几十 MB 内存。
+MAX_ITEM_QUANTITY = 9999
+
 
 class LadderService:
     """Core business logic for the faith ladder plugin."""
@@ -34,6 +38,7 @@ class LadderService:
     LEADERBOARD_CACHE_TTL = 30  # 30 秒
 
     def __init__(self, db_manager: DatabaseManager):
+        """装配业务逻辑层：持有 DB 管理器与排行榜缓存（缓存 TTL 见 LEADERBOARD_CACHE_TTL）。"""
         self.db = db_manager
         # 排行榜缓存：{(group_id, limit): (players, timestamp)}
         self._leaderboard_cache = {}
@@ -106,6 +111,28 @@ class LadderService:
         return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
 
 
+    @staticmethod
+    def _ranks_by(sorted_players: List[Player], key) -> Dict[str, int]:
+        """按「严格领先的人数 + 1」计算名次：成绩完全相同者并列同一名次。
+
+        与 DB 侧 get_player_ladder_rank / get_player_pilgrimage_rank 的
+        COUNT(*) 口径保持一致。批量查询此前用 enumerate 直接给序号，
+        并列时会排出不同名次，导致同一个玩家在单查与批量查里名次不同。
+        sorted_players 必须已按同一 key 降序排好。
+        """
+        ranks: Dict[str, int] = {}
+        prev_key = None
+        prev_rank = 0
+        for i, player in enumerate(sorted_players):
+            cur_key = key(player)
+            if prev_key is not None and cur_key == prev_key:
+                ranks[player.player_id] = prev_rank
+            else:
+                prev_rank = i + 1
+                ranks[player.player_id] = prev_rank
+            prev_key = cur_key
+        return ranks
+
     async def get_player_cards_by_names(
         self, group_id: str, player_names: List[str],
         init_ladder: int = 1000, init_pilgrimage: int = 100
@@ -130,8 +157,8 @@ class LadderService:
         all_players = await self.db.get_all_players_in_group(group_id)
         ladder_sorted = sorted(all_players, key=lambda p: (p.ladder_score, p.pilgrimage_score), reverse=True)
         pilgrimage_sorted = sorted(all_players, key=lambda p: (p.pilgrimage_score, p.ladder_score), reverse=True)
-        ladder_ranks = {p.player_id: i + 1 for i, p in enumerate(ladder_sorted)}
-        pilgrimage_ranks = {p.player_id: i + 1 for i, p in enumerate(pilgrimage_sorted)}
+        ladder_ranks = self._ranks_by(ladder_sorted, lambda p: (p.ladder_score, p.pilgrimage_score))
+        pilgrimage_ranks = self._ranks_by(pilgrimage_sorted, lambda p: (p.pilgrimage_score, p.ladder_score))
 
         # 3. 批量查状态（1 次 SQL）
         player_ids = [p.player_id for p in players]
@@ -263,10 +290,19 @@ class LadderService:
         if not player.faith:
             return False, f"{player_name}尚无信仰，无誓可弃。"
 
-        # Get oath text based on CURRENT faith
+        # 弃誓文案按「具体信仰」取值：_conf_schema.json 里的 oath_text_* 是 16 个具体信仰
+        # （oath_text_诞育 … oath_text_命运），而 player.faith 存的是 6 命途，
+        # 之前直接拼 oath_text_{命途} 导致 16 个配置键全部取不到、永远用兜底文案。
+        # 没有具体信仰时（名片里只有命途）才回退到命途键，最后再兜底。
         current_faith = player.faith
-        oath_text_key = f"oath_text_{current_faith}"
-        oath_text = config.get(oath_text_key, f"{player_name}背弃了{current_faith}之道。誓约已碎。")
+        specific_faith = player.specific_faith
+        oath_text = None
+        if specific_faith:
+            oath_text = config.get(f"oath_text_{specific_faith}")
+        if not oath_text:
+            oath_text = config.get(f"oath_text_{current_faith}")
+        if not oath_text:
+            oath_text = f"{player_name}背弃了{specific_faith or current_faith}之道。誓约已碎。"
         oath_text = oath_text.replace("{name}", player_name)
 
         # Validate new faith if provided
@@ -323,27 +359,29 @@ class LadderService:
                     "一个 QQ 在同一群只能绑定一个玩家。"
                 )
 
-        # Create player with specified scores (atomic: 3 operations in one transaction)
+        # 以下四步共用同一个事务（commit=False），QQ 绑定失败时 rollback 才真正能撤销，
+        # 否则子操作各自提交，"注册回滚"只是句谎话（玩家/职业/历史记录其实已经落库）
         player_id = f"name:{player_name}"
         await self.db.upsert_player(
             group_id, player_id, player_name,
             initial_ladder=ladder_score,
             initial_pilgrimage=pilgrimage_score,
+            commit=False,
         )
 
         # Set class and faith
-        await self.db.set_player_class(group_id, player_id, class_name, faith_name)
+        await self.db.set_player_class(group_id, player_id, class_name, faith_name, commit=False)
 
         # Record in score history
         await self.db.update_scores(
             group_id, player_id, 0, 0,
-            operator_id, f"录入玩家: {player_name}"
+            operator_id, f"录入玩家: {player_name}",
+            commit=False,
         )
 
         # Bind QQ if provided
-        qq_binding_ok = False
         if qq_id:
-            qq_binding_ok = await self.db.set_player_qq(group_id, player_id, str(qq_id))
+            qq_binding_ok = await self.db.set_player_qq(group_id, player_id, str(qq_id), commit=False)
             if not qq_binding_ok:
                 # Race: another player bound this QQ between our check and now
                 await self.db.rollback()
@@ -451,6 +489,12 @@ class LadderService:
                     name_part, qty = extract_item_quantity(item)
                     if qty is None:
                         qty = 1
+                    if qty > MAX_ITEM_QUANTITY:
+                        # 展开 qty 次会占用大量内存（*2000000 约 32MB），直接判为无效
+                        logger.warning(
+                            f"[BatchEntry] 数量过大已忽略: {item}（上限 {MAX_ITEM_QUANTITY}）"
+                        )
+                        continue
                     if name_part and qty > 0:
                         # 展开 qty 次，让下游 Counter 正确统计
                         items.extend([name_part] * qty)
@@ -538,7 +582,10 @@ class LadderService:
         except Exception as e:
             logger.error(f"Batch update failed, rolling back: {e}")
             await self.db.rollback()
-            return 0, [], [entry["name"] for entry in parsed_list]
+            # 返回空的 skipped：调用方据此区分「事务失败」与「玩家全都不存在」
+            # （后者会带回具体名字）。此前把所有人塞进 skipped，界面上会被误报成
+            # 「以下玩家不存在，已跳过」，掩盖了真正的数据库错误。
+            return 0, [], []
 
         return success_count, success_details, skipped
 
@@ -553,10 +600,12 @@ class LadderService:
         return format_inventory(player_name, items)
 
     async def give_items(self, group_id: str, player_name: str, items: List[Tuple[str, int]]) -> Tuple[bool, str]:
-        """赐予道具。items: [(道具名（可能含等级）, 数量), ...]"""
+        """赐予道具。items: [(道具名（可能含等级）, 数量), ...]，数量必须为正。"""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return False, f"玩家 {player_name} 不存在"
+        if any(quantity <= 0 for _, quantity in items):
+            return False, "数量必须为正整数"
         details = []
         for raw_name, quantity in items:
             base_name, grade = parse_item_full_name(raw_name)
@@ -566,7 +615,12 @@ class LadderService:
         return True, f"已赐予 {player_name}: {', '.join(details)}"
 
     async def take_items(self, group_id: str, player_name: str, items: List[Tuple[str, Optional[int]]]) -> Tuple[bool, str]:
-        """收回道具。items: [(道具名（可能含等级）, 数量或None), ...]。None=全部收回。按 item_name 匹配，不需要等级。"""
+        """收回道具。items: [(道具名（可能含等级）, 数量或None), ...]。None=全部收回。
+
+        等级匹配规则：显式写了等级（如「铁剑（A级）」）就只收回那一行；没写等级时
+        优先收回"无等级"那一行，没有才退而取同名中等级最低的一行。
+        （同名不同等级现在是独立行，不再有"按名字匹配到哪行都行"的余地）
+        """
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return False, f"玩家 {player_name} 不存在"
@@ -574,14 +628,24 @@ class LadderService:
         fail_details = []
         for raw_name, quantity in items:
             base_name, grade = parse_item_full_name(raw_name)
-            # 按 item_name 匹配（不要求等级一致），收回实际道具
-            found_items = await self.db.get_player_items(group_id, player.player_id)
-            match = next((i for i in found_items if i["item_name"] == base_name), None)
+            found_items = [
+                i for i in await self.db.get_player_items(group_id, player.player_id)
+                if i["item_name"] == base_name
+            ]
+            if grade is not None:
+                match = next((i for i in found_items if i["grade"] == grade), None)
+            else:
+                # 未指定等级：优先无等级行；get_player_items 已按等级降序，故 [-1] 是等级最低的
+                match = next((i for i in found_items if i["grade"] is None), None) \
+                    or (found_items[-1] if found_items else None)
             if not match:
                 fail_details.append(f"收回失败：{player_name} 没有道具 {base_name}")
                 continue
             actual_grade = match["grade"]
             actual_qty = match["quantity"]
+            if quantity is not None and quantity <= 0:
+                fail_details.append(f"收回失败：{base_name} 的数量必须为正整数")
+                continue
             if quantity is not None and quantity > actual_qty:
                 fail_details.append(f"收回失败：{player_name} 的 {base_name} 只有 {actual_qty} 个")
                 continue
@@ -646,7 +710,10 @@ class LadderService:
     ) -> Tuple[bool, str, Optional[str], Optional[str]]:
         """扣除道具。返回 (success, msg, base_name, grade)。
         输入 raw_item_name 可含等级，如 '共生噬刃（C级）'。
-        无等级输入时按 item_name 匹配第一个。"""
+        无等级输入时按 item_name 匹配第一个。
+        数量必须为正：负数量在 SQL 里会变成「增加」，等于凭空造道具。"""
+        if quantity <= 0:
+            return False, "数量必须为正整数", None, None
         base_name, input_grade = parse_item_full_name(raw_item_name)
         items = await self.db.get_player_items(group_id, player_id)
         if input_grade:
@@ -668,7 +735,9 @@ class LadderService:
         self, group_id: str, player_id: str, player_name: str,
         item_name: str, quantity: int, grade: Optional[str] = None
     ) -> Tuple[bool, str]:
-        """接收道具（接收方接受时调用）。"""
+        """接收道具（接收方接受时调用）。数量必须为正，否则不落库。"""
+        if quantity <= 0:
+            return False, "数量必须为正整数"
         await self.db.add_item(group_id, player_id, item_name, quantity, grade=grade)
         await self.db.commit()
         return True, f"已收到 {format_item_display(item_name, grade, quantity)}"

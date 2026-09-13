@@ -17,15 +17,32 @@ class TestDatabaseManager:
         assert db_path.exists()
 
     async def test_upsert_player_creates_new(self, db_manager):
-        """Test creating a new player via upsert."""
+        """Test creating a new player via upsert.
+
+        新建玩家应返回数据库里的真实记录（含初始分）。旧实现新建时返回一个只填了
+        三个字段的临时 Player（分数为数据类默认值 0），改名时才回读数据库（分数为
+        初始分 1000），同一个函数因名字是否变化而返回不同来源的对象。
+        """
         player = await db_manager.upsert_player("g1", "u1", "TestPlayer")
         assert player.player_id == "u1"
         assert player.group_id == "g1"
         assert player.player_name == "TestPlayer"
-        assert player.ladder_score == 0
-        assert player.pilgrimage_score == 0
+        assert player.ladder_score == 1000
+        assert player.pilgrimage_score == 100
         assert player.class_ is None
         assert player.faith is None
+
+    async def test_upsert_player_concurrent_same_name(self, db_manager):
+        """并发 upsert 同一玩家不应抛 IntegrityError，且只留一条记录。"""
+        import asyncio
+
+        results = await asyncio.gather(
+            db_manager.upsert_player("g1", "u1", "Alice"),
+            db_manager.upsert_player("g1", "u1", "Alice"),
+        )
+        assert all(p is not None for p in results)
+        players = await db_manager.get_all_players_in_group("g1")
+        assert len(players) == 1
 
     async def test_upsert_player_updates_name(self, db_manager):
         """Test that upsert updates player name if changed."""
@@ -224,69 +241,37 @@ class TestWhitelistOperations:
 
 
 @pytest.mark.asyncio
-class TestActiveGroups:
-    """Tests for active group tracking."""
-
-    async def test_register_active_group(self, db_manager):
-        """Test registering an active group."""
-        await db_manager.register_active_group("g1")
-        groups = await db_manager.get_active_groups()
-        assert "g1" in groups
-
-    async def test_register_multiple_groups(self, db_manager):
-        """Test registering multiple active groups."""
-        await db_manager.register_active_group("g1")
-        await db_manager.register_active_group("g2")
-        groups = await db_manager.get_active_groups()
-        assert len(groups) == 2
-        assert "g1" in groups
-        assert "g2" in groups
-
-    async def test_register_same_group_idempotent(self, db_manager):
-        """Test that re-registering same group doesn't duplicate."""
-        await db_manager.register_active_group("g1")
-        await db_manager.register_active_group("g1")
-        groups = await db_manager.get_active_groups()
-        assert len(groups) == 1
-
-
 @pytest.mark.asyncio
 class TestBackup:
-    """Tests for database backup operations."""
+    """Tests for database backup."""
 
-    async def test_backup_database(self, db_manager, temp_data_dir):
-        """Test creating a database backup."""
-        # Create some data first
+    async def test_backup_to_produces_valid_snapshot(self, db_manager, temp_data_dir):
+        """备份应是自洽的数据库快照，且内容可读（VACUUM INTO）。
+
+        此前用 shutil.copy2 拷活动中的 .db 文件，不拷 -journal，
+        可能在有未提交写入时得到撕裂副本。
+        """
         await db_manager.upsert_player("g1", "u1", "TestPlayer")
 
         backup_dir = temp_data_dir / "backups"
-        backup_path = await db_manager.backup_database(backup_dir)
+        backup_path = backup_dir / "ladder_backup_test.db"
+        await db_manager.backup_to(backup_path)
 
         assert backup_path.exists()
-        assert backup_path.name.startswith("ladder_backup_")
-        assert backup_path.name.endswith(".db")
+        import sqlite3
+        con = sqlite3.connect(backup_path)
+        try:
+            names = [r[0] for r in con.execute("SELECT player_name FROM players").fetchall()]
+        finally:
+            con.close()
+        assert names == ["TestPlayer"]
 
-    async def test_cleanup_old_backups(self, db_manager, temp_data_dir):
-        """Test cleaning up old backups."""
-        import time
+    async def test_backup_to_overwrites_existing_file(self, db_manager, temp_data_dir):
+        """目标文件已存在时应先删除再生成，不留残余。"""
         backup_dir = temp_data_dir / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / "ladder_backup_test.db"
+        backup_path.write_text("stale", encoding="utf-8")
 
-        # Create a backup file with old modification time
-        old_backup = backup_dir / "ladder_backup_20200101_000000.db"
-        old_backup.write_text("old backup")
-
-        # Set modification time to 30 days ago
-        old_time = time.time() - (30 * 86400)
-        import os
-        os.utime(old_backup, (old_time, old_time))
-
-        # Create a recent backup
-        new_backup = backup_dir / "ladder_backup_20990101_000000.db"
-        new_backup.write_text("new backup")
-
-        # Cleanup with 7-day retention
-        await db_manager.cleanup_old_backups(backup_dir, 7)
-
-        assert not old_backup.exists()
-        assert new_backup.exists()
+        await db_manager.backup_to(backup_path)
+        assert backup_path.stat().st_size > len("stale")

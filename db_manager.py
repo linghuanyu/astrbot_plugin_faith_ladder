@@ -1,16 +1,23 @@
 """
-Database manager for the faith ladder plugin.
-Handles all SQLite operations using aiosqlite with a persistent connection.
+数据库访问层。用 aiosqlite 单连接持有 ladder.db，负责建表、迁移与全部 SQL 操作。
+
+等级字段的编码说明见 item_utils.grade_to_storage：解析侧是三态（None/''/等级），
+存储侧是 NOT NULL 的文本（''/'-'/等级），因为 grade 参与 player_items 主键。
 """
 
-import asyncio
 import aiosqlite
-import shutil
 from pathlib import Path
 from typing import List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 
-# 北京时间 UTC+8
+from astrbot_plugin_faith_ladder.item_utils import (
+    grade_to_storage,
+    grade_from_storage,
+    GRADE_STORAGE_NONE,
+)
+
+# 北京时间 UTC+8（仅用于「每日」口径：祷词/赠送次数按北京日期分界；
+# 其余时间戳统一用 UTC，见 add_status / purge_old_score_history）
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 from astrbot_plugin_faith_ladder.models import Player, FAITH_TO_PATH
@@ -33,6 +40,7 @@ class DatabaseManager:
     )
 
     def __init__(self, data_dir: Path):
+        """只记录数据目录与库文件路径；建表、迁移与连接建立都在 initialize() 里做。"""
         self.data_dir = data_dir
         self.db_path = data_dir / "ladder.db"
         self._db: Optional[aiosqlite.Connection] = None
@@ -94,19 +102,14 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_whitelist_lookup
                 ON whitelist(entry_type, entry_id);
 
-            CREATE TABLE IF NOT EXISTS active_groups (
-                group_id TEXT PRIMARY KEY,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
             CREATE TABLE IF NOT EXISTS player_items (
                 group_id TEXT NOT NULL,
                 player_id TEXT NOT NULL,
                 item_name TEXT NOT NULL,
-                grade TEXT DEFAULT NULL,
+                grade TEXT NOT NULL DEFAULT '',
                 quantity INTEGER DEFAULT 1,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, player_id, item_name)
+                PRIMARY KEY (group_id, player_id, item_name, grade)
             );
             CREATE INDEX IF NOT EXISTS idx_items_player
                 ON player_items(group_id, player_id);
@@ -164,7 +167,10 @@ class DatabaseManager:
         await self._migrate_item_names()
 
         # Migrate: add grade column to player_items
-        await self._migrate_items_add_grade()
+        await self.migrate_player_items()
+
+        # Migrate: rebuild player_items so the PK includes grade
+        await self._migrate_items_grade_pk()
 
         # Migrate: add qq_id column to players (QQ binding for anti-impersonation)
         await self._migrate_qq_id()
@@ -190,7 +196,14 @@ class DatabaseManager:
             await self._db.commit()
 
     async def _migrate_item_names(self):
-        """Clean up old item names that have *N suffix (e.g., '糖果*3' -> '糖果')."""
+        """清理旧数据里带 `*N` 后缀的道具名（如 '糖果*3' → '糖果'，数量乘 N）。
+
+        判定条件放宽为「名字以 *数字 结尾」：旧解析器会把数量写进名字，
+        无论前面是否带品级括号（'糖果*3'、'护身符（C级）*2'、
+        以及多重后缀 '糖果*3*1' 都是同一类脏数据）。
+        此前只处理带括号的两种形式，文档里承诺的 '糖果*3' 反而漏掉了，
+        这类行永远不会被清理、也无法与正常同名道具合并。
+        """
         import re
         async with self._db.execute(
             "SELECT group_id, player_id, item_name, quantity FROM player_items"
@@ -198,26 +211,11 @@ class DatabaseManager:
             rows = await cursor.fetchall()
 
         for group_id, player_id, item_name, quantity in rows:
-            needs_migration = False
-
-            # 情况1: 末尾是 ）*N（品级括号后跟数量，如 护身符（C级）*2）
-            match_grade = re.match(r'^(.+）)\*(\d+)$', item_name)
-            if match_grade:
-                needs_migration = True
-
-            # 情况2: 多个 *N 后缀（如 糖果*3*1）
-            if not needs_migration:
-                match_outer = re.match(r'^(.+)\*(\d+)$', item_name)
-                if match_outer:
-                    remaining = match_outer.group(1).strip()
-                    match_inner = re.match(r'^(.+)\*(\d+)$', remaining)
-                    if match_inner:
-                        needs_migration = True
-
-            if not needs_migration:
+            # 只要名字以 *数字 结尾就是旧解析器留下的脏数据（正常名字不含 *N）
+            if not re.search(r'\*\d+$', item_name):
                 continue
 
-            # 有多个 *N，是旧 bug 数据，剥离所有尾部 *N
+            # 剥离所有尾部 *N，并把数量按乘积折算回去
             clean_name = item_name
             total_multiplier = 1
             while True:
@@ -256,115 +254,117 @@ class DatabaseManager:
         await self._db.commit()
 
     async def migrate_player_items(self) -> int:
-        """手动触发储物空间格式迁移。返回处理的记录数。"""
-        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name
+        """把旧数据里写在道具名中的等级拆到 grade 列，并清理重复行。
 
-        async with self._db.execute(
-            "SELECT rowid, group_id, player_id, item_name, grade, quantity FROM player_items"
-        ) as cursor:
-            rows = await cursor.fetchall()
+        '共生噬刃（C级）' → item_name='共生噬刃', grade='C'；目标行已存在时合并数量。
+        幂等：启动时自动执行，也可用「天梯榜管理 迁移储物空间」手动重跑。
 
-        migrated = 0
-        merged = 0
-
-        for rowid, group_id, player_id, old_name, current_grade, quantity in rows:
-            base_name, grade = parse_item_full_name(old_name)
-            if base_name == old_name:
-                continue
-
-            async with self._db.execute(
-                "SELECT rowid, quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                (group_id, player_id, base_name)
-            ) as check_cursor:
-                existing = await check_cursor.fetchone()
-
-            if existing:
-                existing_rowid, existing_qty = existing
-                new_qty = existing_qty + quantity
-                await self._db.execute(
-                    "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE rowid = ?",
-                    (new_qty, existing_rowid)
-                )
-                await self._db.execute("DELETE FROM player_items WHERE rowid = ?", (rowid,))
-                merged += 1
-            else:
-                await self._db.execute(
-                    "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
-                    (grade, base_name, rowid)
-                )
-                migrated += 1
-
-        if migrated > 0 or merged > 0:
-            await self._db.commit()
-
-        return migrated + merged
-
-    async def _migrate_items_add_grade(self):
-        """Add grade column to player_items and backfill from item_name.
-        Idempotent: safe to re-run. Handles duplicate items by merging quantities.
+        目标行的匹配必须带上 grade（存储形态），否则带等级的道具会被合并进
+        同名无等级那一行、等级直接丢失（这正是本次修复的问题之一）。
+        返回处理过的行数。
         """
+        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name, grade_to_storage
+
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
-
-        column_existed = "grade" in columns
-        if not column_existed:
-            await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT DEFAULT NULL")
+        if "grade" not in columns:
+            await self._db.execute("ALTER TABLE player_items ADD COLUMN grade TEXT NOT NULL DEFAULT ''")
             logger.info("[Migration] Added 'grade' column to player_items")
 
-        from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name
-
         try:
-            # Always scan all rows to catch any remaining unmigrated data
+            # 每次启动全表扫一遍，容忍上次中途失败
             async with self._db.execute(
-                "SELECT rowid, group_id, player_id, item_name, grade, quantity FROM player_items"
+                "SELECT rowid, group_id, player_id, item_name, quantity FROM player_items"
             ) as cursor:
                 rows = await cursor.fetchall()
 
-            logger.info(f"[Migration] Scanning {len(rows)} rows for grade migration")
             migrated = 0
             merged = 0
-
-            for rowid, group_id, player_id, old_name, current_grade, quantity in rows:
-                base_name, grade = parse_item_full_name(old_name)
-
-                # Only process if the name changed (had a grade pattern)
+            for rowid, group_id, player_id, old_name, quantity in rows:
+                base_name, parsed_grade = parse_item_full_name(old_name)
                 if base_name == old_name:
-                    continue
+                    continue  # 名字里本来就没有等级括号
 
-                # Check if target row already exists
+                target_grade = grade_to_storage(parsed_grade)
                 async with self._db.execute(
-                    "SELECT rowid, quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (group_id, player_id, base_name)
+                    "SELECT rowid, quantity FROM player_items "
+                    "WHERE group_id = ? AND player_id = ? AND item_name = ? AND grade = ?",
+                    (group_id, player_id, base_name, target_grade)
                 ) as check_cursor:
                     existing = await check_cursor.fetchone()
 
                 if existing:
-                    # Target exists - merge quantities and delete this row
                     existing_rowid, existing_qty = existing
-                    new_qty = existing_qty + quantity
                     await self._db.execute(
                         "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE rowid = ?",
-                        (new_qty, existing_rowid)
+                        (existing_qty + quantity, existing_rowid)
                     )
                     await self._db.execute("DELETE FROM player_items WHERE rowid = ?", (rowid,))
                     merged += 1
-                    logger.info(f"[Migration] Merged row {rowid} into {existing_rowid}: '{old_name}' → '{base_name}' (qty {quantity}+{existing_qty}={new_qty})")
+                    logger.info(
+                        f"[Migration] Merged row {rowid} into {existing_rowid}: "
+                        f"'{old_name}' → '{base_name}' (qty {quantity}+{existing_qty})"
+                    )
                 else:
-                    # No conflict - just update this row
                     await self._db.execute(
                         "UPDATE player_items SET grade = ?, item_name = ? WHERE rowid = ?",
-                        (grade, base_name, rowid)
+                        (target_grade, base_name, rowid)
                     )
                     migrated += 1
-                    logger.info(f"[Migration] Row {rowid}: '{old_name}' → base='{base_name}', grade='{grade}'")
+                    logger.info(f"[Migration] Row {rowid}: '{old_name}' → base='{base_name}', grade='{target_grade}'")
 
-            if migrated > 0 or merged > 0:
+            if migrated or merged:
                 await self._db.commit()
-                logger.info(f"[Migration] Successfully migrated {migrated} rows, merged {merged} duplicate rows")
-            else:
-                logger.info("[Migration] No rows needed grade migration")
+                logger.info(f"[Migration] 道具等级迁移：改写 {migrated} 行，合并 {merged} 行")
+            return migrated + merged
         except Exception as e:
-            logger.error(f"[Migration] Item grade migration failed (will retry on next startup): {e}")
+            await self._db.rollback()
+            logger.error(f"[Migration] 道具等级迁移失败（下次启动会重试）: {e}")
+            return 0
+
+    async def _migrate_items_grade_pk(self):
+        """重建 player_items，使主键包含 grade（(group, player, name, grade)）。
+
+        旧主键下一个玩家无法同时持有「铁剑」和「铁剑（A级）」：后者会被合并进前者
+        并丢掉等级，之后按等级赠送/扣除都会失败。SQLite 不能直接改主键，只能重建表。
+
+        grade 同时归一化为 NOT NULL：NULL 在 UNIQUE/主键约束下互不相等，
+        若允许 NULL，"无等级"道具会被反复插入成多行而不是合并。
+        （无等级 → ''，有括号但非标准等级 → '-'，见 item_utils.grade_to_storage）
+        通过检查现有主键列判断是否已迁移，可重复执行。
+        """
+        async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
+            info = await cursor.fetchall()
+        pk_cols = [r[1] for r in info if r[5]]
+        if "grade" in pk_cols:
+            return
+
+        logger.info(f"[Migration] 重建 player_items 主键：{pk_cols} → 加入 grade")
+        try:
+            await self._db.executescript("""
+                CREATE TABLE IF NOT EXISTS player_items_new (
+                    group_id TEXT NOT NULL,
+                    player_id TEXT NOT NULL,
+                    item_name TEXT NOT NULL,
+                    grade TEXT NOT NULL DEFAULT '',
+                    quantity INTEGER DEFAULT 1,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, player_id, item_name, grade)
+                );
+                INSERT INTO player_items_new (group_id, player_id, item_name, grade, quantity, updated_at)
+                    SELECT group_id, player_id, item_name,
+                           CASE WHEN grade IS NULL THEN '' ELSE grade END,
+                           quantity, updated_at
+                    FROM player_items;
+                DROP TABLE player_items;
+                ALTER TABLE player_items_new RENAME TO player_items;
+                CREATE INDEX IF NOT EXISTS idx_player_items_lookup ON player_items(group_id, player_id);
+            """)
+            await self._db.commit()
+            logger.info("[Migration] player_items 重建完成")
+        except Exception as e:
+            await self._db.rollback()
+            logger.error(f"[Migration] player_items 主键重建失败（下次启动会重试）: {e}")
 
     async def _migrate_qq_id(self):
         """Add qq_id column + unique-per-group index to players table.
@@ -375,12 +375,16 @@ class DatabaseManager:
 
         if "qq_id" not in columns:
             await self._db.execute("ALTER TABLE players ADD COLUMN qq_id TEXT")
-            await self._db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_qq "
-                "ON players(group_id, qq_id)"
-            )
             await self._db.commit()
-            logger.info("[Migration] Added qq_id column + idx_players_qq to players")
+            logger.info("[Migration] Added qq_id column to players")
+
+        # 索引创建放在 if 之外：曾经出现过「列已加、索引没建成」的半应用状态
+        # （迁移中途失败、或由更早的版本建库），那种库会永久失去 QQ 唯一性约束
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_qq "
+            "ON players(group_id, qq_id)"
+        )
+        await self._db.commit()
 
     async def _migrate_specific_faith(self):
         """Add specific_faith column to players table if it doesn't exist."""
@@ -484,41 +488,28 @@ class DatabaseManager:
 
     async def upsert_player(
         self, group_id: str, player_id: str, player_name: str,
-        initial_ladder: int = 1000, initial_pilgrimage: int = 100
+        initial_ladder: int = 1000, initial_pilgrimage: int = 100,
+        commit: bool = True,
     ) -> Player:
-        """Create or update a player record. New players get initial scores."""
-        async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
-            (player_id, group_id)
-        ) as cursor:
-            row = await cursor.fetchone()
+        """创建或更新玩家记录。新玩家使用初始分；已存在时仅在名字变化时改名。
 
-        if row:
-            # Update name if changed
-            if row[2] != player_name:
-                await self._db.execute(
-                    "UPDATE players SET player_name = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
-                    (player_name, player_id, group_id)
-                )
-                await self._db.commit()
-                async with self._db.execute(
-                    "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE player_id = ? AND group_id = ?",
-                    (player_id, group_id)
-                ) as cursor:
-                    updated_row = await cursor.fetchone()
-                return self._row_to_player(updated_row)
-            return self._row_to_player(row)
-        else:
-            # Create new player with initial scores
-            await self._db.execute(
-                "INSERT INTO players (player_id, group_id, player_name, ladder_score, pilgrimage_score) VALUES (?, ?, ?, ?, ?)",
-                (player_id, group_id, player_name, initial_ladder, initial_pilgrimage)
-            )
+        用单条 INSERT ... ON CONFLICT 完成「先查后插」：旧的 SELECT-then-INSERT
+        在并发下会让两个协程都查不到记录，随后第二个 INSERT 撞主键抛
+        IntegrityError（例如两人同时录入同一玩家名）。
+        commit=False 供需要多步原子写入的调用方使用（见 register_player）。
+        """
+        await self._db.execute(
+            "INSERT INTO players (player_id, group_id, player_name, ladder_score, pilgrimage_score) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(player_id, group_id) DO UPDATE SET "
+            "player_name = excluded.player_name, updated_at = CURRENT_TIMESTAMP "
+            "WHERE players.player_name <> excluded.player_name",
+            (player_id, group_id, player_name, initial_ladder, initial_pilgrimage)
+        )
+        if commit:
             await self._db.commit()
-            return Player(
-                player_id=player_id, group_id=group_id,
-                player_name=player_name
-            )
+        # 刚刚 upsert 过，此处必然存在
+        return await self.get_player(group_id, player_id)
 
     async def get_player(self, group_id: str, player_id: str) -> Optional[Player]:
         """Get a player by ID and group."""
@@ -567,8 +558,13 @@ class DatabaseManager:
                 return None
             return self._row_to_player(row)
 
-    async def set_player_qq(self, group_id: str, player_id: str, qq_id: str) -> bool:
-        """Bind a QQ ID to a player. Returns True on success, False on unique conflict."""
+    async def set_player_qq(self, group_id: str, player_id: str, qq_id: str, commit: bool = True) -> bool:
+        """Bind a QQ ID to a player. Returns True on success, False on unique conflict.
+
+        并发下两个绑定请求可能同时通过上面的检查，因此这里额外捕获唯一索引
+        （idx_players_qq）冲突并返回 False，而不是让 IntegrityError 冒到调用方。
+        commit=False 供多步原子写入的调用方使用（见 register_player）。
+        """
         qq_id = str(qq_id)
         # Check existing binding for this QQ (same or different player)
         async with self._db.execute(
@@ -578,13 +574,19 @@ class DatabaseManager:
             row = await cursor.fetchone()
             if row and row[0] != player_id:
                 return False  # QQ already bound to another player in this group
-        await self._db.execute(
-            "UPDATE players SET qq_id = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE group_id = ? AND player_id = ?",
-            (qq_id, group_id, player_id)
-        )
-        await self._db.commit()
-        return True
+        try:
+            cursor = await self._db.execute(
+                "UPDATE players SET qq_id = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE group_id = ? AND player_id = ?",
+                (qq_id, group_id, player_id)
+            )
+        except aiosqlite.IntegrityError:
+            await self.rollback()
+            return False
+        if commit:
+            await self._db.commit()
+        # rowcount 为 0 表示玩家不存在，绑定并未真正发生
+        return cursor.rowcount > 0
 
     async def rebind_player_qq(
         self, group_id: str, player_id: str, new_qq: str
@@ -701,7 +703,7 @@ class DatabaseManager:
 
     async def set_player_class(
         self, group_id: str, player_id: str,
-        class_name: str, faith_name: str
+        class_name: str, faith_name: str, commit: bool = True,
     ) -> Optional[Player]:
         """Set a player's class and faith. Returns updated player or None if not found."""
         # Check player exists
@@ -716,7 +718,8 @@ class DatabaseManager:
             "UPDATE players SET class = ?, faith = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
             (class_name, faith_name, player_id, group_id)
         )
-        await self._db.commit()
+        if commit:
+            await self._db.commit()
         return await self.get_player(group_id, player_id)
 
     async def set_player_faith(
@@ -796,7 +799,12 @@ class DatabaseManager:
         return await self.get_player(group_id, player_id)
 
     async def delete_player(self, group_id: str, player_id: str) -> bool:
-        """Delete a player and their score history. Returns True if deleted."""
+        """Delete a player and everything attached to them. Returns True if deleted.
+
+        除玩家本体外还要清掉依赖玩家 ID 的附属数据：道具、状态、积分历史，以及
+        pending_gifts / prayer_daily_hits / gift_daily_accepts。后三张表若残留，
+        同名玩家重新录入后会继承旧的待领取赠送、当日祷词记录与接受配额。
+        """
         cursor = await self._db.execute(
             "DELETE FROM players WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
@@ -815,6 +823,20 @@ class DatabaseManager:
             "DELETE FROM player_statuses WHERE player_id = ? AND group_id = ?",
             (player_id, group_id)
         )
+        # 待处理赠送：作为接收方（该笔已无意义）或作为发送方（退款会打到已删除的玩家）都要清
+        await self._db.execute(
+            "DELETE FROM pending_gifts WHERE group_id = ? AND (receiver_id = ? OR sender_id = ?)",
+            (group_id, player_id, player_id)
+        )
+        # Clean up daily-state records
+        await self._db.execute(
+            "DELETE FROM prayer_daily_hits WHERE group_id = ? AND player_id = ?",
+            (group_id, player_id)
+        )
+        await self._db.execute(
+            "DELETE FROM gift_daily_accepts WHERE group_id = ? AND receiver_id = ?",
+            (group_id, player_id)
+        )
         await self._db.commit()
         return cursor.rowcount > 0
 
@@ -831,8 +853,12 @@ class DatabaseManager:
         return await self.delete_player(group_id, row[0])
 
     async def rename_player_by_name(self, group_id: str, old_name: str, new_name: str) -> tuple[bool, str]:
-        """Rename a player atomically. Returns (success, message).
-        All checks and update happen on the same connection to prevent TOCTOU races."""
+        """Rename a player. Returns (success, message).
+
+        players.player_name 上并没有唯一约束，所以「先查重名、再 UPDATE」在并发下
+        会让两个改名请求同时通过检查、产生两个同名玩家（之后按名字查找的结果随机）。
+        这里把重名判断并进 UPDATE 语句本身，用 rowcount 判定是否真的改到了。
+        """
         # Find player by old name
         async with self._db.execute(
             "SELECT player_id FROM players WHERE group_id = ? AND player_name = ?",
@@ -842,19 +868,19 @@ class DatabaseManager:
         if not row:
             return False, f"未找到玩家: {old_name}"
 
-        # Check if new name already exists
-        async with self._db.execute(
-            "SELECT 1 FROM players WHERE group_id = ? AND player_name = ?",
-            (group_id, new_name)
-        ) as cursor:
-            if await cursor.fetchone():
-                return False, f"玩家名 {new_name} 已存在。"
-
-        # Perform rename
-        await self._db.execute(
-            "UPDATE players SET player_name = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ? AND group_id = ?",
-            (new_name, row[0], group_id)
+        # 改名与去重在同一条语句里完成：目标名已被占用时 EXISTS 为真，UPDATE 不命中任何行
+        cursor = await self._db.execute(
+            "UPDATE players SET player_name = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE group_id = ? AND player_id = ? "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM players p2 "
+            "  WHERE p2.group_id = ? AND p2.player_name = ? AND p2.player_id <> ?"
+            ")",
+            (new_name, group_id, row[0], group_id, new_name, row[0])
         )
+        if cursor.rowcount <= 0:
+            await self._db.rollback()
+            return False, f"玩家名 {new_name} 已存在。"
         await self._db.commit()
         return True, f"已将玩家 {old_name} 改名为 {new_name}。"
 
@@ -868,7 +894,11 @@ class DatabaseManager:
         return cursor.rowcount
 
     async def delete_all_players(self, group_id: str) -> int:
-        """Delete all players, score history, and items in a group. Returns number of players deleted."""
+        """Delete all players and their attached data in a group. Returns number of players deleted.
+
+        与 delete_player 对应：同样要清掉 pending_gifts / prayer_daily_hits /
+        gift_daily_accepts，否则清空之后再录入同名玩家会继承旧状态。
+        """
         cursor = await self._db.execute(
             "DELETE FROM players WHERE group_id = ?", (group_id,)
         )
@@ -882,6 +912,16 @@ class DatabaseManager:
         # Clean up all statuses in the group
         await self._db.execute(
             "DELETE FROM player_statuses WHERE group_id = ?", (group_id,)
+        )
+        # Clean up all daily-state / pending-gift rows of the group
+        await self._db.execute(
+            "DELETE FROM pending_gifts WHERE group_id = ?", (group_id,)
+        )
+        await self._db.execute(
+            "DELETE FROM prayer_daily_hits WHERE group_id = ?", (group_id,)
+        )
+        await self._db.execute(
+            "DELETE FROM gift_daily_accepts WHERE group_id = ?", (group_id,)
         )
         await self._db.commit()
         return cursor.rowcount
@@ -940,85 +980,65 @@ class DatabaseManager:
 
     # --- Active groups ---
 
-    async def register_active_group(self, group_id: str):
-        """Register a group as active (for daily push)."""
-        await self._db.execute(
-            "INSERT OR REPLACE INTO active_groups (group_id, last_active) VALUES (?, CURRENT_TIMESTAMP)",
-            (group_id,)
-        )
-        await self._db.commit()
-
-    async def get_active_groups(self) -> List[str]:
-        """Get all active group IDs."""
-        async with self._db.execute("SELECT group_id FROM active_groups") as cursor:
-            rows = await cursor.fetchall()
-            return [r[0] for r in rows]
-
-    # --- Score history retention ---
-
-    async def purge_old_score_history(self, retention_days: int = 90) -> int:
-        """Delete score history older than retention_days. Returns number of rows deleted.
-        Note: SQLite CURRENT_TIMESTAMP is UTC, so we use UTC for the cutoff."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor = await self._db.execute(
-            "DELETE FROM score_history WHERE timestamp < ?",
-            (cutoff,)
-        )
-        await self._db.commit()
-        return cursor.rowcount
-
     # --- Backup ---
 
-    async def backup_database(self, backup_dir: Path) -> Path:
-        """Create a backup of the database using non-blocking I/O. Returns backup file path."""
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = backup_dir / f"ladder_backup_{timestamp}.db"
-        await asyncio.to_thread(shutil.copy2, self.db_path, backup_path)
-        return backup_path
+    async def backup_to(self, backup_path: Path) -> None:
+        """用 SQLite 的 VACUUM INTO 生成一致性备份到 backup_path。
 
-    async def cleanup_old_backups(self, backup_dir: Path, retention_days: int):
-        """Remove backups older than retention_days using non-blocking I/O."""
-        if not backup_dir.exists():
-            return
-
-        cutoff = datetime.now().timestamp() - (retention_days * 86400)
-
-        def _remove_old():
-            for f in backup_dir.glob("ladder_backup_*.db"):
-                if f.stat().st_mtime < cutoff:
-                    f.unlink()
-
-        await asyncio.to_thread(_remove_old)
+        此前是 shutil.copy2 直接拷 .db 文件：单连接下随时可能有未提交的写入，
+        而且不会一起拷 -journal，备份可能撕裂或包含已被回滚的数据。
+        VACUUM INTO 由 SQLite 自己产出快照，结果自洽。
+        目标文件必须不存在（SQLite 的限制），故先清掉同名残留。
+        """
+        if self._db is None:
+            raise RuntimeError("数据库尚未初始化，无法备份")
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        if backup_path.exists():
+            backup_path.unlink()
+        await self._db.execute("VACUUM INTO ?", (str(backup_path),))
 
     # === 道具（储物空间） ===
 
     async def add_item(self, group_id: str, player_id: str, item_name: str, quantity: int = 1, grade: str = None) -> None:
-        """增加道具。item_name 为基础名，grade 为等级（可选）。已存在则累加数量。"""
+        """增加道具。item_name 为基础名，grade 为解析侧三态等级（None / '' / 有效等级）。
+
+        同名不同等级是各自独立的行（主键含 grade）：给已持有无等级「铁剑」的玩家
+        赐予「铁剑（A级）」会新增一行，而不是把等级并进旧行后丢掉。
+        """
         if quantity <= 0:
             return
         await self._db.execute(
             "INSERT INTO player_items (group_id, player_id, item_name, grade, quantity) "
             "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(group_id, player_id, item_name) DO UPDATE SET "
+            "ON CONFLICT(group_id, player_id, item_name, grade) DO UPDATE SET "
             "quantity = quantity + excluded.quantity, updated_at = CURRENT_TIMESTAMP",
-            (group_id, player_id, item_name, grade, quantity)
+            (group_id, player_id, item_name, grade_to_storage(grade), quantity)
         )
 
     async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None,
                           grade: str = None, require_sufficient: bool = False) -> bool:
-        """减少道具。quantity=None 时全部删除。grade 不为 None 时精确匹配 grade。
+        """减少道具。quantity=None 时删除匹配到的行。grade 为解析侧三态等级。
 
-        require_sufficient=False（默认，保持旧语义）：数量不足时截断到 0，只要该行存在就返回 True。
-        require_sufficient=True：数量不足时不改动数据并返回 False，供并发下"扣到才算成功"的场景使用。
-        返回是否成功扣减（道具不存在时为 False）。
+        匹配范围：
+        - 指定 grade → 只作用于该等级那一行
+        - grade=None 且 quantity=None（"全部清除"）→ 删除该名字下的所有等级行（保持旧语义）
+        - grade=None 且有 quantity（"扣若干数量"）→ 只作用于"无等级"那一行
+
+        require_sufficient=False（默认，保持旧语义）：数量不足时截断到 0，只要命中行就返回 True。
+        require_sufficient=True：数量不足时不改动数据并返回 False，供并发下"扣到才算成功"的场景。
+        返回是否成功扣减（没有命中任何行时为 False）。
         """
+        base_where = "group_id = ? AND player_id = ? AND item_name = ?"
+        base_params = (group_id, player_id, item_name)
         if grade is not None:
-            where = "group_id = ? AND player_id = ? AND item_name = ? AND grade = ?"
-            params = (group_id, player_id, item_name, grade)
+            where = base_where + " AND grade = ?"
+            params = base_params + (grade_to_storage(grade),)
+        elif quantity is None:
+            where = base_where
+            params = base_params
         else:
-            where = "group_id = ? AND player_id = ? AND item_name = ?"
-            params = (group_id, player_id, item_name)
+            where = base_where + " AND grade = ?"
+            params = base_params + (GRADE_STORAGE_NONE,)
 
         if quantity is None:
             cursor = await self._db.execute(
@@ -1049,7 +1069,7 @@ class DatabaseManager:
         return True
 
     async def clear_items(self, group_id: str, player_id: str, item_name: str = None, grade: str = None) -> int:
-        """清除道具。item_name=None → 清空全部；item_name 指定 → 清除该道具；+ grade → 指定等级。返回清除数量。"""
+        """清除道具。item_name=None → 清空全部；指定名字 → 清除该名字（含各等级）；+ grade → 只清该等级。"""
         if item_name is None:
             cursor = await self._db.execute(
                 "DELETE FROM player_items WHERE group_id = ? AND player_id = ?",
@@ -1063,14 +1083,17 @@ class DatabaseManager:
         else:
             cursor = await self._db.execute(
                 "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ? AND grade = ?",
-                (group_id, player_id, item_name, grade)
+                (group_id, player_id, item_name, grade_to_storage(grade))
             )
         await self._db.commit()
         return cursor.rowcount
 
     async def get_player_items(self, group_id: str, player_id: str) -> list:
         """获取玩家所有道具。返回 [{"item_name": str, "grade": str|None, "quantity": int}, ...]
-        按等级从高到低排序：SSS > SS > S > A > B > C > 无等级。"""
+
+        grade 以解析侧三态返回（None=无等级括号，''=有括号但非标准等级，'C' 等=有效等级），
+        调用方无需关心存储哨兵。按等级从高到低排序：SSS > SS > S > A > B > C > 无等级。
+        """
         grade_order = {"SSS": 0, "SS": 1, "S": 2, "A": 3, "B": 4, "C": 5}
         async with self._db.execute(
             "SELECT item_name, grade, quantity FROM player_items "
@@ -1078,7 +1101,10 @@ class DatabaseManager:
             (group_id, player_id)
         ) as cursor:
             rows = await cursor.fetchall()
-        results = [{"item_name": r[0], "grade": r[1], "quantity": r[2]} for r in rows]
+        results = [
+            {"item_name": r[0], "grade": grade_from_storage(r[1]), "quantity": r[2]}
+            for r in rows
+        ]
         results.sort(key=lambda x: (grade_order.get(x["grade"], 99) if x["grade"] else 100))
         return results
 
@@ -1093,7 +1119,11 @@ class DatabaseManager:
     # === 状态 ===
 
     async def add_status(self, group_id: str, player_id: str, status_name: str, days: int) -> None:
-        """添加状态。从当前时间开始持续 days 天。"""
+        """添加状态。从当前时间开始持续 days 天。
+
+        expire_at 以 UTC 存储（与 score_history / CURRENT_TIMESTAMP 一致），
+        因此所有比较与到期判定都必须用 UTC；调用方负责 commit。
+        """
         if days <= 0:
             return
         from datetime import datetime, timedelta, timezone
@@ -1136,7 +1166,7 @@ class DatabaseManager:
     async def get_statuses_for_players(self, group_id: str, player_ids: List[str]) -> list:
         """批量获取多个玩家的状态。返回 [(player_id, [statuses]), ...]。"""
         from datetime import datetime, timezone
-        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         placeholders = ','.join('?' * len(player_ids))
         query = (
             f"SELECT player_id, status_name, expire_at FROM player_statuses "
@@ -1155,17 +1185,20 @@ class DatabaseManager:
         return [(pid, result_map.get(pid, [])) for pid in player_ids]
 
     def _calc_remaining_days(self, expire_at: str) -> int:
-        """计算剩余天数。"""
-        from datetime import datetime
-        exp = datetime.strptime(expire_at, "%Y-%m-%d %H:%M:%S")
-        now = datetime.now(BEIJING_TZ)
-        delta = exp - now
-        return max(0, (delta.days + (delta.seconds > 0)))
+        """把 expire_at（UTC 字符串）换算为剩余天数，不足一天算一天。
+
+        两端必须同时区：expire_at 按 UTC 解析，当前时间也取 UTC。
+        若这里用北京时间相减会因 naive 与 aware 混用直接抛 TypeError（批量查询曾因此崩掉）。
+        """
+        from datetime import datetime, timezone
+        exp = datetime.strptime(expire_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        delta = exp - datetime.now(timezone.utc)
+        return max(0, delta.days + (1 if delta.seconds > 0 else 0))
 
     async def get_player_statuses(self, group_id: str, player_id: str) -> list:
         """获取玩家未过期的状态列表。返回 [{"status_name": str, "expire_at": str, "remaining_days": int}, ...]"""
         from datetime import datetime, timezone
-        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         async with self._db.execute(
             "SELECT status_name, expire_at FROM player_statuses "
             "WHERE group_id = ? AND player_id = ? AND expire_at > ? "
@@ -1173,28 +1206,29 @@ class DatabaseManager:
             (group_id, player_id, now)
         ) as cursor:
             rows = await cursor.fetchall()
-            result = []
-            now_dt = datetime.now(timezone.utc)
-            for r in rows:
-                expire_dt = datetime.strptime(r[1], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                delta = expire_dt - now_dt
-                # 按日历天计算：向上取整（不足一天算一天）
-                remaining = max(0, delta.days + (1 if delta.seconds > 0 else 0))
-                result.append({
-                    "status_name": r[0],
-                    "expire_at": r[1],
-                    "remaining_days": remaining,
-                })
-            return result
+        return [
+            {
+                "status_name": r[0],
+                "expire_at": r[1],
+                "remaining_days": self._calc_remaining_days(r[1]),
+            }
+            for r in rows
+        ]
 
     async def purge_expired_statuses(self) -> int:
-        """清理所有过期状态记录。返回删除数量。"""
+        """清理所有过期状态记录。返回删除数量。
+
+        由调度器的清理循环直接调用（没有外层事务），因此这里自行 commit——
+        否则删除只存在于当前未提交事务中，连接关闭即丢失，还会被任何一次
+        rollback 连带撤销。
+        """
         from datetime import datetime, timezone
-        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         cursor = await self._db.execute(
             "DELETE FROM player_statuses WHERE expire_at <= ?",
             (now,)
         )
+        await self._db.commit()
         return cursor.rowcount
 
     async def close(self):

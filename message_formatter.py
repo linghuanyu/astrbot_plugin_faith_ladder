@@ -224,20 +224,6 @@ def format_gift_request(
     )
 
 
-def format_whitelist(entries: List[dict]) -> str:
-    """Format whitelist display."""
-    if not entries:
-        return "诸神列表为空。"
-
-    lines = ["═══ 诸神列表 ═══", ""]
-    for i, entry in enumerate(entries, 1):
-        faith = entry.get("faith")
-        faith_str = f" <{faith}>" if faith else ""
-        lines.append(f"{i}. {entry['entry_id']}{faith_str}")
-    lines.append(f"\n─── 共 {len(entries)} 位 ───")
-    return "\n".join(lines)
-
-
 def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]) -> str:
     """Format whitelist display: WebUI 配置项 + 运行时用指令添加的条目。"""
     if not config_entries and not db_entries:
@@ -309,6 +295,7 @@ def format_inventory(player_name: str, items: list) -> str:
 
 
 def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config=None):
+    """渲染祷词触发回复。delta 仅用于展示；是否真实改分由 config 的 prayer_score_enabled 决定，关闭时追加「不影响实际分数」提示。"""
     import random
     from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
     from astrbot_plugin_faith_ladder.prayer_messages import (

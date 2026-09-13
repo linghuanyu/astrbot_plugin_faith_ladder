@@ -8,7 +8,6 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_leaderboard,
     format_player_card,
     format_help,
-    format_whitelist,
     format_score_result,
 )
 
@@ -170,26 +169,6 @@ class TestFormatHelp:
         assert "文明" in result
         assert "沉沦" in result
         assert "混沌" in result
-
-
-class TestFormatWhitelist:
-    """Tests for whitelist formatting."""
-
-    def test_empty_whitelist(self):
-        """Test formatting empty whitelist."""
-        result = format_whitelist([])
-        assert result == "诸神列表为空。"
-
-    def test_whitelist_with_entries(self):
-        """Test formatting whitelist with entries."""
-        entries = [
-            {"entry_type": "user", "entry_id": "u123", "added_by": "admin", "added_at": "2024-01-01"},
-            {"entry_type": "user", "entry_id": "u456", "added_by": "admin", "added_at": "2024-01-02"},
-        ]
-        result = format_whitelist(entries)
-        assert "u123" in result
-        assert "u456" in result
-        assert "共 2 位" in result
 
 
 class TestFormatScoreResult:

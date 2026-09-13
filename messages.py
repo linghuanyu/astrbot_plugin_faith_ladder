@@ -18,5 +18,8 @@ BATCH_ALL_SUCCESS = "结算完成，{count} 人积分已变更。"
 BATCH_PARTIAL_SKIP = "结算完成：{success} 人积分已变更，{skip} 人不在命册，已略过。"
 
 # ========== 冷却消息 ==========
+# 统一放在这里，避免同一条提示在不同指令里各写一遍、改一处漏一处
 COOLDOWN_MSG = "排行榜冷却中，请 {seconds} 秒后再试。"
 QUERY_COOLDOWN_MSG = "查询冷却中，请 {seconds} 秒后再试。"
+BATCH_COOLDOWN_MSG = "批量录入冷却中，请 {seconds} 秒后再试。"
+OATH_COOLDOWN_MSG = "冷却中，请 {seconds} 秒后再试。"

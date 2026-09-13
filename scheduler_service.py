@@ -22,7 +22,13 @@ class SchedulerService:
         cleanup_expired_gifts: Optional[Callable[..., Awaitable[int]]] = None,
         notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
         on_gift_refunded: Optional[Callable[[str, str], None]] = None,
+        backup_db: Optional[Callable[[Path], Awaitable[None]]] = None,
     ):
+        """注入各类回调与配置读取器；真正的定时任务在 start() 中创建。
+
+        backup_db(dest) 负责产出数据库备份，由 DB 层实现（VACUUM INTO 一致性快照），
+        调度器只负责取名与清理过期文件。
+        """
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
         self._purge_score_history = purge_score_history
@@ -30,6 +36,7 @@ class SchedulerService:
         self._cleanup_expired_gifts = cleanup_expired_gifts
         self._notify_gift_timeout = notify_gift_timeout
         self._on_gift_refunded = on_gift_refunded
+        self._backup_db = backup_db
         self._get_config = get_config
         self._backup_task: Optional[asyncio.Task] = None
         self._gift_cleanup_task: Optional[asyncio.Task] = None
@@ -55,9 +62,21 @@ class SchedulerService:
         logger.info("SchedulerService: tasks stopped")
 
     async def _backup_loop(self):
-        """Loop that runs backup check and score history purge daily."""
+        """每天执行一次：备份 + 清理积分历史 + 清理过期状态。
+
+        循环每 10 分钟醒来一次，但只有「北京日期」变化时才真正执行，
+        因此启动后会立即做一次、之后每天一次。
+        此前是无条件每小时执行一次，等于每天产生 24 份备份并把清理逻辑跑 24 遍。
+        """
+        from astrbot_plugin_faith_ladder.db_manager import BEIJING_TZ
+        last_run_date = None
         while self._running:
             try:
+                today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+                if last_run_date == today:
+                    await asyncio.sleep(600)
+                    continue
+
                 config = self._get_config()
                 if config.get("auto_backup_enabled", True):
                     await self._do_backup(config)
@@ -81,14 +100,16 @@ class SchedulerService:
                     except Exception as e:
                         logger.error(f"Status purge error: {e}")
 
-                # Run once per day (check every hour)
-                await asyncio.sleep(3600)
+                # 执行成功才记日期：中途失败会在下个周期（10 分钟后）重试，
+                # 而不是把当天的备份与清理整个跳过
+                last_run_date = today
+                await asyncio.sleep(600)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"SchedulerService backup error: {e}")
-                await asyncio.sleep(3600)
+                await asyncio.sleep(600)
 
     async def _gift_cleanup_loop(self):
         """Loop that cleans up expired pending gifts every 60 seconds."""
@@ -114,36 +135,41 @@ class SchedulerService:
                 await asyncio.sleep(60)
 
     async def _do_backup(self, config: dict):
-        """Create backup and clean up old ones using non-blocking I/O."""
-        retention_days = config.get("backup_retention_days", 7)
-        db_path = self.data_dir / "ladder.db"
+        """生成备份并清理过期备份。
 
-        if not db_path.exists():
+        备份内容交给 backup_db 回调（DB 层用 VACUUM INTO 出一致性快照），
+        这里只负责命名、记录日志与按保留天数清理旧文件。
+        """
+        retention_days = config.get("backup_retention_days", 7)
+        if not self._backup_db:
             return
 
-        # Create backup (non-blocking)
         backup_dir = self.backup_dir
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(backup_dir.mkdir, parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = backup_dir / f"ladder_backup_{timestamp}.db"
 
-        import shutil
-        await asyncio.to_thread(shutil.copy2, db_path, backup_path)
-        logger.info(f"Backup created: {backup_path}")
+        try:
+            await self._backup_db(backup_path)
+            logger.info(f"Backup created: {backup_path}")
+        except Exception as e:
+            # 备份失败不应影响其它定时任务，也不该留下半成品文件
+            logger.error(f"Backup failed: {e}")
+            if backup_path.exists():
+                try:
+                    backup_path.unlink()
+                except OSError:
+                    pass
 
         # Clean old backups (non-blocking)
         cutoff = datetime.now().timestamp() - (retention_days * 86400)
 
         def _remove_old():
+            """删除超过保留期的备份文件。作为线程函数传给 asyncio.to_thread，避免阻塞事件循环。"""
             for f in backup_dir.glob("ladder_backup_*.db"):
                 if f.stat().st_mtime < cutoff:
                     f.unlink()
                     logger.info(f"Old backup removed: {f}")
 
         await asyncio.to_thread(_remove_old)
-
-    def should_trigger_now(self, push_time: str) -> bool:
-        """Check if current time matches push_time. Useful for testing."""
-        now = datetime.now()
-        return now.strftime("%H:%M") == push_time

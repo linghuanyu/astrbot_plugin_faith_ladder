@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from astrbot_plugin_faith_ladder.messages import PLAYER_NOT_FOUND, QUERY_COOLDOWN_MSG
+
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
@@ -83,7 +85,7 @@ class QueryCommandsMixin:
         cd_key = f"{user_id}:query"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
-            yield event.plain_result(f"查询冷却中，请 {remaining:.0f} 秒后再试。")
+            yield event.plain_result(QUERY_COOLDOWN_MSG.format(seconds=f"{remaining:.0f}"))
             return
         self.cooldown_manager.set_cooldown(cd_key)
 
@@ -98,9 +100,9 @@ class QueryCommandsMixin:
                 init_pilgrimage=init_pilgrimage
             )
             if not cards_text and not_found:
-                # 已知缺陷（本次按约定未修，仅报告）：get_message 在当前代码库中不存在，
-                # 走到这一分支会抛 NameError。见交付说明。
-                yield event.plain_result("".join(get_message("PLAYER_NOT_FOUND", name=n) for n in not_found))
+                yield event.plain_result(
+                    "".join(PLAYER_NOT_FOUND.format(name=n) for n in not_found)
+                )
                 return
             result_parts = []
             if cards_text:
@@ -117,8 +119,7 @@ class QueryCommandsMixin:
             init_pilgrimage=init_pilgrimage
         )
         if not text:
-            # 同上：get_message 不存在，此分支会抛 NameError
-            yield event.plain_result(get_message("PLAYER_NOT_FOUND", name=target_name))
+            yield event.plain_result(PLAYER_NOT_FOUND.format(name=target_name))
             return
         yield event.plain_result(text)
 
@@ -152,13 +153,14 @@ class QueryCommandsMixin:
             if self.config.get("inventory_easter_egg_enabled", False):
                 import random
                 prob = self.config.get("inventory_easter_egg_probability", 0.05)
-                if random.random() < prob:
-                    ee_messages = self.config.get("inventory_easter_egg_messages", [
-                        "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
-                        "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
-                        "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
-                        "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～",
-                    ])
+                ee_messages = self.config.get("inventory_easter_egg_messages", [
+                    "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
+                    "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
+                    "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
+                    "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～",
+                ])
+                # 配置成空列表时 random.choice 会抛 IndexError，此时跳过彩蛋
+                if ee_messages and random.random() < prob:
                     yield event.plain_result(random.choice(ee_messages))
                     return
 

@@ -3,7 +3,7 @@
 """
 
 import re
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
 
@@ -14,6 +14,40 @@ _GRADE_RE = re.compile(r'^(.*)[（(]([^)）]*)[)）]$')
 
 # 数量标记：*数字 或 ×数字（× 是本插件展示格式用的乘号，便于直接复制粘贴）
 _QTY_RE = re.compile(r'[*×](\d+)')
+
+# ── 等级在「解析侧」与「存储侧」之间的映射 ──
+#
+# 解析侧（parse_item_full_name）是三态：
+#   None → 名字里根本没有等级括号，如 "铁剑"
+#   ""   → 有括号但不是有效等级，如 "淬锋砺剑（D）"
+#   "C"  → 有效等级
+#
+# 存储侧要求 NOT NULL：player_items 的主键包含 grade，而 SQLite 中 NULL 彼此不相等
+# （UNIQUE 约束对 NULL 不生效），若用 NULL 表示"无等级"，同名无等级道具会被重复
+# 插入而不是合并进同一行。因此把三态压缩成两个哨兵字符串。
+GRADE_STORAGE_NONE = ""           # 无等级括号
+GRADE_STORAGE_NONSTANDARD = "-"   # 有括号但非标准等级
+
+
+def grade_to_storage(grade: Optional[str]) -> str:
+    """解析侧的三态等级 → 数据库存储值（NOT NULL）。None → ""；"" → "-"。"""
+    if grade is None:
+        return GRADE_STORAGE_NONE
+    if grade == "":
+        return GRADE_STORAGE_NONSTANDARD
+    return grade
+
+
+def grade_from_storage(stored: Optional[str]) -> Optional[str]:
+    """数据库存储值 → 解析侧的三态等级，供展示与比较使用。
+
+    读出的等级统一回到 None / "" / "C" 三态，调用方无需关心存储哨兵写法。
+    """
+    if stored is None or stored == GRADE_STORAGE_NONE:
+        return None
+    if stored == GRADE_STORAGE_NONSTANDARD:
+        return ""
+    return stored
 
 
 def extract_item_quantity(text: str) -> Tuple[str, Optional[int]]:
@@ -36,6 +70,50 @@ def extract_item_quantity(text: str) -> Tuple[str, Optional[int]]:
         return text.strip(), None
     rest = (text[:m.start()] + text[m.end():]).strip()
     return rest, int(m.group(1))
+
+
+def parse_item_args(text: str) -> List[Tuple[str, int]]:
+    """解析用户输入的道具参数，返回 [(道具名（可能含等级）, 数量), ...]。
+
+    空格分隔多个道具，数量有两种写法且可混用：
+    - 紧跟名字（空格分隔）: '铁剑 2 生命药水 3'、'共生噬刃（C级） 2'
+    - 用 * 或 × 标注，位置不限: '铁剑*2'、'测试（b）*10'、'测试*10（b）'
+
+    数量必须为正整数，否则抛 ValueError —— 负数量在 SQL 里会让"扣除"变成"增加"，
+    等于凭空造道具，必须在入口拦住。
+
+    放在本模块（而非 main.py）是为了让它可测试：main.py 依赖 astrbot，
+    测试环境无法导入。
+    """
+    items: List[Tuple[str, int]] = []
+    parts = text.strip().split()
+    i = 0
+    while i < len(parts):
+        name, qty = extract_item_quantity(parts[i])
+        if qty is not None:
+            if not name:
+                raise ValueError("道具名不能为空")
+            if qty <= 0:
+                raise ValueError(f"「{name}」的数量必须为正整数")
+            items.append((name, qty))
+            i += 1
+            continue
+        # 没有 *数量 标记：看下一个 token 是否是数字（数量）
+        if i + 1 < len(parts):
+            try:
+                next_qty = int(parts[i + 1])
+            except ValueError:
+                pass
+            else:
+                if next_qty <= 0:
+                    raise ValueError(f"「{parts[i]}」的数量必须为正整数")
+                items.append((parts[i], next_qty))
+                i += 2
+                continue
+        # 下一个不是数字，当前作为独立道具（数量 1）
+        items.append((parts[i], 1))
+        i += 1
+    return items
 
 
 def parse_item_full_name(full_name: str) -> Tuple[str, Optional[str]]:
