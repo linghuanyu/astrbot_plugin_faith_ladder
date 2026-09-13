@@ -108,13 +108,16 @@ class QQAdminHandler:
 
         text = event.message_str.strip()
         duration = 60
-        # 只从 Plain 文本段提取秒数，避免 @ 段中的数字被误识别
+        # 取**第一个**纯数字词作为时长，且只看 Plain 段（避免 @ 段里的 qq 号被误识别）。
+        # 此前内层 break 只跳出内层循环，后面出现的数字会覆盖前面的，
+        # 例如「禁言 60 @某人 我记得 30 秒」会被当成 30 秒。
         for seg in event.get_messages():
-            if isinstance(seg, Plain) and seg.text:
-                for part in seg.text.split():
-                    if part.isdigit():
-                        duration = int(part)
-                        break
+            if not (isinstance(seg, Plain) and seg.text):
+                continue
+            first_number = next((p for p in seg.text.split() if p.isdigit()), None)
+            if first_number is not None:
+                duration = int(first_number)
+                break
 
         errors = []
         success_targets = []

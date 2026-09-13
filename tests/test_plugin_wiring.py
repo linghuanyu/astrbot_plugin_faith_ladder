@@ -471,3 +471,107 @@ class TestCheckPlayerPermissionGate:
             assert any("已绑定 555" in r for r in replies)
         finally:
             await plugin.terminate()
+
+
+class TestBanDurationParsing:
+    """禁言时长取**第一个**数字词。
+
+    此前内层 break 只跳出内层循环（外层继续扫后续 Plain 段），
+    「禁言 60 @某人 我记得 30 秒」会被解析成 30 秒。
+    """
+
+    class _Plain:
+        """本地段类型：不依赖 astrbot 桩的类身份。
+
+        stub fixture 是函数作用域，每个用例都会重建 astrbot 模块（新的 Plain 类），
+        而 qq_admin_handle 已被缓存、持有旧的 Plain —— 直接 isinstance 会判假、
+        数字段被整体跳过，测试就会"因为默认值恰好等于期望值"而虚假通过。
+        """
+
+        def __init__(self, text):
+            self.text = text
+
+    class _At:
+        def __init__(self, qq):
+            self.qq = qq
+
+    class _Bot:
+        def __init__(self):
+            self.bans = []
+
+        async def set_group_ban(self, group_id=None, user_id=None, duration=None):
+            self.bans.append((user_id, duration))
+
+    class _FakeEvent:
+        def __init__(self, segments, bot):
+            self._segments = segments
+            self.bot = bot
+            self.stopped = False
+            self.message_str = ""
+
+        def get_messages(self):
+            return self._segments
+
+        def get_self_id(self):
+            return "1"
+
+        def get_sender_id(self):
+            return "555"
+
+        def get_group_id(self):
+            return "1"
+
+        def plain_result(self, text):
+            return text
+
+        def stop_event(self):
+            self.stopped = True
+
+    @staticmethod
+    def _handler():
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def allow(uid):
+            return True
+
+        def allow_admin(event):
+            return True
+
+        handler = QQAdminHandler(check_perm_fn=allow, check_admin_fn=allow_admin)
+
+        async def member_info(event, uid):
+            return {"role": "member", "nickname": f"用户{uid}"}
+
+        handler._get_member_info = member_info
+        return handler
+
+    async def _run(self, monkeypatch, segments):
+        from astrbot_plugin_faith_ladder import qq_admin_handle
+
+        # 段类型与 @ 目标解析都替换成本地实现，避免受 stub 类身份影响
+        monkeypatch.setattr(qq_admin_handle, "Plain", self._Plain)
+        monkeypatch.setattr(qq_admin_handle, "get_ats", lambda event: ["777"])
+        bot = self._Bot()
+        event = self._FakeEvent(segments, bot)
+        _ = [r async for r in self._handler().handle_ban(event)]
+        assert event.stopped is True
+        return bot
+
+    async def test_first_number_wins_over_later_digits(self, stubbed_astrbot, monkeypatch):
+        bot = await self._run(
+            monkeypatch,
+            [self._Plain("禁言 60 "), self._At(qq="777"), self._Plain("我记得 30 秒")],
+        )
+        assert bot.bans == [(777, 60)]  # user_id 被 int() 转换
+
+    async def test_number_found_when_first_segment_has_none(self, stubbed_astrbot, monkeypatch):
+        bot = await self._run(
+            monkeypatch, [self._Plain("禁言 "), self._At(qq="777"), self._Plain("30 秒")]
+        )
+        assert bot.bans == [(777, 30)]
+
+    async def test_default_is_60_when_no_digits(self, stubbed_astrbot, monkeypatch):
+        bot = await self._run(
+            monkeypatch, [self._Plain("禁言 "), self._At(qq="777"), self._Plain("拜托了")]
+        )
+        assert bot.bans == [(777, 60)]

@@ -113,7 +113,11 @@ class AdminCommandsMixin:
             if not target_player:
                 yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
                 return
-            await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
+            updated = await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
+            if not updated:
+                # 玩家在查询与更新之间被删除时会走到这里，不能报成功
+                yield event.plain_result(f"清除 {target_name} 的弃誓者标记失败：该玩家已不存在。")
+                return
             self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已清除 {target_name} 的弃誓者标记。")
             return
@@ -131,12 +135,15 @@ class AdminCommandsMixin:
                 return
             init_ladder = self.config.get("init_ladder_score", 1000)
             init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
-            await self.db_manager.update_scores(
+            updated = await self.db_manager.update_scores(
                 group_id, target_player.player_id,
                 -target_player.ladder_score + init_ladder,
                 -target_player.pilgrimage_score + init_pilgrimage,
                 user_id, "管理员重置"
             )
+            if not updated:
+                yield event.plain_result(f"重置 {target_name} 失败：该玩家已不存在。")
+                return
             self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已重置玩家 {target_name} 的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")
 

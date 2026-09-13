@@ -190,3 +190,21 @@ class TestFormatScoreResult:
         assert "-20" in result
         assert "70" in result
         assert "80" in result
+
+
+class TestFormatHelpInitScores:
+    """帮助里的"初始之位"必须来自配置。
+
+    此前硬编码 "登神之路 1000 · 觐见之梯 100"，群主改过初始分后，
+    帮助文案与实际重置结果不一致。
+    """
+
+    def test_uses_configured_init_scores(self):
+        text = format_help({"init_ladder_score": 777, "init_pilgrimage_score": 88})
+        assert "登神之路 777" in text
+        assert "觐见之梯 88" in text
+
+    def test_defaults_when_config_missing(self):
+        text = format_help({})
+        assert "登神之路 1000" in text
+        assert "觐见之梯 100" in text

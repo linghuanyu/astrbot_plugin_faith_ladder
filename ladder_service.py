@@ -145,14 +145,17 @@ class LadderService:
             return "", []
 
         # 1. 批量查询玩家（1 次 SQL）
-        players_dict = await self.db.get_players_by_names(group_id, player_names)
-        not_found = [name for name in player_names if name not in players_dict]
+        # 先按顺序去重：重复的名字会产出重复的卡片与重复的"不存在"提示
+        seen = set()
+        unique_names = [n for n in player_names if not (n in seen or seen.add(n))]
+        players_dict = await self.db.get_players_by_names(group_id, unique_names)
+        not_found = [name for name in unique_names if name not in players_dict]
 
         if not players_dict:
             return "", not_found
 
         # 按原始顺序获取玩家列表
-        players = [players_dict[name] for name in player_names if name in players_dict]
+        players = [players_dict[name] for name in unique_names if name in players_dict]
 
         # 2. 一次性获取全组玩家，客户端派生排名（1 次 SQL）
         all_players = await self.db.get_all_players_in_group(group_id)

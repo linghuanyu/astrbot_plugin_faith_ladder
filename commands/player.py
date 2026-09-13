@@ -435,9 +435,12 @@ class PlayerCommandsMixin:
             )
             return
 
-        self.cooldown_manager.set_cooldown(cd_key)
         target_name, faith_name = parts
+        # 冷却只在实际执行成功后才占用：服务层可能因"玩家不存在/命途非法"而失败，
+        # 那种情况下不该让用户白白等 600 秒
         success, message = await self.ladder_service.set_faith(group_id, target_name, faith_name)
+        if success:
+            self.cooldown_manager.set_cooldown(cd_key)
         yield event.plain_result(message)
 
     async def _abandon_oath_impl(self, event: "AstrMessageEvent"):
@@ -470,10 +473,11 @@ class PlayerCommandsMixin:
             )
             return
 
-        self.cooldown_manager.set_cooldown(cd_key)
         target_name = parts[0]
         new_faith = parts[1] if len(parts) > 1 else None
         success, message = await self.ladder_service.abandon_oath(
             group_id, target_name, new_faith, dict(self.config)
         )
+        if success:  # 同上：失败不该消耗冷却
+            self.cooldown_manager.set_cooldown(cd_key)
         yield event.plain_result(message)

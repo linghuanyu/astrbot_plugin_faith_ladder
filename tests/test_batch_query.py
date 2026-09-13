@@ -93,3 +93,19 @@ class TestBatchQueryService:
         assert "Alice" in cards
         assert "Bob" in cards
         assert not_found == []
+
+    async def test_duplicate_names_are_deduplicated(self, db_manager):
+        """重复名字不应产出重复卡片，也不应在 not_found 里重复出现。
+
+        `批量查询 张三 张三 张三` 曾会渲染三张相同卡片；名字写错时
+        "未找到" 也会重复三遍。
+        """
+        from astrbot_plugin_faith_ladder.ladder_service import LadderService
+        service = LadderService(db_manager)
+        await db_manager.upsert_player("g1", "u1", "Alice")
+        cards_once, _ = await service.get_player_cards_by_names("g1", ["Alice"])
+        cards, not_found = await service.get_player_cards_by_names(
+            "g1", ["Alice", "Alice", "查无此人", "查无此人"]
+        )
+        assert cards == cards_once
+        assert not_found == ["查无此人"]

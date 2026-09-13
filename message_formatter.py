@@ -148,6 +148,8 @@ def format_help(config: dict) -> str:
     cmd_admin = config.get("cmd_admin", "天梯榜管理")
     cmd_wl = config.get("cmd_whitelist", "白名单")
     cmd_help = config.get("cmd_help", "天梯榜帮助")
+    init_ladder = config.get("init_ladder_score", 1000)
+    init_pilgrimage = config.get("init_pilgrimage_score", 100)
 
     ladder_cd = config.get("ladder_cooldown_seconds", 600)
     query_cd = config.get("query_cooldown_seconds", 600)
@@ -218,7 +220,7 @@ def format_help(config: dict) -> str:
         f"同步白名单 — 同步指定群成员到诸神列表\n"
         f"{cmd_admin} 重置/删除/改名/清空/清除弃誓\n"
         f"\n"
-        f"初始之位：登神之路 1000 · 觐见之梯 100\n"
+        f"初始之位：登神之路 {init_ladder} · 觐见之梯 {init_pilgrimage}\n"
         f"愿神明不要愚弄你。\n"
         f"{cmd_help} - 显示本帮助"
     )

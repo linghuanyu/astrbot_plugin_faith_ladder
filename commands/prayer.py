@@ -181,7 +181,11 @@ class PrayerCommandsMixin:
         event.stop_event()
 
     def _build_prayer_cache(self):
-        """构建祷词缓存：{归一化祷词: 具体信仰名}。启动时和配置变更时调用。"""
+        """构建祷词缓存：{归一化祷词: 具体信仰名}。只在插件初始化时调用。
+
+        AstrBot 没有插件内的配置变更钩子，WebUI 改完祷词配置后需重载插件
+        （或重启）才会生效；不要在这里假设存在热更新。
+        """
         self._prayer_cache = {}
         # 祷词配置按具体信仰（faith）存储，16个信仰
         for faith in VALID_FAITHS:

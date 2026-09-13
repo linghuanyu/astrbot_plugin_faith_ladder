@@ -868,3 +868,169 @@ class TestAdminStringTolerance:
         svc = PermissionService(db, {"admin_ids": [123456, "789"], "whitelist": []})
         assert svc.is_admin("123456") is True
         assert svc.is_admin("789") is True
+
+
+class _OathHost:
+    """驱动 PlayerCommandsMixin 立誓/弃誓实现体的最小宿主。"""
+
+    class _Event:
+        def __init__(self, text, sender="10001"):
+            self._text = text
+            self._sender = sender
+
+        def get_sender_id(self):
+            return self._sender
+
+        def plain_result(self, text):
+            return text
+
+    class _Service:
+        def __init__(self, ok):
+            self.ok = ok
+            self.calls = []
+
+        async def set_faith(self, *args):
+            self.calls.append(args)
+            return self.ok, ("成功" if self.ok else "本宇宙未找到玩家")
+
+        async def abandon_oath(self, *args):
+            self.calls.append(args)
+            return self.ok, ("成功" if self.ok else "本宇宙未找到玩家")
+
+    def __init__(self, ok):
+        from astrbot_plugin_faith_ladder.cooldown import CooldownManager
+
+        self.ladder_service = self._Service(ok)
+        self.cooldown_manager = CooldownManager()
+        self.config = {}
+
+    async def _check_perm(self, event):
+        return True
+
+    def _get_group_id(self, event):
+        return "g1"
+
+    def _get_args(self, event, cmd):
+        return event._text
+
+
+class TestOathCooldownOrdering:
+    """立誓/弃誓失败时不消耗冷却。
+
+    服务层可能因"玩家不存在/命途非法"而失败，此时占用 600 秒共享冷却
+    等于"什么都没干却被罚站"。
+    """
+
+    async def _run(self, impl, text, ok):
+        from astrbot_plugin_faith_ladder.commands.player import PlayerCommandsMixin
+
+        host = _OathHost(ok)
+        event = _OathHost._Event(text)
+        replies = [r async for r in getattr(PlayerCommandsMixin, impl)(host, event)]
+        return host, replies
+
+    async def test_take_oath_failure_does_not_start_cooldown(self):
+        host, replies = await self._run("_take_oath_impl", "张三 存在", ok=False)
+        assert host.ladder_service.calls, "服务层应被调用"
+        assert host.cooldown_manager.check_cooldown("10001:oath", 600) is True
+
+    async def test_take_oath_success_starts_cooldown(self):
+        host, _ = await self._run("_take_oath_impl", "张三 存在", ok=True)
+        assert host.cooldown_manager.check_cooldown("10001:oath", 600) is False
+
+    async def test_abandon_oath_failure_does_not_start_cooldown(self):
+        host, _ = await self._run("_abandon_oath_impl", "张三", ok=False)
+        assert host.cooldown_manager.check_cooldown("10001:oath", 600) is True
+
+    async def test_abandon_oath_success_starts_cooldown(self):
+        host, _ = await self._run("_abandon_oath_impl", "张三 文明", ok=True)
+        assert host.cooldown_manager.check_cooldown("10001:oath", 600) is False
+
+
+class _AdminHost:
+    """驱动 AdminCommandsMixin 管理动作的最小宿主。"""
+
+    class _Event:
+        def __init__(self, text, sender="10001"):
+            self._text = text
+            self._sender = sender
+
+        def get_sender_id(self):
+            return self._sender
+
+        def plain_result(self, text):
+            return text
+
+    class _Service:
+        def invalidate_leaderboard_cache(self, group_id):
+            pass
+
+    class _DB:
+        def __init__(self, player, update_result, clear_result):
+            self.player = player
+            self.update_result = update_result
+            self.clear_result = clear_result
+            self.update_calls = []
+
+        async def get_player_by_name(self, group_id, name):
+            return self.player
+
+        async def update_scores(self, *args, **kwargs):
+            self.update_calls.append(args)
+            return self.update_result
+
+        async def clear_oathbreaker(self, group_id, player_id):
+            return self.clear_result
+
+    def __init__(self, player, update_result=None, clear_result=None):
+        self.db_manager = self._DB(player, update_result, clear_result)
+        self.ladder_service = self._Service()
+        self.config = {}
+
+    def _get_group_id(self, event):
+        return "g1"
+
+    def _get_args(self, event, cmd):
+        return event._text
+
+    def _is_plugin_admin(self, event):
+        return True
+
+    async def _check_perm(self, event):
+        return True
+
+
+class TestAdminActionsReportFailure:
+    """玩家在"查到"与"写入"之间消失时，管理指令必须报失败而不是报成功。"""
+
+    def _player(self):
+        from astrbot_plugin_faith_ladder.models import Player
+
+        return Player(player_id="p1", group_id="g1", player_name="张三")
+
+    async def _run(self, text, **kwargs):
+        from astrbot_plugin_faith_ladder.commands.admin import AdminCommandsMixin
+
+        host = _AdminHost(self._player(), **kwargs)
+        event = _AdminHost._Event(text)
+        replies = [r async for r in AdminCommandsMixin._admin_impl(host, event)]
+        return host, replies
+
+    async def test_reset_reports_failure(self):
+        host, replies = await self._run("重置 张三", update_result=None)
+        assert len(host.db_manager.update_calls) == 1
+        assert any("失败" in r for r in replies)
+
+    async def test_reset_reports_success(self):
+        player = self._player()
+        host, replies = await self._run("重置 张三", update_result=player)
+        assert any("已重置" in r for r in replies)
+
+    async def test_clearoath_reports_failure(self):
+        host, replies = await self._run("清除弃誓 张三", clear_result=None)
+        assert any("失败" in r for r in replies)
+
+    async def test_clearoath_reports_success(self):
+        player = self._player()
+        host, replies = await self._run("清除弃誓 张三", clear_result=player)
+        assert any("已清除" in r for r in replies)
