@@ -261,6 +261,28 @@ class TestFormatPrayerTrigger:
         assert "本次结果暂时不会影响实际分数" in msg
 
 
+class TestPrayerScoreSwitch:
+    """祷词是否真实改分的开关（prayer_score_enabled）对回复文案的影响。"""
+
+    def test_disclaimer_kept_when_switch_off(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
+        msg = format_prayer_trigger("Alice", "欺诈", "欺诈", 2, {"prayer_score_enabled": False})
+        assert "本次结果暂时不会影响实际分数" in msg
+
+    def test_disclaimer_removed_when_switch_on(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
+        msg = format_prayer_trigger("Alice", "欺诈", "欺诈", 2, {"prayer_score_enabled": True})
+        assert "本次结果暂时不会影响实际分数" not in msg
+        assert "+2" in msg
+
+    def test_disclaimer_kept_for_mismatch_when_switch_on(self):
+        """渎神分支同样要按开关去掉免责声明。"""
+        from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
+        msg = format_prayer_trigger("Alice", "欺诈", "秩序", -2, {"prayer_score_enabled": True})
+        assert "本次结果暂时不会影响实际分数" not in msg
+        assert "-2" in msg
+
+
 class TestPrayerTriggerEdgeCases:
     """Tests for prayer trigger edge cases."""
 

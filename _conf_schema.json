@@ -122,21 +122,6 @@
     "type": "bool",
     "default": true
   },
-  "output_mode": {
-    "description": "默认输出模式：text（文本）或 image（图片）。可被群级设置覆盖。",
-    "type": "string",
-    "default": "text"
-  },
-  "image_quality": {
-    "description": "图片质量（1-100，仅JPEG有效）",
-    "type": "int",
-    "default": 90
-  },
-  "image_format": {
-    "description": "图片格式：jpeg 或 png",
-    "type": "string",
-    "default": "jpeg"
-  },
   "score_history_retention_days": {
     "description": "积分历史记录保留天数（超过自动清理）",
     "type": "int",
@@ -254,6 +239,11 @@
     "items": {
       "type": "string"
     }
+  },
+  "prayer_score_enabled": {
+    "description": "祷词是否真实改动觐见分。关闭时（默认）只展示随机结果并提示不影响实际分数；开启后按匹配 -2~+2、渎神 -2~0 真实计入觐见分",
+    "type": "bool",
+    "default": false
   },
   "prayer_text_诞育": {
     "description": "诞育信仰祷词列表（8字短语，用户发送后触发）",

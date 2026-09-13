@@ -21,6 +21,7 @@ class SchedulerService:
         purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
         cleanup_expired_gifts: Optional[Callable[..., Awaitable[int]]] = None,
         notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
+        on_gift_refunded: Optional[Callable[[str, str], None]] = None,
     ):
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
@@ -28,6 +29,7 @@ class SchedulerService:
         self._purge_expired_statuses = purge_expired_statuses
         self._cleanup_expired_gifts = cleanup_expired_gifts
         self._notify_gift_timeout = notify_gift_timeout
+        self._on_gift_refunded = on_gift_refunded
         self._get_config = get_config
         self._backup_task: Optional[asyncio.Task] = None
         self._gift_cleanup_task: Optional[asyncio.Task] = None
@@ -95,7 +97,8 @@ class SchedulerService:
                 if self._cleanup_expired_gifts:
                     try:
                         refunded = await self._cleanup_expired_gifts(
-                            notify=self._notify_gift_timeout
+                            notify=self._notify_gift_timeout,
+                            on_refunded=self._on_gift_refunded,
                         )
                         if refunded > 0:
                             logger.info(f"Cleaned up {refunded} expired pending gifts")

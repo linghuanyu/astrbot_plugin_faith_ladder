@@ -56,14 +56,6 @@ class QQAdminHandler:
         self._is_admin = check_admin_fn
         self._get_faith = get_faith_fn or (lambda uid: None)
 
-    async def _check_permission(self, event: AiocqhttpMessageEvent) -> bool:
-        """检查用户是否有群管权限（复用白名单系统）"""
-        user_id = str(event.get_sender_id())
-        has_perm = await self._check_perm(user_id)
-        if has_perm:
-            return True
-        return await self._is_admin(event)
-
     async def _get_faith_message(self, event: AiocqhttpMessageEvent, action: str, **kwargs) -> str:
         """获取信仰专属消息。"""
         import random
@@ -128,8 +120,12 @@ class QQAdminHandler:
         success_targets = []
         for uid in targets:
             info = await self._get_member_info(event, uid)
-            role = info.get("role", "member")
             nickname = info.get("card") or info.get("nickname") or str(uid)
+            if not info:
+                # 角色未知时不冒险操作，避免 API 抖动导致群主/管理员被误禁言
+                errors.append(f"{nickname} — 无法获取群成员信息（角色未知），已跳过")
+                continue
+            role = info.get("role", "member")
 
             if role in ("owner", "admin"):
                 label = "群主" if role == "owner" else "管理员"
@@ -212,8 +208,12 @@ class QQAdminHandler:
         success_targets = []
         for uid in targets:
             info = await self._get_member_info(event, uid)
-            role = info.get("role", "member")
             nickname = info.get("card") or info.get("nickname") or str(uid)
+            if not info:
+                # 角色未知时不冒险操作，避免 API 抖动导致群主/管理员被误踢
+                errors.append(f"{nickname} — 无法获取群成员信息（角色未知），已跳过")
+                continue
+            role = info.get("role", "member")
 
             if role in ("owner", "admin"):
                 label = "群主" if role == "owner" else "管理员"

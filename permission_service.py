@@ -153,10 +153,27 @@ class PermissionService:
             return False, f"未找到 {user_id}。"
 
     async def get_whitelist_text(self) -> str:
-        """Get formatted whitelist text showing only WebUI config entries."""
+        """Get formatted whitelist text: WebUI 配置项 + 运行时用指令添加的条目。"""
         from astrbot_plugin_faith_ladder.message_formatter import format_whitelist_combined
         config_entries = self._get_config_whitelist_entries()
-        return format_whitelist_combined(config_entries, [])
+        db_entries = await self._get_db_whitelist_entries()
+        return format_whitelist_combined(config_entries, db_entries)
+
+    async def _get_db_whitelist_entries(self) -> list[dict]:
+        """Get runtime whitelist entries from DB. 仅返回 user 类型（group 类型已废弃）。"""
+        rows = await self.db.get_whitelist_with_faith()
+        result = []
+        for row in rows:
+            if str(row.get("entry_type", "")) != "user":
+                continue
+            result.append({
+                "entry_type": "user",
+                "entry_id": str(row.get("entry_id", "")),
+                "faith": row.get("faith") or None,
+                "note": "",
+                "source": "db",
+            })
+        return result
 
     def _get_config_whitelist_entries(self) -> list[dict]:
         """Get whitelist entries from config. 仅返回 user 类型（group 类型已废弃）。"""

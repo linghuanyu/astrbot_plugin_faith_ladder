@@ -99,11 +99,6 @@ class DatabaseManager:
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE TABLE IF NOT EXISTS group_settings (
-                group_id TEXT PRIMARY KEY,
-                output_mode TEXT DEFAULT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS player_items (
                 group_id TEXT NOT NULL,
                 player_id TEXT NOT NULL,
@@ -429,7 +424,6 @@ class DatabaseManager:
         """移除白名单中已废弃的 group 类型条目。"""
         cursor = await self._db.execute("DELETE FROM whitelist WHERE entry_type = 'group'")
         if cursor.rowcount > 0:
-            from astrbot.api import logger
             logger.info(f"[Migration] 移除 {cursor.rowcount} 条已废弃的 group 白名单")
         await self._db.commit()
 
@@ -440,7 +434,6 @@ class DatabaseManager:
         if "faith" not in columns:
             await self._db.execute("ALTER TABLE whitelist ADD COLUMN faith TEXT DEFAULT NULL")
             await self._db.commit()
-            from astrbot.api import logger
             logger.info("[Migration] Added 'faith' column to whitelist")
 
     async def get_whitelist_faith(self, entry_id: str) -> Optional[str]:
@@ -961,32 +954,6 @@ class DatabaseManager:
             rows = await cursor.fetchall()
             return [r[0] for r in rows]
 
-    # --- Group settings (per-group output mode) ---
-
-    async def get_group_output_mode(self, group_id: str) -> Optional[str]:
-        """Get the output mode override for a group. Returns None if not set (use global default)."""
-        async with self._db.execute(
-            "SELECT output_mode FROM group_settings WHERE group_id = ?",
-            (group_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row and row[0] else None
-
-    async def set_group_output_mode(self, group_id: str, mode: str):
-        """Set the output mode for a group. Pass None or '' to clear (use global default)."""
-        if mode in ("text", "image"):
-            await self._db.execute(
-                "INSERT OR REPLACE INTO group_settings (group_id, output_mode) VALUES (?, ?)",
-                (group_id, mode)
-            )
-        else:
-            # Clear override — fall back to global default
-            await self._db.execute(
-                "DELETE FROM group_settings WHERE group_id = ?",
-                (group_id,)
-            )
-        await self._db.commit()
-
     # --- Score history retention ---
 
     async def purge_old_score_history(self, retention_days: int = 90) -> int:
@@ -1038,8 +1005,14 @@ class DatabaseManager:
             (group_id, player_id, item_name, grade, quantity)
         )
 
-    async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None, grade: str = None) -> bool:
-        """减少道具。quantity=None 时全部删除。grade 不为 None 时精确匹配 grade。返回是否成功找到该道具。"""
+    async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None,
+                          grade: str = None, require_sufficient: bool = False) -> bool:
+        """减少道具。quantity=None 时全部删除。grade 不为 None 时精确匹配 grade。
+
+        require_sufficient=False（默认，保持旧语义）：数量不足时截断到 0，只要该行存在就返回 True。
+        require_sufficient=True：数量不足时不改动数据并返回 False，供并发下"扣到才算成功"的场景使用。
+        返回是否成功扣减（道具不存在时为 False）。
+        """
         if grade is not None:
             where = "group_id = ? AND player_id = ? AND item_name = ? AND grade = ?"
             params = (group_id, player_id, item_name, grade)
@@ -1052,25 +1025,28 @@ class DatabaseManager:
                 f"DELETE FROM player_items WHERE {where}", params
             )
             return cursor.rowcount > 0
+
+        if require_sufficient:
+            # 单条带守卫的原子扣减：并发下只有一个调用能扣到，扣不到的完全不改数据
+            cursor = await self._db.execute(
+                f"UPDATE player_items SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP "
+                f"WHERE {where} AND quantity >= ?",
+                (quantity,) + params + (quantity,)
+            )
         else:
-            async with self._db.execute(
-                f"SELECT quantity FROM player_items WHERE {where}", params
-            ) as cursor:
-                row = await cursor.fetchone()
-            if not row:
-                return False
-            new_qty = row[0] - quantity
-            if new_qty <= 0:
-                await self._db.execute(
-                    f"DELETE FROM player_items WHERE {where}", params
-                )
-            else:
-                await self._db.execute(
-                    f"UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
-                    f"WHERE {where}",
-                    (new_qty,) + params
-                )
-            return True
+            # 单条语句内完成扣减与截断：并发下不会互相覆盖数量，也不会扣成负数
+            cursor = await self._db.execute(
+                f"UPDATE player_items SET quantity = MAX(quantity - ?, 0), updated_at = CURRENT_TIMESTAMP "
+                f"WHERE {where}",
+                (quantity,) + params
+            )
+        if cursor.rowcount <= 0:
+            return False
+        # 扣到 0 的行直接移除，保持与旧行为一致
+        await self._db.execute(
+            f"DELETE FROM player_items WHERE {where} AND quantity <= 0", params
+        )
+        return True
 
     async def clear_items(self, group_id: str, player_id: str, item_name: str = None, grade: str = None) -> int:
         """清除道具。item_name=None → 清空全部；item_name 指定 → 清除该道具；+ grade → 指定等级。返回清除数量。"""
@@ -1244,15 +1220,20 @@ class DatabaseManager:
 
     async def save_pending_gift(self, group_id: str, receiver_id: str,
                                  sender_id: str, sender_name: str,
-                                 receiver_name: str, items_json: str) -> None:
-        """保存待处理赠送记录。"""
-        await self._db.execute(
-            "INSERT OR REPLACE INTO pending_gifts "
-            "(group_id, receiver_id, sender_id, sender_name, receiver_name, items_json) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (group_id, receiver_id, sender_id, sender_name, receiver_name, items_json)
-        )
-        await self._db.commit()
+                                 receiver_name: str, items_json: str) -> bool:
+        """保存待处理赠送记录。若该接收方已有待处理赠送则返回 False（不覆盖已有记录）。"""
+        try:
+            await self._db.execute(
+                "INSERT INTO pending_gifts "
+                "(group_id, receiver_id, sender_id, sender_name, receiver_name, items_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (group_id, receiver_id, sender_id, sender_name, receiver_name, items_json)
+            )
+            await self._db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            await self.rollback()
+            return False
 
     async def get_pending_gift(self, group_id: str, receiver_id: str) -> Optional[dict]:
         """获取待处理赠送记录。返回 dict（含 created_at）或 None。"""
@@ -1273,13 +1254,14 @@ class DatabaseManager:
                 "created_at": row[4],
             }
 
-    async def delete_pending_gift(self, group_id: str, receiver_id: str) -> None:
-        """删除待处理赠送记录。"""
-        await self._db.execute(
+    async def delete_pending_gift(self, group_id: str, receiver_id: str) -> bool:
+        """删除待处理赠送记录。返回是否真的删到了（并发下以此"认领"，只有一方能成功）。"""
+        cursor = await self._db.execute(
             "DELETE FROM pending_gifts WHERE group_id = ? AND receiver_id = ?",
             (group_id, receiver_id)
         )
         await self._db.commit()
+        return cursor.rowcount > 0
 
     async def get_expired_pending_gifts(self, max_age_seconds: int = 240) -> list:
         """获取所有超过 max_age_seconds 秒的待处理赠送记录。"""

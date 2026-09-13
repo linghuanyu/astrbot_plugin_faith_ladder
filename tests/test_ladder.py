@@ -31,24 +31,6 @@ class TestLadderService:
         assert "登神之路" in text
         assert "觐见之梯" in text
 
-    async def test_get_player_card(self, db_manager):
-        """Test getting player card."""
-        service = LadderService(db_manager)
-        await db_manager.upsert_player("g1", "u1", "Alice")
-        await db_manager.set_player_class("g1", "u1", "法师", "存在")
-
-        text = await service.get_player_card_text("g1", "u1")
-        assert text is not None
-        assert "Alice" in text
-        assert "法师" in text
-        assert "存在" in text
-
-    async def test_get_player_card_not_found(self, db_manager):
-        """Test getting player card for non-existent player."""
-        service = LadderService(db_manager)
-        text = await service.get_player_card_text("g1", "u999")
-        assert text is None
-
     async def test_get_player_card_by_name(self, db_manager):
         """Test getting player card by name."""
         service = LadderService(db_manager)

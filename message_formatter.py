@@ -138,7 +138,6 @@ def format_help(config: dict) -> str:
 
     ladder_cd = config.get("ladder_cooldown_seconds", 600)
     query_cd = config.get("query_cooldown_seconds", 600)
-    output_mode = config.get("output_mode", "text")
 
     classes_str = "/".join(VALID_CLASSES)
     faiths_str = "/".join(VALID_PATHS)
@@ -240,20 +239,38 @@ def format_whitelist(entries: List[dict]) -> str:
 
 
 def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]) -> str:
-    """Format whitelist display showing only WebUI config entries."""
-    if not config_entries:
+    """Format whitelist display: WebUI 配置项 + 运行时用指令添加的条目。"""
+    if not config_entries and not db_entries:
         return "诸神列表为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
 
     lines = ["═══ 诸神列表 ═══", ""]
 
-    for i, entry in enumerate(config_entries, 1):
-        note = f" ({entry.get('note', '')})" if entry.get("note") else ""
-        faith = entry.get("faith")
-        faith_str = f" <{faith}>" if faith else ""
-        lines.append(f"  {i}. {entry['entry_id']}{faith_str}{note}")
-    lines.append("")
+    if config_entries:
+        lines.append("── WebUI 配置 ──")
+        lines.append("")
+        for i, entry in enumerate(config_entries, 1):
+            note = f" ({entry.get('note', '')})" if entry.get("note") else ""
+            faith = entry.get("faith")
+            faith_str = f" <{faith}>" if faith else ""
+            lines.append(f"  {i}. {entry['entry_id']}{faith_str}{note}")
+        lines.append("")
 
-    lines.append(f"─── 共 {len(config_entries)} 位 ───")
+    if db_entries:
+        lines.append("── 运行时添加 ──")
+        lines.append("")
+        for i, entry in enumerate(db_entries, 1):
+            faith = entry.get("faith")
+            faith_str = f" <{faith}>" if faith else ""
+            lines.append(f"  {i}. {entry['entry_id']}{faith_str}")
+        lines.append("")
+
+    summary_parts = []
+    if config_entries:
+        summary_parts.append(f"配置: {len(config_entries)}")
+    if db_entries:
+        summary_parts.append(f"运行时: {len(db_entries)}")
+    summary_parts.append(f"共 {len(config_entries) + len(db_entries)} 位")
+    lines.append(f"─── {' | '.join(summary_parts)} ───")
     return "\n".join(lines)
 
 
@@ -334,5 +351,7 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
             result = template.format(**template_vars)
             msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚\n{result}"
 
-    msg += "\n（本次结果暂时不会影响实际分数）"
+    # 开关关闭时（默认）只做氛围互动，明确告知玩家本次不改变实际分数
+    if not (config or {}).get("prayer_score_enabled", False):
+        msg += "\n（本次结果暂时不会影响实际分数）"
     return msg

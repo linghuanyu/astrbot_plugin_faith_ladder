@@ -15,7 +15,6 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_inventory,
 )
 from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name, format_item_display
-from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name, format_item_display
 
 try:
     from astrbot.api import logger
@@ -82,28 +81,6 @@ class LadderService:
         players = await self.db.get_top_players_by_pilgrimage(group_id, limit)
         self._pilgrimage_cache[cache_key] = (players, now)
         return players
-
-    async def get_leaderboard_players(self, group_id: str, limit: int = 10) -> List[Player]:
-        """Get top players for ladder leaderboard (for image rendering)."""
-        return await self.db.get_top_players(group_id, limit)
-
-    async def get_pilgrimage_leaderboard_players(self, group_id: str, limit: int = 10) -> List[Player]:
-        """Get top players for pilgrimage leaderboard (for image rendering)."""
-        return await self.db.get_top_players_by_pilgrimage(group_id, limit)
-
-    async def get_effective_output_mode(self, group_id: str, global_default: str = "text") -> str:
-        """Get effective output mode for a group.
-        Checks DB for per-group override, falls back to global default.
-        """
-        db_mode = await self.db.get_group_output_mode(group_id)
-        return db_mode if db_mode in ("text", "image") else global_default
-
-    async def get_player_card_text(self, group_id: str, player_id: str) -> Optional[str]:
-        """Get formatted player card text. Returns None if player not found."""
-        player = await self.db.get_player(group_id, player_id)
-        if not player:
-            return None
-        return format_player_card(player)
 
     async def get_player_card_by_name(
         self, group_id: str, player_name: str,
@@ -564,41 +541,6 @@ class LadderService:
 
         return success_count, success_details, skipped
 
-    async def take_items(self, group_id: str, player_name: str, items: List[Tuple[str, Optional[int]]]) -> Tuple[bool, str]:
-        """收回道具。items: [(道具名（可能含等级）, 数量或None), ...]。None=全部收回。按 item_name 匹配，不需要等级。"""
-        player = await self.db.get_player_by_name(group_id, player_name)
-        if not player:
-            return False, f"玩家 {player_name} 不存在"
-        success_details = []
-        fail_details = []
-        for raw_name, quantity in items:
-            base_name, grade = parse_item_full_name(raw_name)
-            # 按 item_name 匹配（不要求等级一致），收回实际道具
-            found_items = await self.db.get_player_items(group_id, player.player_id)
-            match = next((i for i in found_items if i["item_name"] == base_name), None)
-            if not match:
-                fail_details.append(f"收回失败：{player_name} 没有道具 {base_name}")
-                continue
-            actual_grade = match["grade"]
-            actual_qty = match["quantity"]
-            await self.db.remove_item(group_id, player.player_id, base_name, quantity, grade=actual_grade)
-            if quantity is None:
-                # 全部收回，显示实际收回数量
-                success_details.append(format_item_display(base_name, actual_grade, actual_qty))
-            else:
-                success_details.append(format_item_display(base_name, actual_grade, quantity))
-        await self.db.commit()
-
-        if not success_details:
-            # 全部失败，只返回失败信息
-            return False, "\n".join(fail_details)
-        elif not fail_details:
-            # 全部成功
-            return True, f"已从 {player_name} 收回: {', '.join(success_details)}"
-        else:
-            # 部分成功部分失败
-            return True, f"已从 {player_name} 收回: {', '.join(success_details)}\n" + "\n".join(fail_details)
-
     # === 储物空间 ===
 
     async def get_inventory_text(self, group_id: str, player_name: str) -> Optional[str]:
@@ -639,7 +581,14 @@ class LadderService:
                 continue
             actual_grade = match["grade"]
             actual_qty = match["quantity"]
-            await self.db.remove_item(group_id, player.player_id, base_name, quantity, grade=actual_grade)
+            if quantity is not None and quantity > actual_qty:
+                fail_details.append(f"收回失败：{player_name} 的 {base_name} 只有 {actual_qty} 个")
+                continue
+            if not await self.db.remove_item(group_id, player.player_id, base_name, quantity,
+                                             grade=actual_grade, require_sufficient=True):
+                # 预读与扣减之间被并发扣走
+                fail_details.append(f"收回失败：{player_name} 的 {base_name} 数量不足（可能刚被其他操作扣走）")
+                continue
             if quantity is None:
                 # 全部收回，显示实际收回数量
                 success_details.append(format_item_display(base_name, actual_grade, actual_qty))
@@ -707,7 +656,10 @@ class LadderService:
             return False, f"没有道具: {base_name}", base_name, input_grade
         if match["quantity"] < quantity:
             return False, f"道具不足：你只有 {match['quantity']} 个 {format_item_display(base_name, match['grade'], match['quantity'])}", base_name, input_grade
-        await self.db.remove_item(group_id, player_id, base_name, quantity, grade=match["grade"])
+        if not await self.db.remove_item(group_id, player_id, base_name, quantity,
+                                         grade=match["grade"], require_sufficient=True):
+            # 预读与扣减之间被并发扣走：按失败返回，调用方会提示或退还
+            return False, f"扣除失败：{base_name} 数量不足（可能刚被其他操作扣走），请重试", base_name, match["grade"]
         await self.db.commit()
         return True, f"已扣除 {format_item_display(base_name, match['grade'], quantity)}", base_name, match["grade"]
 
@@ -723,19 +675,28 @@ class LadderService:
     async def cleanup_expired_gifts(
         self, max_age_seconds: int = 240,
         notify: Optional[Callable[[str, str], Awaitable[None]]] = None,
+        on_refunded: Optional[Callable[[str, str], None]] = None,
     ) -> int:
         """清理超时的待处理赠送，退回道具给发送方。返回退回数量。
-        notify(group_id, text) 用于向原群发送超时通知，可选。"""
+        notify(group_id, text) 用于向原群发送超时通知，可选。
+        on_refunded(group_id, receiver_id) 用于让调用方清理自己的内存缓存，可选。"""
         expired = await self.db.get_expired_pending_gifts(max_age_seconds)
         refunded = 0
         for gift in expired:
             try:
                 items = gift["items"]
+                # 先认领（删除记录）再退款：并发下只有一方能删到，避免重复退款
+                if not await self.db.delete_pending_gift(gift["group_id"], gift["receiver_id"]):
+                    continue
+                if on_refunded:
+                    try:
+                        on_refunded(gift["group_id"], gift["receiver_id"])
+                    except Exception as e:
+                        logger.error(f"[GiftCleanup] 内存缓存清理失败: {e}")
                 await self.receive_item(
                     gift["group_id"], gift["sender_id"], gift["sender_name"],
                     items["item_name"], items["quantity"], grade=items.get("grade")
                 )
-                await self.db.delete_pending_gift(gift["group_id"], gift["receiver_id"])
                 refunded += 1
                 display = format_item_display(items["item_name"], items.get("grade"), items["quantity"])
                 logger.info(
