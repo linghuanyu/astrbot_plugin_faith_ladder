@@ -190,3 +190,138 @@ class TestPluginStartup:
             assert purged >= 0
         finally:
             await plugin.terminate()
+
+class TestQQAdminCallbacks:
+    """QQAdminHandler 注入的回调必须是可 await 的（或至少被兼容处理）。
+
+    `_is_plugin_admin` 是同步方法，而 `_check_permission` 原先直接 await 它的返回值，
+    于是"只在 admin_ids、不在白名单"的账号一用群管指令就
+    TypeError: object bool can't be used in 'await' expression。
+    """
+
+    class _FakeEvent:
+        def get_sender_id(self):
+            return "999"
+
+        def stop_event(self):
+            pass
+
+    async def test_sync_admin_callback_is_supported(self, stubbed_astrbot):
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def deny_perm(uid):
+            return False
+
+        def allow_admin(event):  # 同步回调，正是插件注入的形态
+            return True
+
+        handler = QQAdminHandler(check_perm_fn=deny_perm, check_admin_fn=allow_admin)
+        assert await handler._check_permission(self._FakeEvent()) is True
+
+    async def test_whitelist_hit_short_circuits(self, stubbed_astrbot):
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def allow_perm(uid):
+            return True
+
+        def deny_admin(event):
+            return False
+
+        handler = QQAdminHandler(check_perm_fn=allow_perm, check_admin_fn=deny_admin)
+        assert await handler._check_permission(self._FakeEvent()) is True
+
+    async def test_neither_source_denies(self, stubbed_astrbot):
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def deny_perm(uid):
+            return False
+
+        def deny_admin(event):
+            return False
+
+        handler = QQAdminHandler(check_perm_fn=deny_perm, check_admin_fn=deny_admin)
+        assert await handler._check_permission(self._FakeEvent()) is False
+
+    async def test_async_admin_callback_also_supported(self, stubbed_astrbot):
+        """异步回调同样要能工作（兼容两种写法）。"""
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def deny_perm(uid):
+            return False
+
+        async def allow_admin(event):
+            return True
+
+        handler = QQAdminHandler(check_perm_fn=deny_perm, check_admin_fn=allow_admin)
+        assert await handler._check_permission(self._FakeEvent()) is True
+
+    async def test_default_faith_callback_is_awaitable(self, stubbed_astrbot):
+        """不传 get_faith_fn 时默认实现必须可 await（否则成功文案会崩）。"""
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def deny_perm(uid):
+            return False
+
+        def deny_admin(event):
+            return False
+
+        handler = QQAdminHandler(check_perm_fn=deny_perm, check_admin_fn=deny_admin)
+        assert await handler._get_faith("999") is None
+
+class TestRecallHandlerGuards:
+    """撤回指令的边界：空消息链、历史消息缺 sender。"""
+
+    class _FakeEvent:
+        message_str = "撤回"
+        bot = None  # handle_recall 会先取 event.bot
+
+        def __init__(self, chain=()):
+            self._chain = list(chain)
+            self.stopped = False
+
+        def get_sender_id(self):
+            return "999"
+
+        def get_group_id(self):
+            return "1"
+
+        def get_messages(self):
+            return self._chain
+
+        def get_self_id(self):
+            return "1"
+
+        def plain_result(self, text):
+            return text
+
+        def stop_event(self):
+            self.stopped = True
+
+    @staticmethod
+    def _handler():
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def allow(uid):
+            return True
+
+        def allow_admin(event):
+            return True
+
+        return QQAdminHandler(check_perm_fn=allow, check_admin_fn=allow_admin)
+
+    async def test_empty_chain_does_not_raise(self, stubbed_astrbot):
+        """空消息链此前会 chain[0] 抛 IndexError，且 stop_event 不会执行。"""
+        event = self._FakeEvent(chain=[])
+        results = [r async for r in self._handler().handle_recall(event)]
+        assert results == ["没有可撤回的消息。"]
+        assert event.stopped is True
+
+    async def test_reply_target_rejected_when_bot_cannot_delete(self, stubbed_astrbot):
+        """撤回引用的消息失败时给出提示（event.bot 缺失 → 静默异常路径）。"""
+        from astrbot_plugin_faith_ladder.qq_admin_handle import Reply
+
+        event = self._FakeEvent(chain=[Reply(id="1")])
+        event.bot = None  # 取 client.delete_msg 会失败，走 except 分支
+        results = [r async for r in self._handler().handle_recall(event)]
+        assert results == ["消息已过期或不存在"]
+        assert event.stopped is True

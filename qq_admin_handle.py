@@ -6,6 +6,7 @@ QQ 群管理命令逻辑。
 """
 
 import asyncio
+import inspect
 from astrbot.core.message.components import At, Reply, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -13,6 +14,19 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 from astrbot_plugin_faith_ladder.messages import PERMISSION_DENIED
 from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 from astrbot.api import logger
+
+
+async def _resolve(value):
+    """兼容同步/异步回调：可 await 就 await，否则原样返回。
+
+    三个回调（白名单、管理员、信仰）由插件注入，其中管理员判定是**同步**方法。
+    直接 `await` 它的返回值会抛
+    `TypeError: object bool can't be used in 'await' expression`，
+    于是"只在 admin_ids、不在白名单"的管理员一用群管指令就报错。
+    """
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def get_ats(event: AiocqhttpMessageEvent) -> list:
@@ -36,7 +50,11 @@ class QQAdminHandler:
         """注入权限/信仰/管理员判定回调，使群管逻辑不直接依赖插件实例，便于单独复用与测试。"""
         self._check_perm = check_perm_fn
         self._is_admin = check_admin_fn
-        self._get_faith = get_faith_fn or (lambda uid: None)
+        if get_faith_fn is None:
+            async def _no_faith(uid):
+                return None
+            get_faith_fn = _no_faith
+        self._get_faith = get_faith_fn
 
     async def _get_faith_message(self, event: AiocqhttpMessageEvent, action: str, **kwargs) -> str:
         """获取信仰专属消息。"""
@@ -44,7 +62,7 @@ class QQAdminHandler:
         from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 
         user_id = str(event.get_sender_id())
-        faith = await self._get_faith(user_id)
+        faith = await _resolve(self._get_faith(user_id))
 
         messages = FAITH_MESSAGES.get(faith, {}).get(action, [])
         if messages:
@@ -59,10 +77,10 @@ class QQAdminHandler:
     async def _check_permission(self, event: AiocqhttpMessageEvent) -> bool:
         """检查用户是否有群管权限（复用白名单系统）"""
         user_id = str(event.get_sender_id())
-        has_perm = await self._check_perm(user_id)
+        has_perm = await _resolve(self._check_perm(user_id))
         if has_perm:
             return True
-        return await self._is_admin(event)
+        return bool(await _resolve(self._is_admin(event)))
 
     async def _get_member_info(self, event: AiocqhttpMessageEvent, user_id: str) -> dict:
         """获取群成员信息（一次 API 调用获取角色、名片、昵称）。"""
@@ -239,7 +257,12 @@ class QQAdminHandler:
 
         client = event.bot
         chain = event.get_messages()
-        first_seg = chain[0]
+        # 空消息链会让 chain[0] 抛 IndexError 且不执行 stop_event（相邻的精华处理有守卫）
+        first_seg = chain[0] if chain else None
+        if first_seg is None:
+            yield event.plain_result("没有可撤回的消息。")
+            event.stop_event()
+            return
 
         # 方式1: 撤回引用的消息
         if isinstance(first_seg, Reply):
@@ -282,7 +305,10 @@ class QQAdminHandler:
 
             async def try_delete(message):
                 """删除单条消息，失败静默（消息可能已被撤回或权限不足）。"""
-                if str(message["sender"]["user_id"]) not in target_ids:
+                # 历史消息可能缺 sender（系统/通知类），用 .get 链避免 KeyError
+                # 把整个 asyncio.gather 带崩
+                sender_id = str((message.get("sender") or {}).get("user_id", ""))
+                if sender_id not in target_ids:
                     return
                 async with sem:
                     try:

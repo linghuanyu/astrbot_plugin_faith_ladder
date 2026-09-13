@@ -207,11 +207,11 @@ class DatabaseManager:
         """
         import re
         async with self._db.execute(
-            "SELECT group_id, player_id, item_name, quantity FROM player_items"
+            "SELECT rowid, group_id, player_id, item_name, grade, quantity FROM player_items"
         ) as cursor:
             rows = await cursor.fetchall()
 
-        for group_id, player_id, item_name, quantity in rows:
+        for rowid, group_id, player_id, item_name, grade, quantity in rows:
             # 只要名字以 *数字 结尾就是旧解析器留下的脏数据（正常名字不含 *N）
             if not re.search(r'\*\d+$', item_name):
                 continue
@@ -227,29 +227,29 @@ class DatabaseManager:
                 total_multiplier *= int(m.group(2))
 
             new_qty = quantity * total_multiplier
-            # Check if clean name already exists
+            # 目标行必须按 (名字, 等级) 定位：同名不同等级现在是各自独立的行，
+            # 若只按名字找，会把 A 级那一行的数量改成"自己 + 脏数据"，
+            # 无等级行的数量反而没变（此前正是如此，跨等级数量被污染）。
             async with self._db.execute(
-                "SELECT quantity FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                (group_id, player_id, clean_name)
+                "SELECT rowid, quantity FROM player_items "
+                "WHERE group_id = ? AND player_id = ? AND item_name = ? AND grade = ?",
+                (group_id, player_id, clean_name, grade)
             ) as existing_cursor:
                 existing = await existing_cursor.fetchone()
 
             if existing:
-                # Merge quantities
+                # 合并进同等级的目标行，并删掉脏数据行（都按 rowid 定位，避免误伤）
+                existing_rowid, existing_qty = existing
                 await self._db.execute(
-                    "UPDATE player_items SET quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (existing[0] + new_qty, group_id, player_id, clean_name)
+                    "UPDATE player_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE rowid = ?",
+                    (existing_qty + new_qty, existing_rowid)
                 )
-                # Delete old record
-                await self._db.execute(
-                    "DELETE FROM player_items WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (group_id, player_id, item_name)
-                )
+                await self._db.execute("DELETE FROM player_items WHERE rowid = ?", (rowid,))
             else:
-                # Rename and update quantity
+                # 就地改名并折算数量
                 await self._db.execute(
-                    "UPDATE player_items SET item_name = ?, quantity = ? WHERE group_id = ? AND player_id = ? AND item_name = ?",
-                    (clean_name, new_qty, group_id, player_id, item_name)
+                    "UPDATE player_items SET item_name = ?, quantity = ? WHERE rowid = ?",
+                    (clean_name, new_qty, rowid)
                 )
 
         await self._db.commit()
@@ -443,12 +443,30 @@ class DatabaseManager:
             logger.info("[Migration] Added qq_id column to players")
 
         # 索引创建放在 if 之外：曾经出现过「列已加、索引没建成」的半应用状态
-        # （迁移中途失败、或由更早的版本建库），那种库会永久失去 QQ 唯一性约束
-        await self._db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_qq "
-            "ON players(group_id, qq_id)"
-        )
-        await self._db.commit()
+        # （迁移中途失败、或由更早的版本建库），那种库会永久失去 QQ 唯一性约束。
+        #
+        # 但老库可能已经积累了重复 qq_id（旧版本没有捕获唯一冲突），
+        # 此时 CREATE UNIQUE INDEX 会抛 IntegrityError 并逃出 initialize()，
+        # 让插件每次启动都失败、且没有任何补救路径。故这里 fail-soft：
+        # 记录重复行、跳过建索引、明确告警，插件先能跑起来。
+        try:
+            await self._db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_qq "
+                "ON players(group_id, qq_id)"
+            )
+            await self._db.commit()
+        except aiosqlite.IntegrityError:
+            await self.rollback()
+            async with self._db.execute(
+                "SELECT group_id, qq_id, COUNT(*) FROM players "
+                "WHERE qq_id IS NOT NULL GROUP BY group_id, qq_id HAVING COUNT(*) > 1"
+            ) as cursor:
+                dups = await cursor.fetchall()
+            logger.error(
+                "[Migration] 无法创建 QQ 唯一索引：players 表存在重复绑定 "
+                f"{dups}。本次跳过建索引，QQ 唯一性暂不生效；"
+                "请用「换绑QQ」把重复的 QQ 改到不同玩家后再重启插件。"
+            )
 
     async def _migrate_specific_faith(self):
         """Add specific_faith column to players table if it doesn't exist."""
@@ -677,11 +695,20 @@ class DatabaseManager:
                 return False, f"QQ {new_qq} 已被玩家 {conflict[1]} 绑定，请先让其换绑或解绑。", old_qq
 
         # 3) 更新为新 QQ
-        await self._db.execute(
-            "UPDATE players SET qq_id = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE group_id = ? AND player_id = ?",
-            (new_qq, group_id, player_id)
-        )
+        # 按 rowcount 判定：玩家不存在时 UPDATE 匹配 0 行，此前会照样回"换绑成功"
+        try:
+            cursor = await self._db.execute(
+                "UPDATE players SET qq_id = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE group_id = ? AND player_id = ?",
+                (new_qq, group_id, player_id)
+            )
+        except aiosqlite.IntegrityError:
+            # 并发下另一个请求刚把该 QQ 绑给了别人（上面第 2 步检查之后）
+            await self.rollback()
+            return False, f"QQ {new_qq} 已被其他玩家绑定，请先让其换绑或解绑。", old_qq
+        if cursor.rowcount <= 0:
+            await self.rollback()
+            return False, "玩家不存在，未做任何修改。", old_qq
         await self._db.commit()
         return True, "换绑成功", old_qq
 

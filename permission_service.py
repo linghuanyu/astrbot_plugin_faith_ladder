@@ -9,6 +9,16 @@ from typing import Optional, Callable
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 
 
+def _normalize_entry_type(value) -> str:
+    """白名单条目的类型归一化：缺失或空值都视为 user（group 类型已废弃）。
+
+    授权侧与展示侧此前各自判断（一处 `or "user"`、一处 `str(get(...,"user"))`），
+    空 type 的条目会"权限生效但在列表里看不到"。
+    """
+    text = str(value).strip() if value is not None else ""
+    return text or "user"
+
+
 class PermissionService:
     """Manages whitelist-based permissions for score entry.
 
@@ -67,7 +77,7 @@ class PermissionService:
                 continue
             # 缺省 type 视为 user：与 _get_config_whitelist_entries 的展示逻辑保持一致，
             # 否则 WebUI 里不填 type 的条目会「显示在诸神列表里但不生效」
-            entry_type = str(entry.get("type") or "user")
+            entry_type = _normalize_entry_type(entry.get("type"))
             entry_id = str(entry.get("id", ""))
             if entry_type == "user" and entry_id == str(user_id):
                 return True
@@ -196,11 +206,15 @@ class PermissionService:
         result = []
         for entry in whitelist:
             if isinstance(entry, dict):
-                entry_type = str(entry.get("type", "user"))
+                # 与 is_in_config_whitelist 用同一套缺省判定：空 type 视为 user，
+                # 否则会出现"授权通过但列表里看不到"的不一致
+                entry_type = _normalize_entry_type(entry.get("type"))
                 # 仅返回 user 类型，group 类型已废弃不再支持
                 if entry_type != "user":
                     continue
-                faith = entry.get("faith", "").strip() or None
+                # 键存在但值为 None（WebUI 写 null）时 .strip() 会抛 AttributeError，
+                # 而这里被 白名单 list 与 get_god_faith 共用，崩了会影响多个指令
+                faith = (entry.get("faith") or "").strip() or None
                 result.append({
                     "entry_type": entry_type,
                     "entry_id": str(entry.get("id", "")),

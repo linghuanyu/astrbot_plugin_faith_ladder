@@ -12,8 +12,13 @@ VALID_GRADES = ("SSS", "SS", "S", "A", "B", "C")
 # 从括号内容中提取开头的字母作为等级，忽略中文和其他字符
 _GRADE_RE = re.compile(r'^(.*)[（(]([^)）]*)[)）]$')
 
-# 数量标记：*数字 或 ×数字（× 是本插件展示格式用的乘号，便于直接复制粘贴）
-_QTY_RE = re.compile(r'[*×](\d+)')
+# 数量标记：*数字 或 ×数字（× 是本插件展示格式用的乘号，便于直接复制粘贴）。
+#
+# 只认两种位置：整段末尾，或紧邻结尾等级括号之前 —— '测试*10'、'测试（b）*10'、
+# '测试*10（b）'、'共生噬刃×3（C级）'。不锚定的话，名字里含 *数字 的道具
+# （如 '3*3矩阵'）会被当成数量而把名字改坏。
+# 第二个分组是"跟在数量后面的等级括号"，剥离数量时要把它保留回去。
+_QTY_RE = re.compile(r'[*×](\d+)(\s*[（(][^)）]*[)）])?$')
 
 # ── 等级在「解析侧」与「存储侧」之间的映射 ──
 #
@@ -53,7 +58,8 @@ def grade_from_storage(stored: Optional[str]) -> Optional[str]:
 def extract_item_quantity(text: str) -> Tuple[str, Optional[int]]:
     """从单个道具标记中分离数量，返回 (去掉数量后的标记, 数量)。
 
-    数量写作「*数字」或「×数字」，**位置不限**，等级括号之前或之后都能识别。
+    数量写作「*数字」或「×数字」；位置可以是末尾，也可以紧邻结尾的等级括号之前，
+    即 '测试*10'、'测试（b）*10'、'测试*10（b）' 都能识别。
     没有数量标记时第二个返回值为 None（由调用方决定默认值：多为 1，
     「收回道具」中表示全部收回）。
 
@@ -62,13 +68,16 @@ def extract_item_quantity(text: str) -> Tuple[str, Optional[int]]:
     '测试×10（b）'      → ('测试（b）', 10)
     '共生噬刃×3（C级）' → ('共生噬刃（C级）', 3)
     '测试*10'           → ('测试', 10)
+    '3*3矩阵'           → ('3*3矩阵', None)   — 名字中间的 *数字 不是数量
     '测试（b）'          → ('测试（b）', None)
     '铁剑'              → ('铁剑', None)
     """
     m = _QTY_RE.search(text)
     if not m:
         return text.strip(), None
-    rest = (text[:m.start()] + text[m.end():]).strip()
+    # 数量后面可能还跟着等级括号（'测试*10（b）'），它属于名字，要保留回去
+    trailing_bracket = m.group(2) or ""
+    rest = (text[:m.start()] + trailing_bracket).strip()
     return rest, int(m.group(1))
 
 

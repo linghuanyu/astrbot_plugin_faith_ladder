@@ -497,24 +497,28 @@ class LadderService:
             if not name:
                 continue
 
-            # 提取天梯积分（兼容 "登神之路" / "封神之路" / "登神指路"，支持冒号和 +/-）
-            ladder_match = re.search(r'(?:登神之路|封神之路|登神指路):?([+-])\s*(\d+)', part)
+            # 提取天梯积分（兼容 "登神之路" / "封神之路" / "登神指路"）
+            # 正负号与冒号都是可选的：文档一直这么承诺，但正则强制要求 [+-]，
+            # 于是「【登神之路 16】」被静默当成 0（若这是该玩家唯一的数据，整块还会被丢弃）
+            ladder_match = re.search(r'(?:登神之路|封神之路|登神指路)[:：]?\s*([+-]?)\s*(\d+)', part)
             if ladder_match:
-                sign = 1 if ladder_match.group(1) == '+' else -1
+                sign = -1 if ladder_match.group(1) == '-' else 1
                 ladder_delta = sign * int(ladder_match.group(2))
             else:
                 ladder_delta = 0
 
-            # 提取觐见之梯分数（支持冒号和 +/-）
-            pilgrimage_match = re.search(r'觐见之梯:?([+-])\s*(\d+)', part)
+            # 提取觐见之梯分数（号与冒号同样可选）
+            pilgrimage_match = re.search(r'觐见之梯[:：]?\s*([+-]?)\s*(\d+)', part)
             if pilgrimage_match:
-                sign = 1 if pilgrimage_match.group(1) == '+' else -1
+                sign = -1 if pilgrimage_match.group(1) == '-' else 1
                 pilgrimage_delta = sign * int(pilgrimage_match.group(2))
             else:
                 pilgrimage_delta = 0
 
             # 提取道具（【获得道具：名称】，空格分隔多个道具，数量写作 *N 或 ×N）
-            raw_items = re.findall(r'获得道具[：:]\s*([^】]+)', part)
+            # 捕获限制在单行且遇 【 即止：否则一个缺 】 的畸形块会吞掉后续
+            # 「【登神之路+16】」并把「【登神之路+16」当成道具名
+            raw_items = re.findall(r'获得道具[：:]\s*([^】\n【]+)', part)
             items = []
             for raw in raw_items:
                 # 按空格分隔多个道具
@@ -643,6 +647,9 @@ class LadderService:
             return False, f"玩家 {player_name} 不存在"
         if any(quantity <= 0 for _, quantity in items):
             return False, "数量必须为正整数"
+        # 形如「(B)」的输入会解析出空基础名，落库后是一个没有名字的道具
+        if any(not (parse_item_full_name(raw)[0] or "").strip() for raw, _ in items):
+            return False, "道具名不能为空"
         details = []
         for raw_name, quantity in items:
             base_name, grade = parse_item_full_name(raw_name)

@@ -14,6 +14,7 @@ import pytest
 
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.ladder_service import LadderService
+from astrbot_plugin_faith_ladder.permission_service import PermissionService
 
 
 @pytest.fixture
@@ -629,3 +630,190 @@ class TestUpsertAndBindingConcurrency:
     async def test_set_player_qq_false_for_missing_player(self, db):
         """UPDATE 未命中任何行时应返回 False，而不是谎报绑定成功。"""
         assert await db.set_player_qq("g1", "nobody", "123456") is False
+
+
+class TestItemNameMigration:
+    """脏数据名（`糖果*3`）的清理必须按等级定位，不能污染同名其它等级。"""
+
+    async def test_cleanup_does_not_touch_other_grades(self, db):
+        """旧清理按名字合并数量，会把 A 级那一行也改成同一个数。
+
+        旧实现：`SELECT quantity ... WHERE group_id AND player_id AND item_name='糖果'`
+        没有 grade 条件，匹配到两行，UPDATE 也按名字执行 → 无等级行与 A 级行被改成同一数量。
+        现改为按 (名字, 等级) 定位 + 按 rowid 更新/删除。
+        """
+        await db.upsert_player("g1", "u1", "Alice")
+        await db.add_item("g1", "u1", "糖果", 1, grade=None)
+        await db.add_item("g1", "u1", "糖果", 5, grade="A")
+        # 直接插入旧解析器留下的脏数据行（名字里带 *N，等级为无等级）
+        await db._db.execute(
+            "INSERT INTO player_items (group_id, player_id, item_name, grade, quantity) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("g1", "u1", "糖果*3", "", 2),
+        )
+        await db.commit()
+
+        await db._migrate_item_names()
+
+        items = {i["grade"]: i["quantity"] for i in await db.get_player_items("g1", "u1")}
+        assert items == {None: 7, "A": 5}   # 2×3 并入无等级行；A 级的 5 不受影响
+
+    async def test_cleanup_renames_when_no_target(self, db):
+        await db.upsert_player("g1", "u1", "Alice")
+        await db._db.execute(
+            "INSERT INTO player_items (group_id, player_id, item_name, grade, quantity) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("g1", "u1", "礼盒*2*3", "", 1),
+        )
+        await db.commit()
+
+        await db._migrate_item_names()
+
+        items = await db.get_player_items("g1", "u1")
+        assert len(items) == 1
+        assert items[0]["item_name"] == "礼盒"
+        assert items[0]["quantity"] == 6
+
+
+class TestBatchScoreParsing:
+    """批量录入的分数解析：正负号与冒号可选，且不能被畸形块吞掉。"""
+
+    @pytest.fixture
+    async def service(self, db):
+        return LadderService(db)
+
+    def _parse(self, service, text):
+        results, err = service.parse_batch_scores(text)
+        assert err is None, err
+        return results[0]
+
+    def test_sign_is_optional(self, service):
+        """文档承诺可省略正负号，此前正则强制要求，导致「登神之路 16」静默变 0。"""
+        r = self._parse(service, "玩家：张三\n【登神之路 16】\n【觐见之梯 2】")
+        assert r["ladder_delta"] == 16
+        assert r["pilgrimage_delta"] == 2
+
+    def test_fullwidth_colon_and_sign(self, service):
+        r = self._parse(service, "玩家：张三\n【登神之路：+16】")
+        assert r["ladder_delta"] == 16
+
+    def test_negative_without_sign_space(self, service):
+        r = self._parse(service, "玩家：张三\n【登神之路-5】")
+        assert r["ladder_delta"] == -5
+
+    def test_malformed_block_does_not_swallow_next_tag(self, service):
+        """缺 】 的畸形块不应把后续标签吞成道具名。"""
+        r = self._parse(
+            service,
+            "玩家：张三\n【获得道具：铁剑\n【登神之路+16】",
+        )
+        assert r["ladder_delta"] == 16
+        # 畸形内容不会被当成一个叫「【登神之路+16」的道具
+        assert not any("登神之路" in i for i in r["items"])
+
+
+class TestQQIndexFailSoft:
+    """老库存在重复 qq_id 时，建唯一索引失败不能把插件启动带崩。"""
+
+    async def test_initialize_survives_duplicate_qq(self, tmp_path):
+        import sqlite3
+
+        db_path = tmp_path / "ladder.db"
+        con = sqlite3.connect(db_path)
+        con.executescript("""
+            CREATE TABLE players (
+                player_id TEXT NOT NULL, group_id TEXT NOT NULL, player_name TEXT NOT NULL,
+                class TEXT, faith TEXT, specific_faith TEXT,
+                ladder_score INTEGER DEFAULT 0, pilgrimage_score INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                oathbreaker INTEGER DEFAULT 0, qq_id TEXT,
+                PRIMARY KEY (player_id, group_id)
+            );
+            INSERT INTO players (player_id, group_id, player_name, qq_id) VALUES
+                ('u1', 'g1', 'Alice', '123456'),
+                ('u2', 'g1', 'Bob',   '123456');
+        """)
+        con.commit()
+        con.close()
+
+        db = DatabaseManager(tmp_path)
+        await db.initialize()   # 不应抛异常（旧实现会让每次启动都失败）
+        try:
+            # 索引确实没建成，但插件可用
+            async with db._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_players_qq'"
+            ) as cursor:
+                assert await cursor.fetchone() is None
+            assert await db.get_player("g1", "u1") is not None
+        finally:
+            await db.close()
+
+
+class TestWhitelistConfigRobustness:
+    """白名单配置里的 None / 缺省 type 不应造成崩溃或"权限生效但列表看不到"。"""
+
+    async def test_faith_none_does_not_crash(self, db):
+        svc = PermissionService(db, {
+            "whitelist": [{"type": "user", "id": "u1", "note": "x", "faith": None}],
+            "admin_ids": [],
+        })
+        text = await svc.get_whitelist_text()   # 旧实现会 AttributeError
+        assert "u1" in text
+        assert await svc.get_god_faith("u1") is None   # 回退路径同样不应崩
+
+    async def test_blank_type_is_treated_as_user_everywhere(self, db):
+        svc = PermissionService(db, {
+            "whitelist": [{"id": "u1"}],   # 不写 type
+            "admin_ids": [],
+        })
+        # 授权侧
+        assert await svc.check_score_permission("u1") is True
+        # 展示侧（旧实现会跳过空 type，导致列表里看不到）
+        text = await svc.get_whitelist_text()
+        assert "u1" in text
+
+    async def test_group_type_is_still_ignored(self, db):
+        svc = PermissionService(db, {"whitelist": [{"type": "group", "id": "g1"}], "admin_ids": []})
+        assert await svc.check_score_permission("g1") is False
+
+
+class TestRebindQQ:
+    async def test_rebind_missing_player_reports_failure(self, db):
+        ok, msg, old = await db.rebind_player_qq("g1", "ghost", "999")
+        assert ok is False
+        assert "不存在" in msg
+        assert old is None
+
+    async def test_rebind_success(self, db):
+        await db.upsert_player("g1", "u1", "Alice")
+        ok, _, old = await db.rebind_player_qq("g1", "u1", "999")
+        assert ok is True
+        player = await db.get_player("g1", "u1")
+        assert player.qq_id == "999"
+
+
+class TestQuantityMarkerAnchoring:
+    """名字中间的 *数字 不是数量，不能被当成数量而改坏名字。"""
+
+    def test_mid_name_star_is_not_quantity(self):
+        from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity, parse_item_args
+
+        assert extract_item_quantity("3*3矩阵") == ("3*3矩阵", None)
+        assert parse_item_args("3*3矩阵 2") == [("3*3矩阵", 2)]
+
+    def test_anchored_forms_still_work(self):
+        from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity
+
+        assert extract_item_quantity("测试*10（b）") == ("测试（b）", 10)
+        assert extract_item_quantity("测试（b）*10") == ("测试（b）", 10)
+        assert extract_item_quantity("共生噬刃×3（C级）") == ("共生噬刃（C级）", 3)
+
+
+class TestGiveItemsValidation:
+    async def test_empty_base_name_rejected(self, db):
+        await db.upsert_player("g1", "u1", "Alice")
+        svc = LadderService(db)
+        ok, msg = await svc.give_items("g1", "u1", [("(B)", 1)])
+        assert ok is False
+        assert await db.get_player_items("g1", "u1") == []

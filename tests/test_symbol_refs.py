@@ -132,3 +132,14 @@ def test_checker_knows_real_methods():
         )
     }
     assert find_violations(fake, service_symbols, set()) == []
+
+def test_prayer_does_not_auto_bind_qq():
+    """祷词触发不得自动绑定 QQ。
+
+    它可能通过"名片回退"识别身份，而名片是玩家可自行修改的弱身份：
+    在回退路径上绑定，任何人把名片改成他人名字发一次祷词就能永久抢占对方的绑定，
+    之后可用「赠送道具」取走其库存。绑定只应发生在强身份路径
+    （录入玩家 @用户 / 绑定QQ / 检测玩家）。
+    """
+    src = (ROOT / "commands" / "prayer.py").read_text(encoding="utf-8")
+    assert "set_player_qq" not in src, "祷词路径出现了 QQ 绑定调用，请确认身份来源是否可信"

@@ -109,24 +109,34 @@ class PrayerCommandsMixin:
         if not player.class_ and card:
             for word in self._extract_card_words(card):
                 if word in VALID_CLASSES:
-                    await self.db_manager.set_player_class(group_id, player.player_id, word, player.faith or "")
+                    # 不要用 `player.faith or ""`：命途为空时会把空串写进命途列，
+                    # 使玩家从"未设定命途"变成"命途为空字符串"
+                    await self.db_manager.set_player_class(
+                        group_id, player.player_id, word, player.faith
+                    )
+                    player.class_ = word
                     logger.info(f"[PrayerTrigger] 补全职业: {player.player_name} ← {word}")
                     break
-                # 检查具体职业
-                for specific_name, (sf, sp, sc) in self._specific_classes.items():
+                # 检查具体职业（按长度降序匹配，避免短职业名抢先命中）
+                for specific_name, (sf, sp, sc) in self._sorted_specific_classes:
                     if word == specific_name or word.startswith(specific_name):
                         await self.db_manager.set_player_class(group_id, player.player_id, sc, sp)
+                        player.class_ = sc
                         if not player.specific_faith:
                             await self.db_manager.set_player_specific_faith(group_id, player.player_id, sf)
+                            # 同步内存对象，否则下面的"无具体信仰"判断会把本次触发丢掉
+                            player.specific_faith = sf
                         logger.info(f"[PrayerTrigger] 补全职业: {player.player_name} ← {sc}（{sf}）")
                         break
+                else:
+                    continue
+                break
 
-        # 自动绑定 QQ
-        if not player.qq_id:
-            existing = await self.db_manager.get_player_by_qq(group_id, sender_id)
-            if not existing:
-                await self.db_manager.set_player_qq(group_id, player.player_id, sender_id)
-                logger.info(f"[PrayerTrigger] 自动绑定 QQ: {player.player_name} ← {sender_id}")
+        # 说明：这里刻意**不**自动绑定 QQ。
+        # 身份可能来自"名片回退"（_resolve_self_player_lenient），而名片是玩家可自行
+        # 修改的弱身份：若在回退路径上自动绑定，任何人把名片改成他人名字发一次祷词，
+        # 就能永久抢占对方的 QQ 绑定，之后可用「赠送道具」取走其库存。
+        # 绑定只能在强身份路径上进行（录入玩家 @用户 / 绑定QQ / 检测玩家）。
 
         # 检查具体信仰是否补全成功
         if not player.specific_faith:
