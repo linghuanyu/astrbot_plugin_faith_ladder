@@ -147,13 +147,11 @@ class PrayerCommandsMixin:
         if await self.db_manager.has_prayer_hit_today(group_id, player.player_id):
             return
 
-        # 12. 随机打分
+        # 12. 随机打分（区间来自配置，见 _resolve_prayer_delta_range）
         import random
         faith_matches = player.specific_faith == matched_faith
-        if faith_matches:
-            display_delta = random.randint(-2, 2)   # 匹配：-2 ~ +2
-        else:
-            display_delta = random.randint(-2, 0)   # 不匹配（渎神）：-2 ~ 0
+        score_min, score_max = self._resolve_prayer_delta_range(faith_matches)
+        display_delta = random.randint(score_min, score_max)
 
         # 打分开关：默认关闭时只做氛围互动，展示随机结果但不改动实际分数
         score_enabled = self.config.get("prayer_score_enabled", False)
@@ -209,6 +207,29 @@ class PrayerCommandsMixin:
     def _normalize_prayer_text(self, text: str) -> str:
         """去除所有标点和空格，仅保留中文字符和字母数字。"""
         return PRAYER_NORMALIZE_RE.sub('', text).strip()
+
+    def _resolve_prayer_delta_range(self, faith_matches: bool) -> Tuple[int, int]:
+        """祷词的分值区间（闭区间），匹配与不匹配（渎神）各一对，可在配置里改。
+
+        配置项可能是字符串、也可能被写反（min > max），这里统一成可用的 (lo, hi)；
+        值不是整数时只回落该项到默认值，避免一条坏配置让祷词触发整体报错。
+        """
+        if faith_matches:
+            defaults = (-2, 2)
+            keys = ("prayer_score_min", "prayer_score_max")
+        else:
+            defaults = (-2, 0)
+            keys = ("prayer_blasphemy_score_min", "prayer_blasphemy_score_max")
+
+        values = []
+        for key, default in zip(keys, defaults):
+            try:
+                values.append(int(self.config.get(key, default)))
+            except (TypeError, ValueError):
+                values.append(default)
+
+        lo, hi = values
+        return (hi, lo) if lo > hi else (lo, hi)
 
     def _is_command_message(self, text: str) -> bool:
         """检查消息是否以已注册的命令前缀开头。"""

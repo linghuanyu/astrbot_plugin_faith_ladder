@@ -86,3 +86,108 @@ class TestLadderService:
         success, msg = await service.set_class("g1", "u1", "NewPlayer", "战士")
         assert success is False
         assert "不存在" in msg
+
+
+class TestLeaderboardScoreThreshold:
+    """天梯榜的分数门槛：低于门槛不上榜，且过滤必须发生在 LIMIT 之前。"""
+
+    async def test_players_below_threshold_are_excluded(self, db_manager):
+        service = LadderService(db_manager)
+        await db_manager.upsert_player("g1", "u1", "Alice")            # 1000 分
+        await db_manager.upsert_player("g1", "u2", "Bob")
+        await db_manager.update_scores("g1", "u2", 150, 0, "admin")    # 1150 分
+
+        text = await service.get_leaderboard_text("g1", 10, 1100)
+        assert "Bob" in text
+        assert "Alice" not in text, "低于门槛的玩家不应出现在榜上"
+
+    async def test_threshold_does_not_waste_slots(self, db_manager):
+        """低分玩家不能占掉显示名额：先 LIMIT 再在上层丢弃会让榜上人数不足。"""
+        service = LadderService(db_manager)
+        await db_manager.upsert_player("g1", "u1", "LowA")
+        await db_manager.upsert_player("g1", "u2", "LowB")
+        await db_manager.upsert_player("g1", "u3", "High")
+        await db_manager.update_scores("g1", "u3", 300, 0, "admin")    # 1300 分
+
+        text = await service.get_leaderboard_text("g1", 1, 1100)
+        assert "High" in text
+        assert "LowA" not in text
+
+    async def test_empty_board_explains_threshold(self, db_manager):
+        """全员低于门槛时说明原因，避免被当成数据丢失。"""
+        service = LadderService(db_manager)
+        await db_manager.upsert_player("g1", "u1", "Alice")
+
+        text = await service.get_leaderboard_text("g1", 10, 1100)
+        assert "暂无排名数据" in text
+        assert "1100" in text
+
+    async def test_cache_key_includes_threshold(self, db_manager):
+        """门槛不同不得共用缓存（否则改完配置仍按旧门槛显示 30 秒）。"""
+        service = LadderService(db_manager)
+        await db_manager.upsert_player("g1", "u1", "Alice")
+
+        assert "Alice" in await service.get_leaderboard_text("g1", 10, 0)
+        assert "Alice" not in await service.get_leaderboard_text("g1", 10, 1100)
+
+
+class TestLadderCommandThresholdWiring:
+    """命令层必须把配置里的门槛传给服务层（默认 1100）。"""
+
+    class _Event:
+        def __init__(self):
+            self.stopped = False
+
+        def get_sender_id(self):
+            return "10001"
+
+        def plain_result(self, text):
+            return text
+
+        def stop_event(self):
+            self.stopped = True
+
+    class _Service:
+        def __init__(self):
+            self.calls = []
+
+        async def get_leaderboard_text(self, group_id, limit, min_ladder_score):
+            self.calls.append((group_id, limit, min_ladder_score))
+            return "榜单文本"
+
+    class _Cooldown:
+        def check_cooldown(self, key, seconds):
+            return True
+
+        def set_cooldown(self, key):
+            pass
+
+    class _Host:
+        def __init__(self, service, config):
+            self.ladder_service = service
+            self.config = config
+            self.cooldown_manager = TestLadderCommandThresholdWiring._Cooldown()
+
+        async def _check_perm(self, event):
+            return True
+
+        def _get_group_id(self, event):
+            return "g1"
+
+        async def _send_forward_text(self, event, group_id, title, text):
+            return True  # 已按合并转发发出，命令就此结束
+
+    async def _run(self, config):
+        from astrbot_plugin_faith_ladder.commands.scoreboard import ScoreboardCommandsMixin
+
+        service = self._Service()
+        host = self._Host(service, config)
+        _ = [r async for r in ScoreboardCommandsMixin._ladder_impl(host, self._Event())]
+        return service.calls
+
+    async def test_default_threshold_is_1100(self):
+        assert await self._run({}) == [("g1", 10, 1100)]
+
+    async def test_threshold_and_limit_come_from_config(self):
+        calls = await self._run({"leaderboard_min_ladder_score": 0, "ladder_display_limit": 5})
+        assert calls == [("g1", 5, 0)]

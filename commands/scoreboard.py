@@ -39,7 +39,9 @@ class ScoreboardCommandsMixin:
 
         group_id = self._get_group_id(event)
         limit = self.config.get("ladder_display_limit", 10)
-        text = await self.ladder_service.get_leaderboard_text(group_id, limit)
+        # 榜单门槛：低于该分的玩家不上榜（0 表示不过滤）
+        min_ladder_score = self.config.get("leaderboard_min_ladder_score", 1100)
+        text = await self.ladder_service.get_leaderboard_text(group_id, limit, min_ladder_score)
 
         # 默认使用合并转发，失败时回退为纯文本
         if await self._send_forward_text(event, group_id, "天梯榜", text):

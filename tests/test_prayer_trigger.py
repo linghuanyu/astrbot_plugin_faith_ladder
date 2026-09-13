@@ -320,3 +320,59 @@ class TestPrayerTriggerEdgeCases:
         if not allow_negative:
             delta = max(0, delta)
         assert delta == -2
+
+
+class TestPrayerScoreRangeConfig:
+    """祷词分值区间来自配置：匹配与不匹配（渎神）各一对，默认保持 -2~+2 / -2~0。"""
+
+    def _range(self, config, matched):
+        from astrbot_plugin_faith_ladder.commands.prayer import PrayerCommandsMixin
+
+        class _Host:
+            pass
+
+        host = _Host()
+        host.config = config
+        return PrayerCommandsMixin._resolve_prayer_delta_range(host, matched)
+
+    def test_defaults_unchanged(self):
+        assert self._range({}, True) == (-2, 2)
+        assert self._range({}, False) == (-2, 0)
+
+    def test_configured_ranges(self):
+        assert self._range({"prayer_score_min": 1, "prayer_score_max": 5}, True) == (1, 5)
+        assert self._range(
+            {"prayer_blasphemy_score_min": -5, "prayer_blasphemy_score_max": -3}, False
+        ) == (-5, -3)
+
+    def test_matched_and_blasphemy_are_independent(self):
+        """配置匹配区间不得影响渎神区间（两边各有自己的键）。"""
+        config = {"prayer_score_min": 3, "prayer_score_max": 3}
+        assert self._range(config, True) == (3, 3)
+        assert self._range(config, False) == (-2, 0)
+
+    def test_reversed_bounds_are_swapped(self):
+        """上下限写反时按可用区间处理，而不是让 randint 抛错。"""
+        assert self._range({"prayer_score_min": 5, "prayer_score_max": 1}, True) == (1, 5)
+
+    def test_bad_value_falls_back_for_that_side_only(self):
+        assert self._range({"prayer_score_min": "abc", "prayer_score_max": 7}, True) == (-2, 7)
+        assert self._range({"prayer_score_min": None, "prayer_score_max": 7}, True) == (-2, 7)
+
+    def test_string_numbers_are_accepted(self):
+        """WebUI 有时把数字存成字符串。"""
+        assert self._range({"prayer_score_max": "4"}, True) == (-2, 4)
+
+    def test_positive_only_range_is_possible(self):
+        """可以把渎神区间配成不掉分（例如 0~0），也可以配成全为正分。"""
+        assert self._range({"prayer_blasphemy_score_min": 0, "prayer_blasphemy_score_max": 0}, False) == (0, 0)
+        assert self._range({"prayer_score_min": 1, "prayer_score_max": 3}, True) == (1, 3)
+
+
+def test_prayer_trigger_uses_configured_range():
+    """静态守卫：随机打分必须走 _resolve_prayer_delta_range，不得再写死区间。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "commands" / "prayer.py").read_text(encoding="utf-8")
+    assert "_resolve_prayer_delta_range" in src
+    assert "random.randint(-2" not in src, "祷词分值区间又被写死了"

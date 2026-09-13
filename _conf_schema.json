@@ -92,6 +92,11 @@
     "type": "int",
     "default": 10
   },
+  "leaderboard_min_ladder_score": {
+    "description": "天梯榜（排行榜）分数门槛：登神之路低于该分的玩家不上榜，填 0 表示不过滤",
+    "type": "int",
+    "default": 1100
+  },
   "query_cooldown_seconds": {
     "description": "查询指令冷却时间（秒）",
     "type": "int",
@@ -241,9 +246,29 @@
     }
   },
   "prayer_score_enabled": {
-    "description": "祷词是否真实改动觐见分。关闭时（默认）只展示随机结果并提示不影响实际分数；开启后按匹配 -2~+2、渎神 -2~0 真实计入觐见分",
+    "description": "祷词是否真实改动觐见分。关闭时（默认）只展示随机结果并提示不影响实际分数；开启后按下方配置的分值区间真实计入觐见分",
     "type": "bool",
     "default": false
+  },
+  "prayer_score_min": {
+    "description": "祷词命中自己信仰时的分值下限（可负）",
+    "type": "int",
+    "default": -2
+  },
+  "prayer_score_max": {
+    "description": "祷词命中自己信仰时的分值上限",
+    "type": "int",
+    "default": 2
+  },
+  "prayer_blasphemy_score_min": {
+    "description": "祷词信仰不匹配（渎神）时的分值下限（可负）",
+    "type": "int",
+    "default": -2
+  },
+  "prayer_blasphemy_score_max": {
+    "description": "祷词信仰不匹配（渎神）时的分值上限",
+    "type": "int",
+    "default": 0
   },
   "prayer_text_诞育": {
     "description": "诞育信仰祷词列表（8字短语，用户发送后触发）",

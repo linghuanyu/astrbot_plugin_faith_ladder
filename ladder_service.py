@@ -58,20 +58,30 @@ class LadderService:
             self._leaderboard_cache.clear()
             self._pilgrimage_cache.clear()
 
-    async def get_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
-        """Get formatted ladder leaderboard text."""
-        players = await self.get_top_players(group_id, limit)
+    async def get_leaderboard_text(self, group_id: str, limit: int = 10, min_ladder_score: int = 0) -> str:
+        """Get formatted ladder leaderboard text.
+
+        min_ladder_score 为榜单门槛：低于该分不上榜。榜空且门槛 > 0 时说明原因，
+        否则玩家会以为是数据丢了。
+        """
+        players = await self.get_top_players(group_id, limit, min_ladder_score)
+        if not players and min_ladder_score > 0:
+            return f"暂无排名数据（登神之路低于 {min_ladder_score} 分不上榜）。"
         return format_leaderboard(players, limit)
 
-    async def get_top_players(self, group_id: str, limit: int = 10) -> List[Player]:
-        """获取登神之路排行榜，带 30 秒缓存。"""
-        cache_key = (group_id, limit)
+    async def get_top_players(self, group_id: str, limit: int = 10, min_ladder_score: int = 0) -> List[Player]:
+        """获取登神之路排行榜，带 30 秒缓存。
+
+        缓存键必须带上门槛：门槛来自配置，WebUI 改完后若只按 (群, 人数) 命中旧缓存，
+        会继续按旧门槛显示最多 30 秒。
+        """
+        cache_key = (group_id, limit, min_ladder_score)
         now = time.time()
         if cache_key in self._leaderboard_cache:
             players, timestamp = self._leaderboard_cache[cache_key]
             if now - timestamp < self.LEADERBOARD_CACHE_TTL:
                 return players
-        players = await self.db.get_top_players(group_id, limit)
+        players = await self.db.get_top_players(group_id, limit, min_ladder_score)
         self._leaderboard_cache[cache_key] = (players, now)
         return players
 

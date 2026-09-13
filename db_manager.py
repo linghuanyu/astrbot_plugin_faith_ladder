@@ -712,11 +712,15 @@ class DatabaseManager:
         await self._db.commit()
         return True, "换绑成功", old_qq
 
-    async def get_top_players(self, group_id: str, limit: int = 10) -> List[Player]:
-        """Get top players by ladder score for a group."""
+    async def get_top_players(self, group_id: str, limit: int = 10, min_ladder_score: int = 0) -> List[Player]:
+        """Get top players by ladder score for a group.
+
+        min_ladder_score 是榜单门槛（低于该分不上榜）。过滤必须放在 SQL 里：
+        先按 LIMIT 取人、再在上层丢弃低分玩家会让榜上人数不足（低分者占掉了名额）。
+        """
         async with self._db.execute(
-            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? ORDER BY ladder_score DESC LIMIT ?",
-            (group_id, limit)
+            "SELECT player_id, group_id, player_name, class, faith, specific_faith, ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id FROM players WHERE group_id = ? AND ladder_score >= ? ORDER BY ladder_score DESC LIMIT ?",
+            (group_id, min_ladder_score, limit)
         ) as cursor:
             rows = await cursor.fetchall()
             return [self._row_to_player(r) for r in rows]
