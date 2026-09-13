@@ -175,8 +175,19 @@ class PlayerCommandsMixin:
             yield event.plain_result(message)
 
     async def _check_player_impl(self, event: "AstrMessageEvent"):
-        """检测当前玩家的绑定状态（QQ、信仰等），未绑定时自动绑定。（注册在 main.py）"""
+        """检测玩家绑定状态（QQ、信仰等），未绑定时自动绑定。仅诸神/管理员可用。（注册在 main.py）
+
+        权限收在诸神手里是有意的：本指令的身份解析会回退到**群名片**（弱身份，
+        名片由玩家自行修改），并可能据此把发送者 QQ 绑到名片对应的玩家记录上。
+        把它开放给所有人时，任何人把名片改成他人名字发一次即可抢占对方绑定，
+        随后用「赠送道具」取走其库存。限制调用者之后，这条路径只由受信用户触发，
+        可疑绑定也由诸神人工审核。
+        """
         group_id = self._get_group_id(event)
+
+        if not await self._check_perm(event):
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
+            return
 
         # 优先 QQ 绑定查找，失败回退名片识别
         player = await self._resolve_self_player_lenient(event)
@@ -198,29 +209,6 @@ class PlayerCommandsMixin:
                     f"命途: {player.faith or '未设定'} | 职业: {player.class_ or '未设定'}\n"
                     f"QQ 状态: 你的 QQ 已被玩家「{existing.player_name}」绑定，无法自动绑定。\n"
                     f"如需换绑请联系诸神使用「换绑QQ」。"
-                )
-                return
-
-            # 自助绑定只允许作用于「尚未参与游戏」的记录：没有道具、分数仍是初始值。
-            # 原因：这里的身份来自"名片回退"（弱身份，名片由玩家自行修改），无法作为
-            # 可靠凭据——任何可变的显示名（名片、QQ 昵称）都不该拿来当凭证。
-            # 于是改为限制可绑定的**记录范围**：攻击者即使冒名绑到一条空记录，也拿不到
-            # 任何可转移的资产；而真正刚被录入、还没开始玩的新人仍可自助绑定。
-            # 已有道具或分数的记录（冒名的真正目标）请让诸神使用「绑定QQ @你」。
-            items = await self.db_manager.get_player_items(group_id, player.player_id)
-            init_ladder = self.config.get("init_ladder_score", 1000)
-            init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
-            is_untouched = (
-                not items
-                and player.ladder_score == init_ladder
-                and player.pilgrimage_score == init_pilgrimage
-            )
-            if not is_untouched:
-                yield event.plain_result(
-                    f"检测玩家: {player.player_name}\n"
-                    f"命途: {player.faith or '未设定'} | 职业: {player.class_ or '未设定'}\n"
-                    f"QQ 状态: 尚未绑定。该玩家已有游戏记录，无法自助绑定\n"
-                    f"请让诸神使用「绑定QQ @你」完成绑定。"
                 )
                 return
 

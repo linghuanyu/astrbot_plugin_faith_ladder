@@ -386,12 +386,12 @@ class TestBackupGuards:
         assert len(set(created)) == 2, f"同一秒的两次备份不应同名: {created}"
 
 
-class TestCheckPlayerSelfBindRestriction:
-    """「检测玩家」的自助绑定只允许作用于"尚未参与游戏"的记录。
+class TestCheckPlayerPermissionGate:
+    """「检测玩家」的权限已收归诸神/管理员。
 
-    身份来自"名片回退"（弱身份），任何可变的显示名（名片、QQ 昵称）都不能当凭据，
-    因此改为限制可绑定的记录范围：冒名绑定到一条空记录拿不到任何资产，
-    而已有道具/分数的记录（冒名的真正目标）必须由诸神绑定。
+    它的身份解析会回退到群名片（弱身份），并可能据此把发送者 QQ 绑到名片对应的
+    玩家记录上；开放给所有人时，任何人把名片改成他人名字发一次即可抢占对方绑定，
+    随后用「赠送道具」取走其库存。限制调用者后该路径只由受信用户触发。
     """
 
     class _FakeBot:
@@ -406,7 +406,7 @@ class TestCheckPlayerSelfBindRestriction:
             import types
 
             self.message_obj = types.SimpleNamespace(group_id="1")
-            self.bot = TestCheckPlayerSelfBindRestriction._FakeBot(nickname, card)
+            self.bot = TestCheckPlayerPermissionGate._FakeBot(nickname, card)
             self._sender = sender
             self.stopped = False
 
@@ -420,18 +420,29 @@ class TestCheckPlayerSelfBindRestriction:
             self.stopped = True
 
     @staticmethod
-    async def _make_plugin(stubbed_astrbot, *, player_name="张三"):
+    async def _make_plugin(stubbed_astrbot, *, admin_ids=()):
         import astrbot_plugin_faith_ladder.main as m
 
-        plugin = m.FaithLadderPlugin(m.Context(), {})
+        plugin = m.FaithLadderPlugin(m.Context(), {"admin_ids": list(admin_ids)})
         await plugin.db_manager.initialize()
-        await plugin.db_manager.upsert_player("1", f"name:{player_name}", player_name)
+        await plugin.db_manager.upsert_player("1", "name:张三", "张三")
         await plugin.db_manager.commit()
         return plugin
 
-    async def test_untouched_record_binds(self, stubbed_astrbot):
-        """刚录入、没有任何道具、分数还是初始值 → 允许自助绑定。"""
-        plugin = await self._make_plugin(stubbed_astrbot)
+    async def test_non_god_is_denied(self, stubbed_astrbot):
+        """普通人调用 → 权限拒绝，且不产生任何绑定。"""
+        plugin = await self._make_plugin(stubbed_astrbot, admin_ids=[])
+        try:
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
+            assert any("唯诸神" in r for r in replies)
+            player = await plugin.db_manager.get_player_by_name("1", "张三")
+            assert player.qq_id is None, "被拒的调用不应产生绑定"
+        finally:
+            await plugin.terminate()
+
+    async def test_god_can_check_and_bind(self, stubbed_astrbot):
+        """诸神调用 → 可检测，且名片能对上数据库玩家名即可完成绑定。"""
+        plugin = await self._make_plugin(stubbed_astrbot, admin_ids=["555"])
         try:
             replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
             player = await plugin.db_manager.get_player_by_name("1", "张三")
@@ -440,50 +451,23 @@ class TestCheckPlayerSelfBindRestriction:
         finally:
             await plugin.terminate()
 
-    async def test_record_with_items_cannot_self_bind(self, stubbed_astrbot):
-        """有道具的记录（冒名的真正目标）不得被自助绑定。"""
-        plugin = await self._make_plugin(stubbed_astrbot)
+    async def test_card_without_matching_player(self, stubbed_astrbot):
+        """名片对不上任何玩家 → 提示无法识别，不产生绑定。"""
+        plugin = await self._make_plugin(stubbed_astrbot, admin_ids=["555"])
         try:
-            await plugin.db_manager.add_item("1", "name:张三", "铁剑", 3)
-            await plugin.db_manager.commit()
-            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
-            player = await plugin.db_manager.get_player_by_name("1", "张三")
-            assert player.qq_id is None, "有资产的记录不应被冒名绑定"
-            assert any("无法自助绑定" in r for r in replies)
-        finally:
-            await plugin.terminate()
-
-    async def test_record_with_scores_cannot_self_bind(self, stubbed_astrbot):
-        """分数已变动过的记录同样不得被自助绑定。"""
-        plugin = await self._make_plugin(stubbed_astrbot)
-        try:
-            await plugin.db_manager.update_scores("1", "name:张三", 50, 0, "admin")
-            await plugin.db_manager.commit()
-            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="查无此人"))]
+            assert any("无法识别" in r for r in replies)
             player = await plugin.db_manager.get_player_by_name("1", "张三")
             assert player.qq_id is None
-            assert any("无法自助绑定" in r for r in replies)
-        finally:
-            await plugin.terminate()
-
-    async def test_nickname_is_irrelevant(self, stubbed_astrbot):
-        """昵称不参与判断：它不固定，不能作为凭据，也不应成为门槛。"""
-        plugin = await self._make_plugin(stubbed_astrbot)
-        try:
-            event = self._FakeEvent(card="张三", nickname="完全无关的昵称")
-            replies = [r async for r in plugin._check_player_impl(event)]
-            player = await plugin.db_manager.get_player_by_name("1", "张三")
-            assert player.qq_id == "555"
-            assert any("已自动绑定" in r for r in replies)
         finally:
             await plugin.terminate()
 
     async def test_already_bound_reports_status(self, stubbed_astrbot):
-        plugin = await self._make_plugin(stubbed_astrbot)
+        plugin = await self._make_plugin(stubbed_astrbot, admin_ids=["555"])
         try:
             await plugin.db_manager.set_player_qq("1", "name:张三", "555")
             await plugin.db_manager.commit()
-            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="任意"))]
+            replies = [r async for r in plugin._check_player_impl(self._FakeEvent(card="张三"))]
             assert any("已绑定 555" in r for r in replies)
         finally:
             await plugin.terminate()
