@@ -5,7 +5,7 @@ Ladder service - core business logic for score management.
 import re
 import time
 from typing import Optional, List, Dict, Any, Tuple, Callable, Awaitable
-from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
+from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS, FAITH_TO_PATH
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.message_formatter import (
     format_leaderboard,
@@ -267,9 +267,31 @@ class LadderService:
         updated = await self.db.set_player_faith(group_id, player.player_id, faith_name)
         if not updated:
             return False, "设置失败，请重试。"
+        # 命途换了之后，原具体信仰可能已不属于新命途，对账清掉
+        await self._reconcile_specific_faith(group_id, player.player_id, faith_name)
 
         oathbreaker_tag = "（弃誓者）" if updated.oathbreaker else ""
         return True, f"立誓成功! {player_name}{oathbreaker_tag} 的信仰: {faith_name}"
+
+    async def _reconcile_specific_faith(
+        self, group_id: str, player_id: str, path: Optional[str]
+    ) -> None:
+        """让具体信仰与命途保持一致。
+
+        命途被清空（弃誓不留新信仰）或与具体信仰所属命途不符时，清掉具体信仰。
+        否则会出现「信仰：None | 繁荣」「信仰：文明 | 繁荣」这类自相矛盾的展示，
+        按具体信仰取主题文案时键也会对不上。
+        """
+        player = await self.db.get_player(group_id, player_id)
+        if not player or not player.specific_faith:
+            return
+        if path and FAITH_TO_PATH.get(player.specific_faith) == path:
+            return
+        await self.db.set_player_specific_faith(group_id, player_id, None)
+        logger.info(
+            f"[Faith] 具体信仰与命途不一致，已清除: {player.player_name} "
+            f"specific={player.specific_faith} path={path}"
+        )
 
     async def abandon_oath(
         self,
@@ -312,6 +334,9 @@ class LadderService:
 
         # Set oathbreaker + optional faith change
         await self.db.set_oathbreaker(group_id, player.player_id, new_faith)
+        # 弃誓未指定新命途时命途会被清空，此时具体信仰也必须一起清，
+        # 否则玩家档案会显示成「信仰：None | 繁荣」
+        await self._reconcile_specific_faith(group_id, player.player_id, new_faith)
 
         result_parts = [oath_text]
         if new_faith:
@@ -638,18 +663,14 @@ class LadderService:
             return False, f"玩家 {player_name} 不存在"
         success_details = []
         fail_details = []
+        extra_notes = []  # 「全部收回」时同名其它等级的提示
         for raw_name, quantity in items:
             base_name, grade = parse_item_full_name(raw_name)
             found_items = [
                 i for i in await self.db.get_player_items(group_id, player.player_id)
                 if i["item_name"] == base_name
             ]
-            if grade is not None:
-                match = next((i for i in found_items if i["grade"] == grade), None)
-            else:
-                # 未指定等级：优先无等级行；get_player_items 已按等级降序，故 [-1] 是等级最低的
-                match = next((i for i in found_items if i["grade"] is None), None) \
-                    or (found_items[-1] if found_items else None)
+            match = self._pick_item_row(found_items, grade)
             if not match:
                 fail_details.append(f"收回失败：{player_name} 没有道具 {base_name}")
                 continue
@@ -669,19 +690,32 @@ class LadderService:
             if quantity is None:
                 # 全部收回，显示实际收回数量
                 success_details.append(format_item_display(base_name, actual_grade, actual_qty))
+                # 同名其它等级不会被这次操作碰到，明确提示，免得以为已经全清
+                others = [
+                    i for i in found_items
+                    if (i["item_name"], i["grade"]) != (base_name, actual_grade)
+                ]
+                if others:
+                    more = "、".join(
+                        format_item_display(i["item_name"], i["grade"], i["quantity"])
+                        for i in others
+                    )
+                    extra_notes.append(f"{base_name} 另有 {more}，本次未收回")
             else:
                 success_details.append(format_item_display(base_name, actual_grade, quantity))
         await self.db.commit()
 
+        result_msg = (
+            f"已从 {player_name} 收回: {', '.join(success_details)}"
+            if success_details else "\n".join(fail_details)
+        )
+        if extra_notes:
+            result_msg += "\n（" + "；".join(extra_notes) + "，如需收回请写明等级）"
         if not success_details:
-            # 全部失败，只返回失败信息
-            return False, "\n".join(fail_details)
-        elif not fail_details:
-            # 全部成功
-            return True, f"已从 {player_name} 收回: {', '.join(success_details)}"
-        else:
-            # 部分成功部分失败
-            return True, f"已从 {player_name} 收回: {', '.join(success_details)}\n" + "\n".join(fail_details)
+            return False, result_msg
+        if not fail_details:
+            return True, result_msg
+        return True, result_msg + "\n" + "\n".join(fail_details)
 
     # === 状态 ===
 
@@ -716,22 +750,38 @@ class LadderService:
 
     # === 赠送道具 ===
 
+    @staticmethod
+    def _pick_item_row(found_items: List[dict], grade: Optional[str]) -> Optional[dict]:
+        """从同名道具的各等级行里挑出本次要操作的那一行。
+
+        - 指定 grade（含 `''`＝"有括号但非标准等级"）→ 精确匹配该等级
+        - 未指定等级 → 优先"无等级"那一行；没有再取等级最低的一行
+
+        `get_player_items` 按等级**降序**返回，所以此前 `deduct_item` 直接取首项时，
+        「赠送道具 Bob 铁剑」会优先扣掉 `铁剑（A级）`；`take_items` 则各写了一份
+        类似逻辑。统一到这里，两处行为一致。
+        """
+        if grade is not None:
+            return next((i for i in found_items if i["grade"] == grade), None)
+        no_grade = next((i for i in found_items if i["grade"] is None), None)
+        return no_grade or (found_items[-1] if found_items else None)
+
     async def deduct_item(
         self, group_id: str, player_id: str, player_name: str,
         raw_item_name: str, quantity: int
     ) -> Tuple[bool, str, Optional[str], Optional[str]]:
         """扣除道具。返回 (success, msg, base_name, grade)。
         输入 raw_item_name 可含等级，如 '共生噬刃（C级）'。
-        无等级输入时按 item_name 匹配第一个。
+        未指定等级时优先扣"无等级"那一行（见 _pick_item_row），
+        不会去动同名的更高等级道具。
         数量必须为正：负数量在 SQL 里会变成「增加」，等于凭空造道具。"""
         if quantity <= 0:
             return False, "数量必须为正整数", None, None
         base_name, input_grade = parse_item_full_name(raw_item_name)
         items = await self.db.get_player_items(group_id, player_id)
-        if input_grade:
-            match = next((i for i in items if i["item_name"] == base_name and i["grade"] == input_grade), None)
-        else:
-            match = next((i for i in items if i["item_name"] == base_name), None)
+        match = self._pick_item_row(
+            [i for i in items if i["item_name"] == base_name], input_grade
+        )
         if not match:
             return False, f"没有道具: {base_name}", base_name, input_grade
         if match["quantity"] < quantity:

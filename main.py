@@ -56,7 +56,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.7"
+    "3.6.8"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -187,6 +187,7 @@ class FaithLadderPlugin(
             data_dir=self.data_dir,
             get_config=lambda: dict(self.config),
             purge_score_history=self.db_manager.purge_old_score_history,
+            purge_daily_tables=self.db_manager.purge_daily_tables,
             purge_expired_statuses=self.db_manager.purge_expired_statuses,
             cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
             notify_gift_timeout=send_to_group,

@@ -261,15 +261,92 @@ class TestPerGradeInventory:
         items = {i["grade"]: i["quantity"] for i in await db.get_player_items("g1", "u1")}
         assert items == {None: 3, "A": 5}
 
-    async def test_remove_item_all_grades(self, db):
-        """「全部收回」（数量为 None）仍删除该名字下的所有等级。"""
+    async def test_remove_item_without_grade_keeps_other_grades(self, db):
+        """grade=None 只作用于「无等级」那一行，不碰同名其它等级。
+
+        这条语义在本轮被纠正：此前 grade=None 且 quantity=None 表示"删除所有等级"，
+        于是「收回道具 张三 铁剑」会连 A 级一起删掉却只报无等级那一行的数量。
+        需要清空某道具全部等级时用 clear_items（清除储物空间 <玩家> <道具名>）。
+        """
         await db.upsert_player("g1", "u1", "Alice")
         await db.add_item("g1", "u1", "铁剑", 5, grade=None)
         await db.add_item("g1", "u1", "铁剑", 5, grade="A")
         await db.commit()
 
         assert await db.remove_item("g1", "u1", "铁剑") is True
+        items = {i["grade"]: i["quantity"] for i in await db.get_player_items("g1", "u1")}
+        assert items == {"A": 5}
+
+    async def test_clear_items_removes_all_grades(self, db):
+        """清空某道具（clear_items）才是"所有等级一起清"的入口。"""
+        await db.upsert_player("g1", "u1", "Alice")
+        await db.add_item("g1", "u1", "铁剑", 5, grade=None)
+        await db.add_item("g1", "u1", "铁剑", 5, grade="A")
+        await db.commit()
+
+        assert await db.clear_items("g1", "u1", "铁剑") == 2
         assert await db.get_player_items("g1", "u1") == []
+
+
+class TestPickItemRow:
+    """未指定等级时的选行规则：优先无等级行，否则取等级最低的一行。
+
+    此前 deduct_item 直接取列表首项，而 get_player_items 按等级降序返回，
+    于是「赠送道具 Bob 铁剑」会优先扣掉铁剑（A级）。
+    """
+
+    @pytest.fixture
+    async def service(self, db):
+        return LadderService(db)
+
+    async def test_deduct_prefers_no_grade_row(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 2, grade=None)
+        await service.db.add_item("g1", "u1", "铁剑", 9, grade="A")
+        await service.db.commit()
+
+        ok, _, base, grade = await service.deduct_item("g1", "u1", "Alice", "铁剑", 1)
+        assert ok is True
+        assert grade is None  # 扣的是无等级那一行，不是 A 级
+
+        items = {i["grade"]: i["quantity"] for i in await service.db.get_player_items("g1", "u1")}
+        assert items == {None: 1, "A": 9}
+
+    async def test_deduct_falls_back_to_lowest_grade(self, service):
+        """没有无等级行时取等级最低的一行（C 级低于 A 级）。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 3, grade="A")
+        await service.db.add_item("g1", "u1", "铁剑", 4, grade="C")
+        await service.db.commit()
+
+        ok, _, _, grade = await service.deduct_item("g1", "u1", "Alice", "铁剑", 1)
+        assert ok is True
+        assert grade == "C"
+
+    async def test_deduct_explicit_grade_is_exact(self, service):
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 2, grade=None)
+        await service.db.add_item("g1", "u1", "铁剑", 3, grade="A")
+        await service.db.commit()
+
+        ok, _, _, grade = await service.deduct_item("g1", "u1", "Alice", "铁剑（A级）", 2)
+        assert ok is True
+        assert grade == "A"
+        items = {i["grade"]: i["quantity"] for i in await service.db.get_player_items("g1", "u1")}
+        assert items == {None: 2, "A": 1}
+
+    async def test_take_all_keeps_other_grades_and_hints(self, service):
+        """「收回道具 张三 铁剑」（全部收回）只收回无等级行，并提示还有其它等级。"""
+        await service.db.upsert_player("g1", "Alice", "Alice")
+        await service.db.add_item("g1", "Alice", "铁剑", 2, grade=None)
+        await service.db.add_item("g1", "Alice", "铁剑", 5, grade="A")
+        await service.db.commit()
+
+        ok, msg = await service.take_items("g1", "Alice", [("铁剑", None)])
+        assert ok is True
+        items = {i["grade"]: i["quantity"] for i in await service.db.get_player_items("g1", "Alice")}
+        assert items == {"A": 5}          # A 级完好
+        assert "另有" in msg and "A级" in msg.replace(" ", "")
 
 
 class TestGradePrimaryKeyMigration:
@@ -316,6 +393,148 @@ class TestGradePrimaryKeyMigration:
             await db.add_item("g1", "u1", "铁剑", 1, grade="A")
             await db.commit()
             assert len(await db.get_player_items("g1", "u1")) == 2
+        finally:
+            await db.close()
+
+    @staticmethod
+    def _make_old_schema_db(db_path):
+        """造一个旧结构的库：player_items 主键不含 grade，grade 允许 NULL。"""
+        import sqlite3
+
+        con = sqlite3.connect(db_path)
+        con.executescript("""
+            CREATE TABLE players (
+                player_id TEXT NOT NULL, group_id TEXT NOT NULL, player_name TEXT NOT NULL,
+                class TEXT, faith TEXT, specific_faith TEXT,
+                ladder_score INTEGER DEFAULT 0, pilgrimage_score INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                oathbreaker INTEGER DEFAULT 0, qq_id TEXT,
+                PRIMARY KEY (player_id, group_id)
+            );
+            CREATE TABLE player_items (
+                group_id TEXT NOT NULL, player_id TEXT NOT NULL, item_name TEXT NOT NULL,
+                grade TEXT DEFAULT NULL, quantity INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, player_id, item_name)
+            );
+            INSERT INTO players (player_id, group_id, player_name) VALUES ('u1', 'g1', 'Alice');
+            INSERT INTO player_items (group_id, player_id, item_name, grade, quantity) VALUES
+                ('g1', 'u1', '铁剑', NULL, 2),
+                ('g1', 'u1', '盾牌', 'A', 3);
+        """)
+        con.commit()
+        con.close()
+
+    async def test_rebuild_rolls_back_when_interrupted(self, tmp_path, monkeypatch):
+        """重建中途失败必须整体回滚：表与数据都还在。
+
+        旧实现用 executescript（先隐式提交、且不把脚本包在事务里），
+        DROP 之后再失败就会永久丢表。
+        """
+        import aiosqlite
+
+        db_path = tmp_path / "ladder.db"
+        self._make_old_schema_db(db_path)
+        db = DatabaseManager(tmp_path)
+
+        orig_execute = aiosqlite.Connection.execute
+
+        def failing_execute(self, sql, parameters=None):
+            if "RENAME TO player_items" in sql:
+                raise RuntimeError("注入的失败")
+            return orig_execute(self, sql, parameters)
+
+        monkeypatch.setattr(aiosqlite.Connection, "execute", failing_execute)
+        await db.initialize()          # 迁移失败由内部捕获并回滚
+        monkeypatch.undo()
+
+        # 关键不变量：真正的 DROP 在事务内，已回滚，数据必须完好
+        items = await db.get_player_items("g1", "u1")
+        assert {i["item_name"] for i in items} == {"铁剑", "盾牌"}
+        await db.close()
+
+        # 再启动一次（模拟重启）：应自愈——清掉残留的空暂存表并完成重建
+        db2 = DatabaseManager(db_path.parent)
+        await db2.initialize()
+        try:
+            items = await db2.get_player_items("g1", "u1")
+            assert {i["item_name"] for i in items} == {"铁剑", "盾牌"}
+            assert not await db2._table_exists("player_items_new")
+            # 主键已含 grade：同名不同等级可共存
+            await db2.add_item("g1", "u1", "铁剑", 1, grade="A")
+            await db2.commit()
+            assert len(await db2.get_player_items("g1", "u1")) == 3
+        finally:
+            await db2.close()
+
+    async def test_recovers_when_rebuild_was_interrupted(self, tmp_path):
+        """模拟「DROP 成功、RENAME 未执行」后再启动：暂存表的数据必须回到 player_items。
+
+        这是最隐蔽的一种中断：_create_tables 会用新结构重建一张空的 player_items，
+        主键判断因此认为"已迁移完成"，暂存表里的道具将永远不可见。
+        """
+        import sqlite3
+
+        db_path = tmp_path / "ladder.db"
+        self._make_old_schema_db(db_path)
+        con = sqlite3.connect(db_path)
+        con.executescript("""
+            CREATE TABLE player_items_new (
+                group_id TEXT NOT NULL, player_id TEXT NOT NULL, item_name TEXT NOT NULL,
+                grade TEXT NOT NULL DEFAULT '', quantity INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, player_id, item_name, grade)
+            );
+            INSERT INTO player_items_new (group_id, player_id, item_name, grade, quantity, updated_at)
+                SELECT group_id, player_id, item_name,
+                       CASE WHEN grade IS NULL THEN '' ELSE grade END, quantity, updated_at
+                FROM player_items;
+            DROP TABLE player_items;
+        """)
+        con.commit()
+        con.close()
+
+        db = DatabaseManager(tmp_path)
+        await db.initialize()
+        try:
+            items = await db.get_player_items("g1", "u1")
+            assert {i["item_name"] for i in items} == {"铁剑", "盾牌"}
+            assert not await db._table_exists("player_items_new")
+        finally:
+            await db.close()
+
+    async def test_recovery_handles_missing_main_table(self, tmp_path):
+        """直接验证「player_items 缺失」这条恢复分支（经由 initialize 时不会出现该状态）。"""
+        import aiosqlite
+        import sqlite3
+
+        db_path = tmp_path / "ladder.db"
+        self._make_old_schema_db(db_path)
+        con = sqlite3.connect(db_path)
+        con.executescript("""
+            CREATE TABLE player_items_new (
+                group_id TEXT NOT NULL, player_id TEXT NOT NULL, item_name TEXT NOT NULL,
+                grade TEXT NOT NULL DEFAULT '', quantity INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, player_id, item_name, grade)
+            );
+            INSERT INTO player_items_new (group_id, player_id, item_name, grade, quantity, updated_at)
+                SELECT group_id, player_id, item_name,
+                       CASE WHEN grade IS NULL THEN '' ELSE grade END, quantity, updated_at
+                FROM player_items;
+            DROP TABLE player_items;
+        """)
+        con.commit()
+        con.close()
+
+        db = DatabaseManager(tmp_path)
+        db._db = await aiosqlite.connect(db.db_path)  # 绕过建表，直接进入恢复分支
+        try:
+            await db._recover_interrupted_grade_pk_migration()
+            assert await db._table_exists("player_items")
+            items = await db.get_player_items("g1", "u1")
+            assert {i["item_name"] for i in items} == {"铁剑", "盾牌"}
         finally:
             await db.close()
 

@@ -18,6 +18,7 @@ class SchedulerService:
         data_dir: Path,
         get_config: Callable[[], dict],
         purge_score_history: Optional[Callable[[int], Awaitable[int]]] = None,
+        purge_daily_tables: Optional[Callable[[int], Awaitable[int]]] = None,
         purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
         cleanup_expired_gifts: Optional[Callable[..., Awaitable[int]]] = None,
         notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
@@ -26,12 +27,13 @@ class SchedulerService:
     ):
         """注入各类回调与配置读取器；真正的定时任务在 start() 中创建。
 
-        backup_db(dest) 负责产出数据库备份，由 DB 层实现（VACUUM INTO 一致性快照），
+        backup_db(dest) 负责产出数据库备份，由 DB 层实现（独立连接的在线备份），
         调度器只负责取名与清理过期文件。
         """
         self.data_dir = data_dir
         self.backup_dir = data_dir / "backups"
         self._purge_score_history = purge_score_history
+        self._purge_daily_tables = purge_daily_tables
         self._purge_expired_statuses = purge_expired_statuses
         self._cleanup_expired_gifts = cleanup_expired_gifts
         self._notify_gift_timeout = notify_gift_timeout
@@ -90,6 +92,16 @@ class SchedulerService:
                             logger.info(f"Purged {deleted} old score history entries (>{retention_days} days)")
                     except Exception as e:
                         logger.error(f"Score history purge error: {e}")
+
+                # Purge per-day tables (gift accept counts / prayer hits)
+                # 这两张表此前从未清理：每次接受道具一行、每人每天一行，会无限增长
+                if self._purge_daily_tables:
+                    try:
+                        deleted = await self._purge_daily_tables(90)
+                        if deleted > 0:
+                            logger.info(f"Purged {deleted} old daily-state rows (>90 days)")
+                    except Exception as e:
+                        logger.error(f"Daily tables purge error: {e}")
 
                 # Purge expired statuses
                 if self._purge_expired_statuses:

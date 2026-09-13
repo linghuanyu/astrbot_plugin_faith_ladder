@@ -5,6 +5,7 @@
 存储侧是 NOT NULL 的文本（''/'-'/等级），因为 grade 参与 player_items 主键。
 """
 
+import asyncio
 import aiosqlite
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -331,40 +332,103 @@ class DatabaseManager:
         grade 同时归一化为 NOT NULL：NULL 在 UNIQUE/主键约束下互不相等，
         若允许 NULL，"无等级"道具会被反复插入成多行而不是合并。
         （无等级 → ''，有括号但非标准等级 → '-'，见 item_utils.grade_to_storage）
-        通过检查现有主键列判断是否已迁移，可重复执行。
+
+        **不用 executescript**：它会先隐式提交、并且不把脚本包在事务里。一旦在
+        DROP 与 RENAME 之间失败，player_items 就消失了、数据留在 player_items_new，
+        而下次启动的迁移又因为读不到源表而失败（异常被吞），插件会带着一张不存在的
+        表继续运行、用户道具全部不可见。
+
+        改为逐一 execute。注意 Python sqlite3 在 legacy 模式下**只为 DML 开启隐式
+        事务**（DDL 不开启），所以精确的行为是：CREATE 自动提交 → INSERT 开启事务
+        → 其后的 DROP/ALTER 受该事务保护。也就是说真正致命的 DROP 是可回滚的
+        （失败时 player_items 完好），只会残留一张空的 player_items_new，
+        由 _recover_interrupted_grade_pk_migration() 在下次启动时清理。
         """
+        # 必须先处理上次中断留下的暂存表，再判断主键：
+        # 中断后 _create_tables 会用新结构重建一张空的 player_items（已含 grade 主键），
+        # 那样下面的主键判断会提前返回，暂存表里的旧数据就永远找不回来了。
+        await self._recover_interrupted_grade_pk_migration()
+
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
             info = await cursor.fetchall()
         pk_cols = [r[1] for r in info if r[5]]
         if "grade" in pk_cols:
             return
+        if not pk_cols:
+            # 表不存在（异常状态）：不冒险重建，留待下次启动或人工处理
+            logger.error("[Migration] player_items 表缺失，跳过主键重建")
+            return
 
         logger.info(f"[Migration] 重建 player_items 主键：{pk_cols} → 加入 grade")
         try:
-            await self._db.executescript("""
-                CREATE TABLE IF NOT EXISTS player_items_new (
-                    group_id TEXT NOT NULL,
-                    player_id TEXT NOT NULL,
-                    item_name TEXT NOT NULL,
-                    grade TEXT NOT NULL DEFAULT '',
-                    quantity INTEGER DEFAULT 1,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (group_id, player_id, item_name, grade)
-                );
-                INSERT INTO player_items_new (group_id, player_id, item_name, grade, quantity, updated_at)
-                    SELECT group_id, player_id, item_name,
-                           CASE WHEN grade IS NULL THEN '' ELSE grade END,
-                           quantity, updated_at
-                    FROM player_items;
-                DROP TABLE player_items;
-                ALTER TABLE player_items_new RENAME TO player_items;
-                CREATE INDEX IF NOT EXISTS idx_player_items_lookup ON player_items(group_id, player_id);
-            """)
+            await self._db.execute(
+                "CREATE TABLE IF NOT EXISTS player_items_new ("
+                "  group_id TEXT NOT NULL, player_id TEXT NOT NULL, item_name TEXT NOT NULL,"
+                "  grade TEXT NOT NULL DEFAULT '', quantity INTEGER DEFAULT 1,"
+                "  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                "  PRIMARY KEY (group_id, player_id, item_name, grade))"
+            )
+            await self._db.execute(
+                "INSERT INTO player_items_new (group_id, player_id, item_name, grade, quantity, updated_at) "
+                "SELECT group_id, player_id, item_name, "
+                "       CASE WHEN grade IS NULL THEN '' ELSE grade END, quantity, updated_at "
+                "FROM player_items"
+            )
+            await self._db.execute("DROP TABLE player_items")
+            await self._db.execute("ALTER TABLE player_items_new RENAME TO player_items")
+            await self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_player_items_lookup ON player_items(group_id, player_id)"
+            )
             await self._db.commit()
             logger.info("[Migration] player_items 重建完成")
         except Exception as e:
             await self._db.rollback()
-            logger.error(f"[Migration] player_items 主键重建失败（下次启动会重试）: {e}")
+            logger.error(f"[Migration] player_items 主键重建失败，已回滚（下次启动会重试）: {e}")
+
+    async def _table_exists(self, name: str) -> bool:
+        """表是否存在（仅用于内部迁移判断，name 来自代码常量）。"""
+        async with self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def _recover_interrupted_grade_pk_migration(self) -> None:
+        """修复「主键重建中途失败」留下的状态。
+
+        重建顺序是 CREATE player_items_new → INSERT → DROP player_items → RENAME。
+        中断后必然留下 player_items_new，分两种情形：
+          A. player_items 已不存在（DROP 成功、RENAME 未执行）
+          B. player_items 已被 _create_tables 按新结构重建为空表，旧数据仍在暂存表里
+
+        两者都应以暂存表的数据为准恢复，否则用户道具会凭空消失（B 尤其隐蔽，
+        因为空表已经带 grade 主键，主键判断会认为"已迁移完成"）。
+        若主表已有数据，则暂存表视为陈留垃圾直接丢弃。
+        """
+        if not await self._table_exists("player_items_new"):
+            return
+
+        if await self._table_exists("player_items"):
+            async with self._db.execute("SELECT COUNT(*) FROM player_items_new") as cursor:
+                new_rows = (await cursor.fetchone())[0]
+            async with self._db.execute("SELECT COUNT(*) FROM player_items") as cursor:
+                main_rows = (await cursor.fetchone())[0]
+            if new_rows == 0 or main_rows > 0:
+                logger.warning(
+                    f"[Migration] 丢弃中断遗留的暂存表 player_items_new"
+                    f"（暂存 {new_rows} 行 / 主表 {main_rows} 行）"
+                )
+                await self._db.execute("DROP TABLE player_items_new")
+                await self._db.commit()
+                return
+            logger.warning(
+                f"[Migration] 上次重建中断：player_items 为空、暂存表有 {new_rows} 行，改用暂存表恢复"
+            )
+            await self._db.execute("DROP TABLE player_items")
+        else:
+            logger.warning("[Migration] 上次重建中断：player_items 缺失，从暂存表恢复")
+
+        await self._db.execute("ALTER TABLE player_items_new RENAME TO player_items")
+        await self._db.commit()
 
     async def _migrate_qq_id(self):
         """Add qq_id column + unique-per-group index to players table.
@@ -993,24 +1057,76 @@ class DatabaseManager:
                 for r in rows
             ]
 
-    # --- Active groups ---
+    # --- Score history retention ---
+
+    async def purge_old_score_history(self, retention_days: int = 90) -> int:
+        """删除超过 retention_days 的积分历史，返回删除行数。
+
+        由调度器的每日任务调用（因此自行 commit）。
+        SQLite 的 CURRENT_TIMESTAMP 是 UTC，故截止时间也用 UTC 计算。
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor = await self._db.execute(
+            "DELETE FROM score_history WHERE timestamp < ?",
+            (cutoff,)
+        )
+        await self._db.commit()
+        return cursor.rowcount
+
+    async def purge_daily_tables(self, retention_days: int = 90) -> int:
+        """删除超过 retention_days 的每日状态记录（赠送接受次数、祷词触发）。
+
+        这两张表按「北京日期」存 `YYYY-MM-DD` 字符串，可直接按字典序比较。
+        此前从未清理过：每次接受道具一行、每人每天一行，随使用量无限增长。
+        同样由调度器每日调用，故自行 commit。
+        """
+        cutoff = (datetime.now(BEIJING_TZ) - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+        cursor = await self._db.execute(
+            "DELETE FROM gift_daily_accepts WHERE accept_date < ?", (cutoff,)
+        )
+        deleted = cursor.rowcount
+        cursor = await self._db.execute(
+            "DELETE FROM prayer_daily_hits WHERE hit_date < ?", (cutoff,)
+        )
+        deleted += cursor.rowcount
+        await self._db.commit()
+        return deleted
 
     # --- Backup ---
 
     async def backup_to(self, backup_path: Path) -> None:
-        """用 SQLite 的 VACUUM INTO 生成一致性备份到 backup_path。
+        """用 SQLite 的在线备份 API 生成一致性快照到 backup_path。
 
-        此前是 shutil.copy2 直接拷 .db 文件：单连接下随时可能有未提交的写入，
-        而且不会一起拷 -journal，备份可能撕裂或包含已被回滚的数据。
-        VACUUM INTO 由 SQLite 自己产出快照，结果自洽。
-        目标文件必须不存在（SQLite 的限制），故先清掉同名残留。
+        三点要点：
+        - **另开一个独立连接**执行备份，绝不在共享连接上 commit。多步处理器会跨
+          await 持有事务，若在这里 commit，会把它们写了一半的中间状态落盘，
+          破坏 录入玩家/批量录入/收回道具 的原子性。
+        - 用 `Connection.backup()` 而不是 `VACUUM INTO`：后者要求「不在事务中」，
+          在共享连接上随时可能因为别人持有事务而失败；备份 API 对 BUSY/LOCKED
+          自带重试，且只读源库、不改动主连接状态。
+        - 备份是阻塞操作，放到线程里执行。
+        失败时抛异常，由调用方决定重试（调度器的每日守卫会重试）。
         """
         if self._db is None:
             raise RuntimeError("数据库尚未初始化，无法备份")
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        if backup_path.exists():
-            backup_path.unlink()
-        await self._db.execute("VACUUM INTO ?", (str(backup_path),))
+        await asyncio.to_thread(self._backup_sync, Path(backup_path))
+
+    def _backup_sync(self, dest: Path) -> None:
+        """在独立连接上做备份（阻塞，供 asyncio.to_thread 调用）。"""
+        import sqlite3
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            dest.unlink()
+        src = sqlite3.connect(str(self.db_path))
+        try:
+            dst = sqlite3.connect(str(dest))
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
 
     # === 道具（储物空间） ===
 
@@ -1032,12 +1148,16 @@ class DatabaseManager:
 
     async def remove_item(self, group_id: str, player_id: str, item_name: str, quantity: int = None,
                           grade: str = None, require_sufficient: bool = False) -> bool:
-        """减少道具。quantity=None 时删除匹配到的行。grade 为解析侧三态等级。
+        """减少道具。quantity=None 时删除该行。grade 为解析侧三态等级。
 
-        匹配范围：
-        - 指定 grade → 只作用于该等级那一行
-        - grade=None 且 quantity=None（"全部清除"）→ 删除该名字下的所有等级行（保持旧语义）
-        - grade=None 且有 quantity（"扣若干数量"）→ 只作用于"无等级"那一行
+        匹配范围：grade 一律精确匹配一行——
+        - 指定 grade → 该等级那一行
+        - grade=None → "无等级"那一行（存储为 ''）
+
+        None **不再**表示"不过滤等级"。同名不同等级现在是各自独立的行，若把 None
+        当作"所有等级"，「收回道具 张三 铁剑」（全部收回）会把铁剑的无等级、A 级、
+        C 级一起删掉，却只报无等级那一行的数量。需要清空某道具的所有等级时，
+        请用 clear_items（对应指令「清除储物空间 <玩家> <道具名>」）。
 
         require_sufficient=False（默认，保持旧语义）：数量不足时截断到 0，只要命中行就返回 True。
         require_sufficient=True：数量不足时不改动数据并返回 False，供并发下"扣到才算成功"的场景。
@@ -1045,15 +1165,9 @@ class DatabaseManager:
         """
         base_where = "group_id = ? AND player_id = ? AND item_name = ?"
         base_params = (group_id, player_id, item_name)
-        if grade is not None:
-            where = base_where + " AND grade = ?"
-            params = base_params + (grade_to_storage(grade),)
-        elif quantity is None:
-            where = base_where
-            params = base_params
-        else:
-            where = base_where + " AND grade = ?"
-            params = base_params + (GRADE_STORAGE_NONE,)
+        grade_filter = GRADE_STORAGE_NONE if grade is None else grade_to_storage(grade)
+        where = base_where + " AND grade = ?"
+        params = base_params + (grade_filter,)
 
         if quantity is None:
             cursor = await self._db.execute(

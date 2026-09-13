@@ -20,14 +20,19 @@ def _faith_display(player: Player) -> str:
 
 
 def format_faith_line(faith: Optional[str], specific_faith: Optional[str]) -> str:
-    """信仰展示：`信仰：命途 | 具体信仰`；只有命途时省略后者，都没有则「未设定」。
+    """信仰展示：`信仰：命途 | 具体信仰`。
+
+    任一缺失时只显示存在的那一项——命途可能被清空（弃誓）而具体信仰还在，
+    若直接拼字符串会渲染出「信仰：None | 繁荣」。两者都没有则显示「未设定」。
 
     录入结果、玩家卡片等所有展示信仰的地方都用它，避免同一句话在多处各写一遍。
     """
-    if specific_faith:
+    if faith and specific_faith:
         return f"信仰：{faith} | {specific_faith}"
     if faith:
         return f"信仰：{faith}"
+    if specific_faith:
+        return f"信仰：{specific_faith}"
     return "信仰：未设定"
 
 

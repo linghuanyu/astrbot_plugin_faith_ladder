@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Optional, List, Dict, Tuple
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
-from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity
+from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity, format_item_display
 from astrbot_plugin_faith_ladder.messages import INVALID_ITEM_FORMAT, PERMISSION_DENIED
 
 
@@ -101,7 +101,13 @@ class InventoryCommandsMixin:
                 num = int(p)
                 if 1 <= num <= len(inventory):
                     item = inventory[num - 1]
-                    items.append((item["item_name"], None))  # None = 全部收回
+                    # 必须带上该行的等级：同名不同等级是独立行，只传名字会退回
+                    # "优先无等级行"的规则，收回的就不是玩家看到的那个编号所对应的道具。
+                    # format_item_display(..., 1) 产出「铁剑（A级）」「铁剑（无等级）」
+                    # 「铁剑」，都能被 parse_item_full_name 反向解析。
+                    items.append(
+                        (format_item_display(item["item_name"], item["grade"], 1), None)
+                    )
                 else:
                     invalid_nums.append(p)
             if invalid_nums:
