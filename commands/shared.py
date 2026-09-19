@@ -4,10 +4,38 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable, List
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
+
+
+def wrap_message_chain(components: Iterable):
+    """把组件列表包成框架认识的 MessageChain。
+
+    踩过的坑：`context.send_message(umo, [Plain(...)])` 在 AstrBot v4 上会抛
+    `'list' object has no attribute 'chain'`（框架内部要访问 `.chain`），消息被
+    静默丢弃——赌局的开奖播报与赠送超时通知都栽在这里。v4 要用
+    `MessageChain(chain=[...])`；旧版本直接收 list，所以导入失败时原样返回。
+    """
+    items: List = list(components)
+    for import_path in (
+        ("astrbot.core.message.message_event_result", "MessageChain"),
+        ("astrbot.api.message_components", "MessageChain"),
+    ):
+        try:
+            module = __import__(import_path[0], fromlist=[import_path[1]])
+            factory = getattr(module, import_path[1])
+        except Exception:
+            continue
+        try:
+            return factory(chain=items)
+        except TypeError:
+            try:
+                return factory(items)
+            except Exception:
+                continue
+    return items
 
 
 class SharedSendMixin:

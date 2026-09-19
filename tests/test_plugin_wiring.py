@@ -99,6 +99,13 @@ def _install_astrbot_stub(data_root: Path):
         def fromBytes(b):  # noqa: N802 - 与框架 API 同名
             return Image()
 
+    class MessageChain:
+        """v4 的发送载体：框架内部会访问 `.chain`，直接传 list 会报
+        `'list' object has no attribute 'chain'`（赌局播报就栽在这里）。"""
+
+        def __init__(self, chain=None):
+            self.chain = list(chain or [])
+
     _module("astrbot")
     _module("astrbot.api", logger=__import__("logging").getLogger("astrbot-stub"))
     _module("astrbot.api.event", filter=_make_filter_module(), AstrMessageEvent=AstrMessageEvent)
@@ -108,6 +115,7 @@ def _install_astrbot_stub(data_root: Path):
     _module("astrbot.core")
     _module("astrbot.core.message")
     _module("astrbot.core.message.components", Plain=Plain, At=At, Reply=Reply, Node=Node)
+    _module("astrbot.core.message.message_event_result", MessageChain=MessageChain)
     _module("astrbot.core.utils")
     _module("astrbot.core.utils.astrbot_path", get_astrbot_data_path=lambda: data_root)
     _module("astrbot.core.platform")
@@ -695,6 +703,56 @@ class TestQQAdminGate:
         assert seen == ["qq_admin"]
 
 
+def test_message_chain_is_wrapped_not_a_raw_list():
+    """静态守卫：给框架发消息必须包成 MessageChain。
+
+    直接传 list 在 v4 上抛 `'list' object has no attribute 'chain'`，
+    消息被静默丢弃——赌局开奖就是这样丢了整条播报。
+    用 AST 只看真实调用（文档字符串里出现示例写法不算违规）。
+    """
+    import ast
+
+    root = Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in [root / "main.py"] + sorted((root / "commands").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "send_message"):
+                continue
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.List):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert offenders == [], "这些调用直接给 send_message 传了 list：" + "；".join(offenders)
+
+
+class TestMessageChainWrapping:
+    def test_wrap_returns_message_chain(self, stubbed_astrbot):
+        from astrbot.api.message_components import Plain
+        from astrbot_plugin_faith_ladder.commands.shared import wrap_message_chain
+
+        plain = Plain(text="x")
+        chain = wrap_message_chain([plain])
+        assert hasattr(chain, "chain"), "必须是 MessageChain 对象"
+        assert chain.chain == [plain]
+
+    def test_wrap_falls_back_to_list_without_framework(self, stubbed_astrbot, monkeypatch):
+        """老版本或导入失败时退回 list（v3 直接收 list），不能因此报错。"""
+        import builtins
+        from astrbot_plugin_faith_ladder.commands.shared import wrap_message_chain
+
+        real_import = builtins.__import__
+
+        def deny(name, *args, **kwargs):
+            if "message_event_result" in name or name.endswith("message_components"):
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", deny)
+        assert wrap_message_chain([1, 2]) == [1, 2]
+
+
 class TestGroupUmoResolution:
     """定时任务发消息需要完整会话串（AstrBot v4 形如 xiaoyu:GroupMessage:<群号>）。
 
@@ -753,14 +811,14 @@ class TestGroupUmoResolution:
         sent = []
 
         async def capture(umo, chain):
-            sent.append(umo)
+            sent.append((umo, chain))
 
         plugin = await self._plugin(stubbed_astrbot)
         try:
             plugin.context.send_message = capture
             plugin._remember_umo("111", self._Event())
             await plugin._wager_send("111", "播报")
-            assert sent == ["xiaoyu:GroupMessage:111"]
+            assert [umo for umo, _ in sent] == ["xiaoyu:GroupMessage:111"]
         finally:
             await plugin.terminate()
 

@@ -57,7 +57,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.2"
+    "3.7.3"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -190,13 +190,15 @@ class FaithLadderPlugin(
                 if not umo:
                     logger.warning(f"未知会话标识，跳过向群 {group_id} 发送通知")
                     return
+                from astrbot_plugin_faith_ladder.commands.shared import wrap_message_chain
                 if isinstance(content, tuple) and len(content) == 2 and content[0] == "image":
                     from astrbot.api.message_components import Image
-                    await self.context.send_message(umo, [Image.fromBytes(content[1])])
+                    chain = wrap_message_chain([Image.fromBytes(content[1])])
                 else:
                     from astrbot.api.message_components import Plain
                     text = content if isinstance(content, str) else str(content)
-                    await self.context.send_message(umo, [Plain(text=text)])
+                    chain = wrap_message_chain([Plain(text=text)])
+                await self.context.send_message(umo, chain)
             except Exception as e:
                 logger.error(f"Failed to send to group {group_id}: {e}")
 

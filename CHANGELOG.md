@@ -1,5 +1,15 @@
 # 更新日志
 
+## [3.7.3] - 2026-09-13
+
+### 修复
+- **赌局播报仍然发不出去（v4 要 MessageChain，不是 list）** — 会话串修好后暴露出下一层：`context.send_message(umo, [Plain(...)])` 在 AstrBot v4 上抛 `'list' object has no attribute 'chain'`（框架内部要访问 `.chain`），消息依旧被丢弃。现在统一用 `wrap_message_chain()` 包成 `MessageChain(chain=[...])`；导入不到该类型时退回 list（旧版本直接收 list），不会因此报错。同样修正了赠送超时通知
+
+### 测试
+- `tests/test_plugin_wiring.py` 新增 MessageChain 包装用例（返回对象带 `.chain`、无框架时退回 list）与一条 AST 静态守卫（禁止给 `send_message` 直接传 list 字面量，文档字符串里的示例不算），并更新了发送通道断言；已用故障注入验证
+- 测试替身补齐 `astrbot.core.message.message_event_result.MessageChain`
+- 总计 661 通过
+
 ## [3.7.2] - 2026-09-13
 
 ### 修复

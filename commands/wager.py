@@ -307,7 +307,9 @@ class WagerMixin:
             return
         try:
             from astrbot.api.message_components import Plain
-            await context.send_message(umo, [Plain(text=text)])
+
+            from astrbot_plugin_faith_ladder.commands.shared import wrap_message_chain
+            await context.send_message(umo, wrap_message_chain([Plain(text=text)]))
         except Exception as e:
             logger.error(f"[Wager] 发送失败: {e}")
 
