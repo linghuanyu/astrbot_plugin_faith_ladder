@@ -61,8 +61,12 @@ class WagerMixin:
         return self._wager_last
 
     def _wager_now(self) -> float:
-        """当前时间（单调时钟）。测试里覆盖此方法即可控制时限。"""
-        return time.monotonic()
+        """当前时间（Unix 秒）。测试里覆盖此方法即可控制时限。
+
+        用 wall-clock 而不是单调时钟：间隔判定要拿数据库里 `god_wagers.started_at`
+        （UTC 时间戳）兜底，两者必须是同一基准才能相减。
+        """
+        return time.time()
 
     # ── 配置 ──
 
@@ -114,13 +118,54 @@ class WagerMixin:
             # 不能因为赌局走了另一条发送通道就绕开这个约束
             if self._group_access_blocked(group_id):
                 continue
-            # 用 None 而不是 0.0 表示"从没开过局"：单调时钟的起点是开机时间，
-            # 若拿 0.0 相减，机器刚启动不久（运行时长 < 间隔）时首次开局会被莫名推迟
-            last = self._wager_last_map().get(group_id)
+
+            # 会话标识未知时不开局：开局播报发不出去、60 秒后却照常结算，
+            # 群里就变成"莫名其妙只有一条结算消息"。等收到过该群消息再开局
+            if not self._resolve_umo(group_id):
+                logger.info(f"[Wager] 群 {group_id} 尚未收到过消息，无法确定会话标识，跳过本次开局")
+                continue
+
+            last = await self._wager_last_announce_at(group_id)
             if last is None or now - last >= self._wager_interval_seconds():
                 text = await self._wager_announce(group_id, now)
                 if text:
                     await self._wager_notify(group_id, text)
+
+    async def _wager_last_announce_at(self, group_id: str) -> Optional[float]:
+        """该群上次开局的时间（秒）；内存没有就查数据库。
+
+        为什么必须查库：`_wager_last` 只在内存里，插件一重载/重启就清空，
+        于是间隔从头开始算——表现就是"刚重启就冒出一场赌局、间隔看起来不对"。
+        数据库里 `god_wagers.started_at` 是每次开局都写的时间戳，用它兜底。
+        """
+        last = self._wager_last_map().get(group_id)
+        if last is not None:
+            return last
+
+        loaded = self._wager_last_loaded_map()
+        if group_id in loaded:
+            return None      # 查过了，库里也没有（全新安装）
+
+        db = getattr(self, "db_manager", None)
+        if db is None:
+            loaded.add(group_id)
+            return None
+        try:
+            started_at = await db.get_last_wager_started_at(group_id)
+        except Exception as e:
+            logger.warning(f"[Wager] 读取上次开局时间失败，按无记录处理: {e}")
+            started_at = None
+
+        loaded.add(group_id)
+        if started_at is None:
+            return None
+        self._wager_last_map()[group_id] = started_at
+        return started_at
+
+    def _wager_last_loaded_map(self) -> set:
+        if not hasattr(self, "_wager_last_loaded"):
+            self._wager_last_loaded: set = set()
+        return self._wager_last_loaded
 
     # ── 开局 ──
 

@@ -38,12 +38,17 @@ class _Host(ConfigMixin, GateMixin, WagerMixin):
         self._wagers = {}
         self._wager_last = {}
         self.perm_ok = True
+        # 会话标识：默认"见过该群消息"，需要模拟未知时把它清掉
+        self.umos = {GROUP: f"stub:GroupMessage:{GROUP}"}
 
     def _wager_now(self):
         return self._clock
 
     def _get_group_id(self, event):
         return str(event.message_obj.group_id)
+
+    def _resolve_umo(self, group_id):
+        return self.umos.get(str(group_id))
 
     async def _check_perm(self, event):
         return self.perm_ok
@@ -96,9 +101,109 @@ class TestWagerAnnounce:
     async def test_no_wager_open_in_other_groups(self):
         """只会在配置的群里开局；其他群既不发送也不存在状态。"""
         host = _Host({"wager_enabled": True, "wager_groups": ["other"]})
+        host.umos["other"] = "stub:GroupMessage:other"
         await host._wager_tick()
         assert [g for g, _ in host.sent] == ["other"]
         assert GROUP not in host._wager_state()
+
+
+class TestWagerNeedsKnownSession:
+    """会话标识未知时不开局。
+
+    否则会出现最让人困惑的现象：开局播报发不出去（尚未见过该群消息、拿不到会话串），
+    60 秒后却照常结算——群里只冒出一条"结算"，没有对应的开局提示。
+    """
+
+    async def test_announce_skipped_without_umo(self, db_manager):
+        host = _host()
+        host.db_manager = db_manager
+        host.umos.clear()
+
+        await host._wager_tick()
+
+        assert host.sent == []
+        assert host._wager_state() == {}
+        async with db_manager._db.execute("SELECT COUNT(*) FROM god_wagers") as cursor:
+            assert (await cursor.fetchone())[0] == 0, "没开局就不该留下记录"
+
+    async def test_no_orphan_settle_after_skipped_announce(self):
+        host = _host()
+        host.umos.clear()
+        await host._wager_tick()          # 未见过该群消息 → 不开局
+        assert host._wager_state() == {}
+
+        host.umos[GROUP] = "stub:GroupMessage:" + GROUP
+        host.advance(120)
+        await host._wager_tick()          # 现在能开局了：应该先是开局，而不是凭空结算
+        state = host._wager_state().get(GROUP)
+        assert state is not None, "会话可用后应当先开局"
+        assert state["entries"] == {}
+
+        host.advance(59)                  # 开局后 60 秒内不该结算
+        await host._wager_tick()
+        assert len(host.sent) == 1
+
+    async def test_announce_resumes_once_session_known(self):
+        host = _host()
+        host.umos.clear()
+        await host._wager_tick()
+        host.umos[GROUP] = "stub:GroupMessage:" + GROUP
+        await host._wager_tick()
+        assert len(host.sent) == 1
+        assert GROUP in host._wager_state()
+
+
+class TestWagerIntervalSurvivesRestart:
+    """间隔要跨重载生效：内存计时器清零后，用数据库里的开局时间兜底。"""
+
+    async def _seed_wager_row(self, db_manager, started_at: str):
+        await db_manager._db.execute(
+            "INSERT INTO god_wagers (group_id, god, action, started_at, ends_at) VALUES (?, ?, ?, ?, ?)",
+            (GROUP, "欺诈", "speak", started_at, started_at),
+        )
+        await db_manager.commit()
+
+    async def test_recent_wager_blocks_announce_after_restart(self, db_manager):
+        now_str = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        await self._seed_wager_row(db_manager, now_str)
+
+        # 时钟用真实时间：间隔判定要跟数据库里的 UTC 时间戳相减
+        import time as _time
+
+        host = _Host({**_host().config, "wager_interval_minutes": 30}, start=_time.time())
+        host.db_manager = db_manager
+        await host._wager_tick()
+
+        assert host.sent == [], "库里 30 分钟内有开局记录，重启后不该立刻再开"
+        assert host._wager_state() == {}
+
+    async def test_old_wager_allows_announce_after_restart(self, db_manager):
+        from datetime import datetime, timedelta, timezone
+
+        old = (datetime.now(timezone.utc) - timedelta(minutes=40)).strftime("%Y-%m-%d %H:%M:%S")
+        await self._seed_wager_row(db_manager, old)
+
+        import time as _time
+
+        host = _Host({**_host().config, "wager_interval_minutes": 30}, start=_time.time())
+        host.db_manager = db_manager
+        await host._wager_tick()
+
+        assert len(host.sent) == 1, "超过间隔后应当开局"
+        assert GROUP in host._wager_state()
+
+    async def test_db_timestamp_is_read_in_utc(self, db_manager):
+        from datetime import datetime, timezone
+
+        stamp = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        text = "2026-01-01 12:00:00"
+        await self._seed_wager_row(db_manager, text)
+        assert await db_manager.get_last_wager_started_at(GROUP) == stamp
+
+    async def test_no_records_returns_none(self, db_manager):
+        assert await db_manager.get_last_wager_started_at("nobody") is None
 
     async def test_announce_opens_a_wager(self):
         host = _host()

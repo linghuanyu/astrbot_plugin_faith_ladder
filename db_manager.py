@@ -1460,6 +1460,26 @@ class DatabaseManager:
         await self._db.commit()
         return cursor.lastrowid
 
+    async def get_last_wager_started_at(self, group_id: str) -> Optional[float]:
+        """该群最近一次赌局的开局时间（Unix 秒，UTC）；没有记录返回 None。
+
+        用于跨重启的间隔判定：内存里的计时器会随插件重载清零，靠这张表兜底。
+        """
+        from datetime import datetime, timezone
+        async with self._db.execute(
+            "SELECT started_at FROM god_wagers WHERE group_id = ? ORDER BY id DESC LIMIT 1",
+            (group_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            text = str(row[0]).split(".")[0]
+            dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=timezone.utc).timestamp()
+        except Exception:
+            return None
+
     async def add_wager_entry(self, wager_id: int, group_id: str, player_id: str, player_name: str) -> bool:
         """记录一次入局；同一场赌局内同一玩家只记一次。"""
         try:
