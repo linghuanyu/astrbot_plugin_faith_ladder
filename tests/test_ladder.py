@@ -26,8 +26,10 @@ class TestLadderService:
         await db_manager.update_scores("g1", "u2", 200, 30, "admin")
 
         text = await service.get_leaderboard_text("g1", 10)
-        assert "1. Bob" in text
-        assert "2. Alice" in text
+        # 位阶徽记会出现在名字前（如「1. ☽ Bob」），这里只校验名次顺序
+        rank_lines = [line for line in text.splitlines() if line.startswith(("1.", "2."))]
+        assert rank_lines[0].endswith("Bob")
+        assert rank_lines[1].endswith("Alice")
         assert "登神之路" in text
         assert "觐见之梯" in text
 

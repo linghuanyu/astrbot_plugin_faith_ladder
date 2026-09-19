@@ -7,6 +7,13 @@ from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATH
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
 
 
+def tier_mark_for(player, tier_marks: dict = None) -> str:
+    """取玩家的位阶徽记；未提供映射时返回空串（不显示，不报错）。"""
+    if not tier_marks:
+        return ""
+    return tier_marks.get(getattr(player, "player_id", ""), "")
+
+
 def _name_with_tag(player: Player) -> str:
     """Return player name with (弃誓者) tag if applicable."""
     tag = "(弃誓者)" if player.oathbreaker else ""
@@ -42,18 +49,21 @@ def _faith_card_display(player: Player) -> str:
     return format_faith_line(player.faith, player.specific_faith)
 
 
-def format_leaderboard(players: List[Player], limit: int = 10) -> str:
-    """Format the leaderboard display. 只显示命途。"""
+def format_leaderboard(players: List[Player], limit: int = 10, tier_marks: dict = None) -> str:
+    """Format the leaderboard display. 只显示命途。tier_marks: {player_id: 徽记}。"""
     if not players:
         return "暂无排名数据。"
 
     lines = ["═══ 登神之路 ═══", ""]
     displayed = min(len(players), limit)
+    tier_marks = tier_marks or {}
 
     for rank, player in enumerate(players[:limit], 1):
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
         faith_str = _faith_display(player)
-        lines.append(f"{rank}. {_name_with_tag(player)}")
+        mark = tier_marks.get(player.player_id, "")
+        prefix = f"{mark} " if mark else ""
+        lines.append(f"{rank}. {prefix}{_name_with_tag(player)}")
         lines.append(f"   {class_str} <{faith_str}>")
         lines.append(f"   登神之路: {player.ladder_score}")
         lines.append(f"   觐见之梯: {player.pilgrimage_score}")
@@ -63,18 +73,21 @@ def format_leaderboard(players: List[Player], limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10) -> str:
-    """Format the pilgrimage leaderboard display. 只显示命途。"""
+def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10, tier_marks: dict = None) -> str:
+    """Format the pilgrimage leaderboard display. 只显示命途。tier_marks: {player_id: 徽记}。"""
     if not players:
         return "暂无排名数据。"
 
     lines = ["═══ 觐见之梯 ═══", ""]
     displayed = min(len(players), limit)
+    tier_marks = tier_marks or {}
 
     for rank, player in enumerate(players[:limit], 1):
         class_str = f"[{player.class_}]" if player.class_ else "[未设定]"
         faith_str = _faith_display(player)
-        lines.append(f"{rank}. {_name_with_tag(player)}")
+        mark = tier_marks.get(player.player_id, "")
+        prefix = f"{mark} " if mark else ""
+        lines.append(f"{rank}. {prefix}{_name_with_tag(player)}")
         lines.append(f"   {class_str} <{faith_str}>")
         lines.append(f"   觐见之梯: {player.pilgrimage_score}")
         lines.append(f"   登神之路: {player.ladder_score}")
@@ -90,7 +103,8 @@ def format_player_card(
     pilgrimage_rank: int = 0,
     init_ladder: int = 1000,
     init_pilgrimage: int = 100,
-    statuses: list = None
+    statuses: list = None,
+    tier_marks: dict = None
 ) -> str:
     """Format a player's info card with rankings and statuses."""
     class_str = player.class_ if player.class_ else "未设定"
@@ -114,9 +128,10 @@ def format_player_card(
     else:
         pilgrimage_rank_str = "未上榜"
 
+    mark = tier_mark_for(player, tier_marks)
     lines = [
         f"═══ 玩家档案 ═══",
-        f"姓名: {player.player_name}{oathbreaker_str}",
+        f"姓名: {mark + ' ' if mark else ''}{player.player_name}{oathbreaker_str}",
         f"职业: {class_str}",
         f"{faith_line}",
         f"登神之路: {player.ladder_score}（{ladder_rank_str}）",

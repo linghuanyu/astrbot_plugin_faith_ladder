@@ -23,6 +23,12 @@ from astrbot_plugin_faith_ladder.prayer_messages import (
 )
 
 
+def _mk_player(pid: str, ladder_score: int, name: str = "玩家"):
+    from astrbot_plugin_faith_ladder.models import Player
+
+    return Player(player_id=pid, group_id="g1", player_name=name, ladder_score=ladder_score)
+
+
 def _player(faith=None, specific_faith=None):
     return Player(player_id="u1", group_id="g1", player_name="张三",
                   faith=faith, specific_faith=specific_faith)
@@ -304,3 +310,95 @@ class TestStatusSourceText:
         ok, msg = await service.add_status("g1", "Alice", "沉默", 2, "prayer")
         assert ok is True
         assert "禁止：祷词" in msg
+
+
+class TestTierMarks:
+    """位阶徽记：纯符号（不出现中文阶名），阈值与符号都可配置。"""
+
+    def test_default_mark_ladder(self):
+        assert progress.tier_mark(0) == "☽"
+        assert progress.tier_mark(999) == "☽"
+        assert progress.tier_mark(1000) == "☿"
+        assert progress.tier_mark(1100) == "♀"
+        assert progress.tier_mark(5000) == "☉"
+        assert progress.tier_mark(99999) == "☉"
+
+    def test_below_first_threshold_is_lowest_tier(self):
+        assert progress.tier_index(0, [100, 200]) == 0
+        assert progress.tier_index(50, [100, 200]) == 0
+
+    def test_custom_marks_follow_thresholds(self):
+        marks = ["A", "B", "C"]
+        assert progress.tier_mark(0, [0, 10, 20], marks) == "A"
+        assert progress.tier_mark(10, [0, 10, 20], marks) == "B"
+        assert progress.tier_mark(20, [0, 10, 20], marks) == "C"
+
+    def test_fewer_marks_than_tiers_reuses_last(self):
+        """少配几个徽记不该整个不显示——超出的阶层沿用最后一个符号。"""
+        assert progress.tier_mark(5000, None, ["A", "B"]) == "B"
+
+    def test_bad_config_falls_back_to_defaults(self):
+        assert progress.tier_mark(1000, ["abc"], []) == "☿"
+        assert progress._clean_thresholds([100, "x", 50]) == [50, 100]
+
+    def test_build_tier_marks_maps_by_player_id(self):
+        low = _mk_player("u1", 1000)
+        high = _mk_player("u2", 6000)
+        marks = progress.build_tier_marks([low, high])
+        assert marks == {"u1": "☿", "u2": "☉"}
+
+    def test_marks_appear_on_leaderboard(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_leaderboard
+
+        players = [_mk_player("u1", 1200, "Bob"), _mk_player("u2", 1100, "Alice")]
+        text = format_leaderboard(players, 10, tier_marks={"u1": "C", "u2": "C"})
+        assert "1. C Bob" in text
+        assert "2. C Alice" in text
+
+    def test_leaderboard_without_marks_unchanged(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_leaderboard
+
+        players = [_mk_player("u1", 1200, "Bob")]
+        assert "1. Bob" in format_leaderboard(players, 10)
+
+    def test_player_card_shows_mark(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_player_card
+
+        card = format_player_card(_mk_player("u1", 1200, "张三"), tier_marks={"u1": "☉"})
+        assert "姓名: ☉ 张三" in card
+
+    def test_player_card_without_marks_unchanged(self):
+        from astrbot_plugin_faith_ladder.message_formatter import format_player_card
+
+        card = format_player_card(_mk_player("u1", 1200, "张三"))
+        assert "姓名: 张三" in card
+
+
+class TestTierMarksThroughService:
+    """走服务层：徽记来自配置，关掉（空表）也不会报错。"""
+
+    async def test_leaderboard_uses_configured_marks(self, db_manager):
+        await db_manager.upsert_player("g1", "u1", "Alice")
+        await db_manager.update_scores("g1", "u1", 200, 0, "admin")  # 1200
+        service = LadderService(db_manager, config_getter=lambda: {
+            "tier_marks": ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+        })
+        text = await service.get_leaderboard_text("g1", 10, 0)
+        assert "1. C Alice" in text
+
+    async def test_player_card_uses_configured_marks(self, db_manager):
+        await db_manager.upsert_player("g1", "u1", "Alice")
+        await db_manager.update_scores("g1", "u1", 200, 0, "admin")
+        service = LadderService(db_manager, config_getter=lambda: {
+            "tier_marks": ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+        })
+        text, _ = await service.get_player_cards_by_names("g1", ["Alice"])
+        assert "姓名: C Alice" in text
+
+    async def test_default_symbols_are_used_without_config(self, db_manager):
+        """没有配置读取器（如单测直接构造）时用内置符号表，不显示中文阶名。"""
+        await db_manager.upsert_player("g1", "u1", "Alice")
+        service = LadderService(db_manager)
+        text = await service.get_leaderboard_text("g1", 10, 0)
+        assert any(mark in text for mark in progress.DEFAULT_TIER_MARKS)
+        assert "位阶" not in text and "阶" not in text

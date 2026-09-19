@@ -18,7 +18,7 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     render_milestones,
 )
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
-from astrbot_plugin_faith_ladder.progress import detect_milestones
+from astrbot_plugin_faith_ladder.progress import build_tier_marks, detect_milestones
 from astrbot_plugin_faith_ladder.item_utils import (
     parse_item_full_name,
     format_item_display,
@@ -62,6 +62,15 @@ class LadderService:
         self._leaderboard_cache = {}
         self._pilgrimage_cache = {}
 
+    def _tier_marks(self, players) -> dict:
+        """给一组玩家算位阶徽记（阈值与符号都来自配置，纯符号、无中文阶名）。"""
+        cfg = self._config()
+        return build_tier_marks(
+            players,
+            thresholds=cfg_get(cfg, "tier_thresholds"),
+            marks=cfg_get(cfg, "tier_marks"),
+        )
+
     def _config(self) -> dict:
         """当前配置快照；未注入或读取异常时返回空字典（各处都有内置兜底）。"""
         if self._config_getter is None:
@@ -102,7 +111,7 @@ class LadderService:
         players = await self.get_top_players(group_id, limit, min_ladder_score)
         if not players and min_ladder_score > 0:
             return f"暂无排名数据（登神之路低于 {min_ladder_score} 分不上榜）。"
-        return format_leaderboard(players, limit)
+        return format_leaderboard(players, limit, tier_marks=self._tier_marks(players))
 
     async def get_top_players(self, group_id: str, limit: int = 10, min_ladder_score: int = 0) -> List[Player]:
         """获取登神之路排行榜，带 30 秒缓存。
@@ -125,7 +134,7 @@ class LadderService:
     async def get_pilgrimage_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
         """Get formatted pilgrimage leaderboard text."""
         players = await self.get_top_players_by_pilgrimage(group_id, limit)
-        return format_pilgrimage_leaderboard(players, limit)
+        return format_pilgrimage_leaderboard(players, limit, tier_marks=self._tier_marks(players))
 
     async def get_top_players_by_pilgrimage(self, group_id: str, limit: int = 10) -> List[Player]:
         """获取觐见之梯排行榜，带 30 秒缓存。"""
@@ -158,7 +167,10 @@ class LadderService:
         )
         # 获取有效状态
         statuses = await self.db.get_player_statuses(group_id, player.player_id)
-        return format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
+        return format_player_card(
+            player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses,
+            tier_marks=self._tier_marks([player]),
+        )
 
 
     @staticmethod
@@ -218,13 +230,17 @@ class LadderService:
         all_statuses = await self.db.get_statuses_for_players(group_id, player_ids)
         status_map = {pid: stats for pid, stats in all_statuses}
 
-        # 组装卡片
+        # 组装卡片（位阶徽记一次性算好，避免每个玩家重复读配置）
         cards = []
+        tier_marks = self._tier_marks(players)
         for player in players:
             ladder_rank = ladder_ranks.get(player.player_id, 0)
             pilgrimage_rank = pilgrimage_ranks.get(player.player_id, 0)
             statuses = status_map.get(player.player_id, [])
-            card = format_player_card(player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses)
+            card = format_player_card(
+                player, ladder_rank, pilgrimage_rank, init_ladder, init_pilgrimage, statuses,
+                tier_marks=tier_marks,
+            )
             cards.append(card)
 
         # 合并所有玩家信息
