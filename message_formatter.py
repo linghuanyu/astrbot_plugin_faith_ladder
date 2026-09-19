@@ -289,17 +289,70 @@ def format_score_result(
     ladder_delta: int,
     pilgrimage_delta: int,
     new_ladder: int,
-    new_pilgrimage: int
+    new_pilgrimage: int,
+    flavor: Optional[str] = None,
+    milestones: Optional[List[str]] = None,
 ) -> str:
-    """Format score entry result."""
+    """Format score entry result.
+
+    数字部分保持「+16 → 1016」的箭头样式（一眼能看出变化）；
+    flavor 是上方的一句神明视角短句，milestones 是下方的刻痕（都可不传）。
+    """
     ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
     pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
 
-    return (
-        f"{player_name} 的积分已更新\n"
-        f"登神之路: {ladder_str} → {new_ladder}\n"
-        f"觐见之梯: {pilgrimage_str} → {new_pilgrimage}"
-    )
+    lines = []
+    if flavor:
+        lines.append(flavor)
+    lines.append(f"{player_name} 的积分已更新")
+    lines.append(f"登神之路: {ladder_str} → {new_ladder}")
+    lines.append(f"觐见之梯: {pilgrimage_str} → {new_pilgrimage}")
+    if milestones:
+        lines.extend(milestones)
+    return "\n".join(lines)
+
+
+def render_milestones(events, templates: Optional[dict] = None) -> List[str]:
+    """把 progress.detect_milestones 的事件渲染成文本行。"""
+    from astrbot_plugin_faith_ladder.messages import MILESTONE_TEMPLATES
+
+    table = templates or MILESTONE_TEMPLATES
+    lines = []
+    for kind, value in events or []:
+        template = table.get(kind)
+        if template:
+            lines.append(template.format(value=value))
+    return lines
+
+
+def pick_score_flavor(player, config: Optional[dict] = None) -> Optional[str]:
+    """挑一句"神明视角"的分数短句。
+
+    优先级：配置里的按信仰池 → 配置里的通用池 → 内置按信仰池 → 内置通用池。
+    配置池为空列表时视为"没配"，回落到内置（与 prayer_trigger_messages 的约定一致）。
+    """
+    import random
+
+    from astrbot_plugin_faith_ladder.faith_messages import GENERIC_SCORE_FLAVOR, SCORE_FLAVOR
+
+    config = config or {}
+    specific = getattr(player, "specific_faith", None)
+    path = getattr(player, "faith", None)
+
+    candidates = []
+    for key in (f"score_flavor_messages_{specific}" if specific else None,
+                f"score_flavor_messages_{path}" if path else None,
+                "score_flavor_messages"):
+        if not key:
+            continue
+        pool = cfg_get(config, key) or []
+        if pool:
+            candidates = pool
+            break
+
+    if not candidates:
+        candidates = SCORE_FLAVOR.get(specific) or SCORE_FLAVOR.get(path) or GENERIC_SCORE_FLAVOR
+    return random.choice(candidates) if candidates else None
 
 
 def format_inventory(player_name: str, items: list) -> str:
@@ -318,20 +371,34 @@ def format_inventory(player_name: str, items: list) -> str:
     return "\n".join(lines)
 
 
-def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config=None):
-    """渲染祷词触发回复。delta 仅用于展示；是否真实改分由 config 的 prayer_score_enabled 决定，关闭时追加「不影响实际分数」提示。"""
+def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config=None,
+                          crit=False, streak=0):
+    """渲染祷词触发回复。
+
+    delta 仅用于展示；是否真实改分由 config 的 prayer_score_enabled 决定，关闭时追加「不影响实际分数」提示。
+    crit=True 表示随机到的分值正好是区间上限（大成功），走 crit 文案池，缺省回落 positive。
+    streak 为连续祷词天数（含今天），≥2 天才追加提示。
+    """
     import random
     from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
     from astrbot_plugin_faith_ladder.prayer_messages import (
-        PRAYER_MESSAGES, DEFAULT_PRAYER_POSITIVE, DEFAULT_PRAYER_NEGATIVE,
-        DEFAULT_PRAYER_NEUTRAL, DEFAULT_PRAYER_MISMATCH,
+        PRAYER_MESSAGES, PRAYER_CRIT_MESSAGES, DEFAULT_PRAYER_POSITIVE, DEFAULT_PRAYER_NEGATIVE,
+        DEFAULT_PRAYER_NEUTRAL, DEFAULT_PRAYER_MISMATCH, pick_prayer_streak_line,
     )
 
     faith_matches = player_faith == prayer_faith
 
     if faith_matches:
         god_name = player_faith
-        if delta > 0:
+        if crit and delta > 0:
+            messages = cfg_get(config, f"prayer_trigger_messages_crit_{prayer_faith}") or cfg_get(config, "prayer_trigger_messages_crit")
+            if not messages:
+                messages = (
+                    PRAYER_CRIT_MESSAGES.get(prayer_faith)
+                    or PRAYER_MESSAGES.get(prayer_faith, {}).get("positive", DEFAULT_PRAYER_POSITIVE)
+                )
+            template_vars = {"god": god_name, "delta": delta}
+        elif delta > 0:
             messages = cfg_get(config, f"prayer_trigger_messages_positive_{prayer_faith}") or cfg_get(config, "prayer_trigger_messages_positive")
             if not messages:
                 messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("positive", DEFAULT_PRAYER_POSITIVE)
@@ -361,6 +428,11 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
             template = random.choice(messages)
             result = template.format(**template_vars)
             msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚\n{result}"
+
+    # 连续天数：第一次触发不吹嘘，≥2 天才提示
+    streak_line = pick_prayer_streak_line(streak) if faith_matches else ""
+    if streak_line:
+        msg += f"\n{streak_line}"
 
     # 开关关闭时（默认）只做氛围互动，明确告知玩家本次不改变实际分数
     if not (config or {}).get("prayer_score_enabled", False):

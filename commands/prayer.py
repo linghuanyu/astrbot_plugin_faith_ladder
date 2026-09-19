@@ -181,6 +181,8 @@ class PrayerCommandsMixin:
         faith_matches = player.specific_faith == matched_faith
         score_min, score_max = self._resolve_prayer_delta_range(faith_matches)
         display_delta = random.randint(score_min, score_max)
+        # 大成功：正好落在区间上限。区间退化成单个值（固定分值）时不算，那只是"每次都一样"
+        is_crit = faith_matches and score_max > score_min and display_delta == score_max
 
         # 打分开关：默认关闭时只做氛围互动，展示随机结果但不改动实际分数
         score_enabled = self._cfg("prayer_score_enabled")
@@ -190,6 +192,9 @@ class PrayerCommandsMixin:
         recorded = await self.db_manager.record_prayer_hit(group_id, player.player_id, db_delta)
         if not recorded:
             return  # 并发情况，已被其他请求抢先
+
+        # 13.5 连续天数（含今天，今天这条刚写入）
+        streak = await self.db_manager.get_prayer_streak(group_id, player.player_id)
 
         # 14. 加分（仅开关打开且分值非 0 时）
         if db_delta != 0:
@@ -203,7 +208,10 @@ class PrayerCommandsMixin:
                 return
 
         # 15. 回复群消息 + 阻止 AI 也响应祷词（显示随机结果）
-        msg = format_prayer_trigger(player.player_name, player.specific_faith, matched_faith, display_delta, self.config)
+        msg = format_prayer_trigger(
+            player.player_name, player.specific_faith, matched_faith, display_delta, self.config,
+            crit=is_crit, streak=streak,
+        )
         yield event.plain_result(msg)
         event.stop_event()
 

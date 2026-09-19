@@ -148,6 +148,18 @@
     "type": "int",
     "default": 10
   },
+  "score_flavor_enabled": {
+    "description": "积分变化时在数字上方加一句「神明视角」的短句",
+    "hint": "数字本身仍是「+16 → 1016」的箭头样式，这只是多一行氛围文案；不想要就关掉。",
+    "type": "bool",
+    "default": true
+  },
+  "score_flavor_messages": {
+    "description": "自定义分数短句池（留空使用内置文案；按信仰单独设置需手改配置，键名 score_flavor_messages_欺诈 这种形式）",
+    "hint": "填了就完全替换内置池；内置池按 16 个具体信仰各有一套。",
+    "type": "list",
+    "default": []
+  },
   "leaderboard_min_ladder_score": {
     "description": "天梯榜（排行榜）分数门槛：登神之路低于该分的玩家不上榜，填 0 表示不过滤",
     "hint": "默认 1100：低于该分不上榜。填 0 = 所有人都上榜，填 1000 = 刚录入的玩家也能上榜。",
@@ -491,6 +503,12 @@
       "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
       "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～"
     ]
+  },
+  "prayer_trigger_messages_crit": {
+    "description": "祷词「大成功」（随机值正好落在区间上限）的文案池（留空使用内置文案）",
+    "hint": "可用占位符 {god} 与 {delta}；按信仰单独的键为 prayer_trigger_messages_crit_欺诈。",
+    "type": "list",
+    "default": []
   },
   "prayer_trigger_messages_positive": {
     "description": "祷词命中自己信仰且分值为正时的文案池（留空使用内置文案）",

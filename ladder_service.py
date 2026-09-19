@@ -14,8 +14,11 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_score_result,
     format_inventory,
     format_faith_line,
+    pick_score_flavor,
+    render_milestones,
 )
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
+from astrbot_plugin_faith_ladder.progress import detect_milestones
 from astrbot_plugin_faith_ladder.item_utils import (
     parse_item_full_name,
     format_item_display,
@@ -40,17 +43,33 @@ class LadderService:
     # leaderboard_cache_seconds 决定（默认 120，0 表示不缓存）
     LEADERBOARD_CACHE_TTL = 120
 
-    def __init__(self, db_manager: DatabaseManager, ttl_getter: Optional[Callable[[], int]] = None):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        ttl_getter: Optional[Callable[[], int]] = None,
+        config_getter: Optional[Callable[[], dict]] = None,
+    ):
         """装配业务逻辑层：持有 DB 管理器与排行榜缓存。
 
-        ttl_getter：返回当前榜单缓存秒数（0 = 不缓存）。插件侧注入配置读取，
-        便于 WebUI 改完立即生效。
+        ttl_getter：返回当前榜单缓存秒数（0 = 不缓存）。
+        config_getter：返回当前配置（沉浸文案的开关与自定义文案池）。
+        两者都由插件侧注入，便于 WebUI 改完立即生效。
         """
         self.db = db_manager
         self._ttl_getter = ttl_getter
+        self._config_getter = config_getter
         # 排行榜缓存：{(group_id, limit, min_score): (players, timestamp)}
         self._leaderboard_cache = {}
         self._pilgrimage_cache = {}
+
+    def _config(self) -> dict:
+        """当前配置快照；未注入或读取异常时返回空字典（各处都有内置兜底）。"""
+        if self._config_getter is None:
+            return {}
+        try:
+            return dict(self._config_getter() or {})
+        except Exception:
+            return {}
 
     def _cache_ttl(self) -> int:
         """当前榜单缓存秒数（0 = 不缓存）。配置异常时回落类默认值。"""
@@ -232,6 +251,11 @@ class LadderService:
         if not existing:
             return False, f"{target_player_name}不存在这个宇宙"
 
+        # 记录变化前的名次（用于"越过了 N 个人"的刻痕）
+        rank_before = await self.db.get_player_ladder_rank(
+            group_id, existing.ladder_score, existing.pilgrimage_score
+        )
+
         # Update scores
         updated = await self.db.update_scores(
             group_id, target_player_id,
@@ -245,10 +269,25 @@ class LadderService:
         # 失效排行榜缓存（积分变化后排行榜可能变化）
         self.invalidate_leaderboard_cache(group_id)
 
+        cfg = self._config()
+        flavor = None
+        if cfg_get(cfg, "score_flavor_enabled"):
+            flavor = pick_score_flavor(updated, cfg)
+
+        rank_after = await self.db.get_player_ladder_rank(
+            group_id, updated.ladder_score, updated.pilgrimage_score
+        )
+        milestones = render_milestones(detect_milestones(
+            existing.ladder_score, updated.ladder_score,
+            min_ladder_score=cfg_get(cfg, "leaderboard_min_ladder_score"),
+            rank_before=rank_before, rank_after=rank_after,
+        ))
+
         return True, format_score_result(
             target_player_name,
             ladder_delta, pilgrimage_delta,
-            updated.ladder_score, updated.pilgrimage_score
+            updated.ladder_score, updated.pilgrimage_score,
+            flavor=flavor, milestones=milestones,
         )
 
     async def set_class(
@@ -788,7 +827,17 @@ class LadderService:
             from astrbot_plugin_faith_ladder.commands.gate import format_block_actions
             shown = format_block_actions(block_actions)
             tail = f"，禁止：{shown}" if shown else "，已清除阻断项"
-        return True, f"已为 {player_name} 添加状态 [{status_name}]（持续{days}天{tail}）"
+
+        # 写明来源与期限：状态名与某个信仰同名时，视作那位神明降下的
+        from datetime import datetime, timedelta
+        from astrbot_plugin_faith_ladder.db_manager import BEIJING_TZ
+        from astrbot_plugin_faith_ladder.models import VALID_FAITHS
+        until = (datetime.now(BEIJING_TZ) + timedelta(days=days)).strftime("%m月%d日")
+        source = f"由【{status_name}】降下" if status_name in VALID_FAITHS else "由神明的意志降下"
+        return True, (
+            f"已为 {player_name} 添加状态「{status_name}」\n"
+            f"{source}，至 {until}（{days}天{tail}）"
+        )
 
     async def remove_status(self, group_id: str, player_name: str, status_name: str) -> Tuple[bool, str]:
         """移除指定状态。"""

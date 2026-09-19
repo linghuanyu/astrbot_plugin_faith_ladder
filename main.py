@@ -56,7 +56,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.12"
+    "3.6.13"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -86,7 +86,9 @@ class FaithLadderPlugin(
         self.db_manager = DatabaseManager(self.data_dir)
         # 榜单缓存时长走配置（WebUI 改完立即生效；0 = 不缓存）
         self.ladder_service = LadderService(
-            self.db_manager, ttl_getter=lambda: self._cfg("leaderboard_cache_seconds")
+            self.db_manager,
+            ttl_getter=lambda: self._cfg("leaderboard_cache_seconds"),
+            config_getter=lambda: dict(self.config),
         )
         self.cooldown_manager = CooldownManager()
 

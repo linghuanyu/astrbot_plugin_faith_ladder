@@ -1525,6 +1525,32 @@ class DatabaseManager:
         ) as cursor:
             return await cursor.fetchone() is not None
 
+    async def get_prayer_streak(self, group_id: str, player_id: str, max_days: int = 400) -> int:
+        """连续祷词天数（含今天）。
+
+        按北京日期字符串逐日回溯，不做时区换算——写入端用的是同一个字符串格式，
+        直接比较既简单也不会因时区转换出偏差。当天还没记录时返回 0。
+        """
+        from datetime import timedelta
+
+        async with self._db.execute(
+            "SELECT hit_date FROM prayer_daily_hits WHERE group_id=? AND player_id=? "
+            "ORDER BY hit_date DESC LIMIT ?",
+            (group_id, player_id, max_days)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        dates = {r[0] for r in rows}
+        if not dates:
+            return 0
+
+        streak = 0
+        day = datetime.now(BEIJING_TZ).date()
+        while day.strftime("%Y-%m-%d") in dates:
+            streak += 1
+            day -= timedelta(days=1)
+        return streak
+
     async def record_prayer_hit(self, group_id: str, player_id: str, delta: int) -> bool:
         """记录祷词触发。唯一约束防并发重复。返回 True 表示成功记录。"""
         today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")

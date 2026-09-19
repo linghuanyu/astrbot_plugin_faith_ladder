@@ -43,3 +43,12 @@ def feature_disabled_message(feature_key: str) -> str:
 
 # ========== 状态阻断 ==========
 STATUS_BLOCKED_MSG = "你正处于「{status}」状态，暂时无法{action}。"
+
+# ========== 试炼刻痕（里程碑） ==========
+# kind → 模板；kind 见 progress.py 的 KIND_* 常量
+MILESTONE_TEMPLATES = {
+    "hundred": "—— 第 {value} 道刻痕。",
+    "thousand": "—— 阶梯轰鸣：你已走过第 {value} 个千阶。",
+    "threshold": "—— 你的名字第一次被刻上棋盘。",
+    "rank": "—— 你越过了 {value} 个人。",
+}
