@@ -41,11 +41,6 @@ class PrayerCommandsMixin:
 
     async def _prayer_message_impl(self, event: "AstrMessageEvent"):
         """监听所有消息，检测祷词触发。（注册在 main.py）"""
-        blocked, gate_msg = await self._gate(event, "prayer")
-        if blocked:
-            if gate_msg:
-                yield event.plain_result(gate_msg)
-            return
         logger.debug(f"[PrayerTrigger] Message received: {event.message_str}")
 
         # 1. 快速过滤：必须是群消息（非私聊）
@@ -96,6 +91,16 @@ class PrayerCommandsMixin:
         logger.debug(f"[PrayerTrigger] Matched faith: {matched_faith}, cache size: {len(self._prayer_cache)}")
         if not matched_faith:
             logger.debug("[PrayerTrigger] No prayer match")
+            return
+
+        # 8.5 过闸门（群访问控制/功能开关/状态阻断）。
+        # 放在这里而不是函数开头：本实现体监听的是**所有**消息，闸门里的状态判定
+        # 要查一次数据库，放在最前面会让每条闲聊都多打一次 DB；放在祷词命中之后，
+        # 只有真正的祷词消息才会触发查询。
+        blocked, gate_msg = await self._gate(event, "prayer")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
             return
 
         # 9. 现在才解析玩家身份（昂贵操作，仅对潜在祷词消息执行）

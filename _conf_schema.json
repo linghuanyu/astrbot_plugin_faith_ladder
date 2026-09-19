@@ -112,6 +112,36 @@
     "type": "list",
     "default": []
   },
+  "feature_gift_enabled": {
+    "description": "启用道具赠送（赠送道具 / 接受道具 / 拒绝道具）",
+    "hint": "关闭后这三条指令会回复「功能已被管理员关闭」；诸神的赐予/收回/清除道具不受影响，避免管理员把自己锁死。",
+    "type": "bool",
+    "default": true
+  },
+  "feature_inventory_enabled": {
+    "description": "启用储物空间查询",
+    "hint": "关闭后玩家无法查询储物空间；赐予/收回/清除等管理操作不受影响。",
+    "type": "bool",
+    "default": true
+  },
+  "feature_prayer_enabled": {
+    "description": "启用祷词触发",
+    "hint": "关闭后所有群都不再触发祷词（等同于清空触发群列表，但保留原配置，随时可开回来）。",
+    "type": "bool",
+    "default": true
+  },
+  "feature_scoreboard_enabled": {
+    "description": "启用排行榜（天梯榜 / 觐见榜）",
+    "hint": "关闭后这两条指令回复已关闭；「查询」单人查分不受影响。",
+    "type": "bool",
+    "default": true
+  },
+  "feature_qq_admin_enabled": {
+    "description": "启用群管指令（禁言/解禁/踢人/撤回/全员禁/全员解/设置精华/移除精华）",
+    "hint": "关闭后这 8 条指令回复已关闭；插件其余功能不受影响。",
+    "type": "bool",
+    "default": true
+  },
   "ladder_display_limit": {
     "description": "排行榜显示人数上限",
     "hint": "只影响榜单显示多少名，不影响数据与名次计算。",

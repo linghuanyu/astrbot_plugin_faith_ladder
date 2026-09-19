@@ -23,3 +23,23 @@ COOLDOWN_MSG = "排行榜冷却中，请 {seconds} 秒后再试。"
 QUERY_COOLDOWN_MSG = "查询冷却中，请 {seconds} 秒后再试。"
 BATCH_COOLDOWN_MSG = "批量录入冷却中，请 {seconds} 秒后再试。"
 OATH_COOLDOWN_MSG = "冷却中，请 {seconds} 秒后再试。"
+
+# ========== 功能开关（关闭时的提示） ==========
+# 配置键 → 给玩家看的名字。键名与 _conf_schema.json 的 feature_* 一一对应
+FEATURE_LABELS = {
+    "feature_gift_enabled": "道具赠送",
+    "feature_inventory_enabled": "储物空间",
+    "feature_prayer_enabled": "祷词",
+    "feature_scoreboard_enabled": "排行榜",
+    "feature_qq_admin_enabled": "群管指令",
+}
+
+FEATURE_DISABLED_MSG = "「{label}」功能已被管理员关闭。"
+
+
+def feature_disabled_message(feature_key: str) -> str:
+    """功能被关闭时的统一提示。"""
+    return FEATURE_DISABLED_MSG.format(label=FEATURE_LABELS.get(feature_key, feature_key))
+
+# ========== 状态阻断 ==========
+STATUS_BLOCKED_MSG = "你正处于「{status}」状态，暂时无法{action}。"

@@ -120,6 +120,7 @@ class DatabaseManager:
                 player_id TEXT NOT NULL,
                 status_name TEXT NOT NULL,
                 expire_at TIMESTAMP NOT NULL,
+                block_actions TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, player_id, status_name)
             );
@@ -184,6 +185,21 @@ class DatabaseManager:
 
         # Migrate: add faith column to whitelist
         await self._migrate_whitelist_faith()
+
+        # Migrate: add block_actions column to player_statuses（状态阻断）
+        await self._migrate_status_block_actions()
+
+    async def _migrate_status_block_actions(self):
+        """给 player_statuses 加 block_actions 列（状态可阻断的动作，逗号分隔）。"""
+        async with self._db.execute("PRAGMA table_info(player_statuses)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if "block_actions" not in columns:
+            await self._db.execute(
+                "ALTER TABLE player_statuses ADD COLUMN block_actions TEXT DEFAULT NULL"
+            )
+            await self._db.commit()
+            logger.info("[Migration] Added block_actions column to player_statuses")
 
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
@@ -1279,23 +1295,38 @@ class DatabaseManager:
 
     # === 状态 ===
 
-    async def add_status(self, group_id: str, player_id: str, status_name: str, days: int) -> None:
+    async def add_status(
+        self, group_id: str, player_id: str, status_name: str, days: int,
+        block_actions: Optional[str] = None,
+    ) -> None:
         """添加状态。从当前时间开始持续 days 天。
 
         expire_at 以 UTC 存储（与 score_history / CURRENT_TIMESTAMP 一致），
         因此所有比较与到期判定都必须用 UTC；调用方负责 commit。
+
+        block_actions：None = 保持原有阻断项不变（续期时不顺带清掉）；
+        字符串 = 覆盖（空串表示清除阻断）。存的是逗号分隔的动作 id。
         """
         if days <= 0:
             return
         from datetime import datetime, timedelta, timezone
         expire_at = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        await self._db.execute(
-            "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
-            "expire_at = excluded.expire_at",
-            (group_id, player_id, status_name, expire_at)
-        )
+        if block_actions is None:
+            await self._db.execute(
+                "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
+                "expire_at = excluded.expire_at",
+                (group_id, player_id, status_name, expire_at)
+            )
+        else:
+            await self._db.execute(
+                "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at, block_actions) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
+                "expire_at = excluded.expire_at, block_actions = excluded.block_actions",
+                (group_id, player_id, status_name, expire_at, block_actions)
+            )
 
     async def remove_status(self, group_id: str, player_id: str, status_name: str) -> bool:
         """移除指定状态。返回是否成功找到。"""
@@ -1330,7 +1361,7 @@ class DatabaseManager:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         placeholders = ','.join('?' * len(player_ids))
         query = (
-            f"SELECT player_id, status_name, expire_at FROM player_statuses "
+            f"SELECT player_id, status_name, expire_at, block_actions FROM player_statuses "
             f"WHERE group_id = ? AND player_id IN ({placeholders}) AND expire_at > ? "
             f"ORDER BY player_id, expire_at"
         )
@@ -1338,10 +1369,11 @@ class DatabaseManager:
             rows = await cursor.fetchall()
         # 按 player_id 分组
         result_map = {}
-        for pid, sname, exp in rows:
+        for pid, sname, exp, block_actions in rows:
             remaining = self._calc_remaining_days(exp)
             result_map.setdefault(pid, []).append({
-                "status_name": sname, "expire_at": exp, "remaining_days": remaining
+                "status_name": sname, "expire_at": exp, "remaining_days": remaining,
+                "block_actions": block_actions,
             })
         return [(pid, result_map.get(pid, [])) for pid in player_ids]
 
@@ -1361,7 +1393,7 @@ class DatabaseManager:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         async with self._db.execute(
-            "SELECT status_name, expire_at FROM player_statuses "
+            "SELECT status_name, expire_at, block_actions FROM player_statuses "
             "WHERE group_id = ? AND player_id = ? AND expire_at > ? "
             "ORDER BY expire_at",
             (group_id, player_id, now)
@@ -1372,6 +1404,7 @@ class DatabaseManager:
                 "status_name": r[0],
                 "expire_at": r[1],
                 "remaining_days": self._calc_remaining_days(r[1]),
+                "block_actions": r[2],
             }
             for r in rows
         ]

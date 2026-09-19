@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
 from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity, format_item_display
+from astrbot_plugin_faith_ladder.commands.gate import ACTION_LABELS, parse_block_actions
 from astrbot_plugin_faith_ladder.messages import INVALID_ITEM_FORMAT, PERMISSION_DENIED
 
 
@@ -209,12 +210,33 @@ class InventoryCommandsMixin:
 
         args = self._get_args(event, "添加状态")
         if not args:
-            yield event.plain_result("用法：添加状态 <玩家名> <状态名> <天数>\n示例：添加状态 繁荣 虚弱 3")
+            yield event.plain_result(
+                "用法：添加状态 <玩家名> <状态名> <天数> [阻断=祷词,赠送]\n"
+                "示例：添加状态 繁荣 虚弱 3\n"
+                "      添加状态 张三 沉默 2 阻断=祷词,赠送\n"
+                f"可阻断：{'、'.join(ACTION_LABELS.values())}（写「阻断=无」清除阻断）"
+            )
             return
 
         parts = args.split()
+        # 可选末段「阻断=…」：不写 = 不动该状态原有的阻断项
+        block_raw = None
+        if parts and parts[-1].startswith("阻断="):
+            block_raw = parts[-1][len("阻断="):]
+            parts = parts[:-1]
+
         if len(parts) < 3:
-            yield event.plain_result("用法：添加状态 <玩家名> <状态名> <天数>")
+            yield event.plain_result("用法：添加状态 <玩家名> <状态名> <天数> [阻断=祷词,赠送]")
+            return
+
+        # 用 unknown 判定错误：None 同时是"没写阻断段"的正常取值，
+        # 若用"结果 is None"当错误判断，不写阻断段也会被当成解析失败
+        block_actions, unknown = parse_block_actions(block_raw)
+        if unknown:
+            yield event.plain_result(
+                f"无法识别的阻断项：{'、'.join(unknown)}\n"
+                f"可选：{'、'.join(ACTION_LABELS.values())}（写「阻断=无」清除阻断）"
+            )
             return
 
         player_name = parts[0]
@@ -232,7 +254,9 @@ class InventoryCommandsMixin:
             yield event.plain_result("天数必须大于0。")
             return
 
-        success, message = await self.ladder_service.add_status(group_id, player_name, status_name, days)
+        success, message = await self.ladder_service.add_status(
+            group_id, player_name, status_name, days, block_actions
+        )
         yield event.plain_result(message)
 
     async def _remove_status_impl(self, event: "AstrMessageEvent"):

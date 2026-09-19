@@ -130,9 +130,15 @@ def format_player_card(
         for s in statuses:
             remaining = s['remaining_days']
             if remaining == 0:
-                lines.append(f"{s['status_name']}: 今日到期")
+                line = f"{s['status_name']}: 今日到期"
             else:
-                lines.append(f"{s['status_name']}: 剩余{remaining}天")
+                line = f"{s['status_name']}: 剩余{remaining}天"
+            # 状态可能带阻断项（如「沉默」禁止祷词/赠送），展示出来玩家才知道为什么被拦
+            from astrbot_plugin_faith_ladder.commands.gate import format_block_actions
+            blocked = format_block_actions(s.get("block_actions"))
+            if blocked:
+                line += f"（禁止：{blocked}）"
+            lines.append(line)
 
     return "\n".join(lines)
 
@@ -205,7 +211,7 @@ def format_help(config: dict) -> str:
         f"绑定QQ @用户 - 为玩家绑定 QQ（诸神；防名片冒充）\n"
         f"\n"
         f"[状态] (诸神权限)\n"
-        f"添加状态 <玩家名> <状态名> <天数> - 添加状态\n"
+        f"添加状态 <玩家名> <状态名> <天数> [阻断=祷词,赠送] - 添加状态（可禁止该玩家使用指定功能）\n"
         f"移除状态 <玩家名> <状态名> - 移除指定状态\n"
         f"清除状态 <玩家名> - 清除所有状态\n"
         f"\n"

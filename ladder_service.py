@@ -751,14 +751,25 @@ class LadderService:
 
     # === 状态 ===
 
-    async def add_status(self, group_id: str, player_name: str, status_name: str, days: int) -> Tuple[bool, str]:
-        """添加状态。"""
+    async def add_status(
+        self, group_id: str, player_name: str, status_name: str, days: int,
+        block_actions: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """添加状态。
+
+        block_actions：None = 保持原有阻断项不变；字符串 = 覆盖（空串清除）。
+        """
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
             return False, f"玩家 {player_name} 不存在"
-        await self.db.add_status(group_id, player.player_id, status_name, days)
+        await self.db.add_status(group_id, player.player_id, status_name, days, block_actions)
         await self.db.commit()
-        return True, f"已为 {player_name} 添加状态 [{status_name}]（持续{days}天）"
+        tail = ""
+        if block_actions is not None:
+            from astrbot_plugin_faith_ladder.commands.gate import format_block_actions
+            shown = format_block_actions(block_actions)
+            tail = f"，禁止：{shown}" if shown else "，已清除阻断项"
+        return True, f"已为 {player_name} 添加状态 [{status_name}]（持续{days}天{tail}）"
 
     async def remove_status(self, group_id: str, player_name: str, status_name: str) -> Tuple[bool, str]:
         """移除指定状态。"""
