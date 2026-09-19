@@ -164,15 +164,11 @@ class TestWagerIntervalSurvivesRestart:
         await db_manager.commit()
 
     async def test_recent_wager_blocks_announce_after_restart(self, db_manager):
-        now_str = __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc
-        ).strftime("%Y-%m-%d %H:%M:%S")
-        await self._seed_wager_row(db_manager, now_str)
+        clock, _ = self._fixed_clock()
+        await self._seed_wager_row(db_manager, self._utc_str(clock))
 
-        # 时钟用真实时间：间隔判定要跟数据库里的 UTC 时间戳相减
-        import time as _time
-
-        host = _Host({**_host().config, "wager_interval_minutes": 30}, start=_time.time())
+        host = _Host({**_host().config, "wager_interval_minutes": 30, "wager_jitter_minutes": 0},
+                     start=clock)
         host.db_manager = db_manager
         await host._wager_tick()
 
@@ -180,19 +176,34 @@ class TestWagerIntervalSurvivesRestart:
         assert host._wager_state() == {}
 
     async def test_old_wager_allows_announce_after_restart(self, db_manager):
-        from datetime import datetime, timedelta, timezone
+        clock, _ = self._fixed_clock()
+        await self._seed_wager_row(db_manager, self._utc_str(clock - 40 * 60))
 
-        old = (datetime.now(timezone.utc) - timedelta(minutes=40)).strftime("%Y-%m-%d %H:%M:%S")
-        await self._seed_wager_row(db_manager, old)
-
-        import time as _time
-
-        host = _Host({**_host().config, "wager_interval_minutes": 30}, start=_time.time())
+        host = _Host({**_host().config, "wager_interval_minutes": 30, "wager_jitter_minutes": 0},
+                     start=clock)
         host.db_manager = db_manager
         await host._wager_tick()
 
         assert len(host.sent) == 1, "超过间隔后应当开局"
         assert GROUP in host._wager_state()
+
+    @staticmethod
+    def _fixed_clock():
+        """固定的"白天整点槽起点"：UTC 08:00 = 北京时间 16:00。
+
+        用固定时钟而不是 time.time()：随机延后会让"现在是否已过点火时刻"随运行时刻
+        变化，测试就会时好时坏（之前就是这样翻车的）。时刻也要挑在静默时段之外——
+        早先按 UTC 16:00 取，换算成北京时间正好是午夜，被静默时段挡掉。
+        """
+        clock = 3600 * 80          # 第 3 天 08:00 UTC → 北京 16:00
+        assert clock % 1800 == 0, "要落在 30 分钟槽的起点上"
+        return clock, None
+
+    @staticmethod
+    def _utc_str(ts: float) -> str:
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     async def test_db_timestamp_is_read_in_utc(self, db_manager):
         from datetime import datetime, timezone
@@ -670,3 +681,69 @@ class TestWagerSchedule:
         host = _host(wager_interval_minutes=60, wager_jitter_minutes=30)
         await host._wager_tick()
         assert len(host.sent) == 1
+
+
+class TestWagerQuietHours:
+    """静默时段（默认本地 0~8 点）：落在里面的槽直接跳过，不顺延、不吵人。"""
+
+    def _host_at(self, local_hour, **config):
+        """构造一个"本地时间为 local_hour 点"的宿主。"""
+        from datetime import datetime, timedelta
+
+        from astrbot_plugin_faith_ladder.db_manager import BEIJING_TZ
+
+        base = datetime.now(BEIJING_TZ).replace(minute=0, second=0, microsecond=0)
+        local = base.replace(hour=local_hour)
+        if local < base:
+            local += timedelta(days=1)
+        host = _Host({**_host().config, **config}, start=local.timestamp())
+        return host
+
+    def test_default_window_is_midnight_to_eight(self):
+        assert _host()._wager_quiet_bounds() == (0, 8)
+
+    def test_in_quiet_hours(self):
+        host = _host()
+        assert host._wager_in_quiet_hours(self._host_at(3)._clock) is True
+        assert host._wager_in_quiet_hours(self._host_at(8)._clock) is False, "8 点整已经不算静默（终点不含）"
+        assert host._wager_in_quiet_hours(self._host_at(12)._clock) is False
+
+    def test_same_bounds_disables_quiet_hours(self):
+        host = _host(wager_quiet_start_hour=0, wager_quiet_end_hour=0)
+        assert host._wager_in_quiet_hours(self._host_at(3)._clock) is False
+
+    def test_wrap_around_window(self):
+        host = _host(wager_quiet_start_hour=23, wager_quiet_end_hour=7)
+        assert host._wager_in_quiet_hours(self._host_at(23)._clock) is True
+        assert host._wager_in_quiet_hours(self._host_at(5)._clock) is True
+        assert host._wager_in_quiet_hours(self._host_at(9)._clock) is False
+
+    async def test_night_slot_is_skipped(self):
+        """夜里到点：不开局、不放状态，等白天的槽。"""
+        host = self._host_at(3, wager_interval_minutes=30, wager_jitter_minutes=0)
+        host._wager_last_map()[GROUP] = host._clock - 3600   # 上一槽开过 → 本槽到点
+        await host._wager_tick()
+        assert host.sent == []
+        assert GROUP not in host._wager_state()
+
+    async def test_daytime_slot_still_opens(self):
+        host = self._host_at(12, wager_interval_minutes=30, wager_jitter_minutes=0)
+        host._wager_last_map()[GROUP] = host._clock - 3600
+        await host._wager_tick()
+        assert len(host.sent) == 1
+
+    async def test_fresh_install_at_night_waits(self):
+        """全新安装：白天立刻开一场，夜里则等到白天。"""
+        host = self._host_at(3, wager_jitter_minutes=0)
+        assert await host._wager_due(GROUP, host._clock) is False
+
+        host = self._host_at(9, wager_jitter_minutes=0)
+        assert await host._wager_due(GROUP, host._clock) is True
+
+    def test_offsets_differ_across_days(self):
+        """同一个钟点在不同日期得到不同延后（种子是绝对时间槽），不会天天同一时刻。"""
+        host = _host(wager_interval_minutes=60, wager_jitter_minutes=30)
+        hour = 3600 * 1000
+        offsets = {host._wager_slot_offset(GROUP, hour + 86400 * d) for d in range(7)}
+        assert len(offsets) >= 2, f"一周内应当是不同时刻：{offsets}"
+        assert all(0 <= o <= 1800 for o in offsets)

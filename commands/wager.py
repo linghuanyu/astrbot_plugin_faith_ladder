@@ -108,23 +108,52 @@ class WagerMixin:
             return 0.0
         return float(random.Random(f"{group_id}:{slot}").randint(0, jitter))
 
+    def _wager_quiet_bounds(self) -> tuple:
+        """静默时段（本地时间的小时区间，起点含、终点不含）；两端相同表示不静默。"""
+        try:
+            start = int(self._cfg("wager_quiet_start_hour")) % 24
+            end = int(self._cfg("wager_quiet_end_hour")) % 24
+        except (TypeError, ValueError):
+            return (0, 8)
+        return (start, end)
+
+    def _wager_in_quiet_hours(self, ts: float) -> bool:
+        """给定时刻是否落在静默时段内（按北京时间判断，与每日重置口径一致）。"""
+        from astrbot_plugin_faith_ladder.db_manager import BEIJING_TZ
+        from datetime import datetime
+
+        start, end = self._wager_quiet_bounds()
+        if start == end:
+            return False
+        hour = datetime.fromtimestamp(ts, BEIJING_TZ).hour
+        if start < end:
+            return start <= hour < end
+        return hour >= start or hour < end      # 跨夜区间，如 23~7
+
     async def _wager_due(self, group_id: str, now: float) -> bool:
         """现在该不该给这个群开一局。
 
         时刻按 **UTC 时间轴等分**（间隔 30 分钟 → 每小时 :00/:30；间隔 60 → 整点），
-        再叠加每群固定的随机延后，避免所有群卡在同一秒。
+        再叠加每群固定的随机延后；由于随机种子是「群号 + 绝对时间槽」，
+        **同一个钟点在每天得到的延后都不一样**，不会天天同一个时刻。
         槽内已经开过（含重启前，靠数据库记录）就等下一个槽；
-        全新安装（完全没有记录）立刻开一场，方便先看到效果。
+        落在静默时段（默认本地 0~8 点）的槽直接跳过，不会半夜开局；
+        全新安装（完全没有记录）立刻开一场（静默时段内除外）。
         """
         interval = self._wager_interval_seconds()
         slot = int(now // interval) * interval      # 当前槽起点（UTC 等分点）
 
         last = await self._wager_last_announce_at(group_id)
         if last is None:
-            return True                             # 从没开过：立刻来一场
+            return not self._wager_in_quiet_hours(now)   # 从没开过：立刻来一场，但夜里不吵人
         if last >= slot:
             return False                            # 这个槽已经开过了
-        return now >= slot + self._wager_slot_offset(group_id, slot)
+
+        fire_at = slot + self._wager_slot_offset(group_id, slot)
+        if self._wager_in_quiet_hours(fire_at):
+            # 夜里到点的直接跳过（不顺延）：静默时段内不该有赌局，等白天的槽再说
+            return False
+        return now >= fire_at
 
     def _wager_reward(self) -> int:
         try:
