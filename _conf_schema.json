@@ -166,6 +166,12 @@
     "type": "int",
     "default": 600
   },
+  "leaderboard_cache_seconds": {
+    "description": "榜单结果缓存时间（秒）",
+    "hint": "插件内任何改分/录入/改名/改信仰操作都会立即失效对应群的缓存，所以这里只影响“没有任何写入时的兜底新鲜度”；填 0 表示不缓存（每次查库）。",
+    "type": "int",
+    "default": 120
+  },
   "auto_backup_enabled": {
     "description": "启用自动备份",
     "hint": "每天首次运行时把数据库备份到插件数据目录的 backups/ 下。",

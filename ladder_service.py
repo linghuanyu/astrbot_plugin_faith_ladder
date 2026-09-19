@@ -36,15 +36,30 @@ MAX_ITEM_QUANTITY = 9999
 class LadderService:
     """Core business logic for the faith ladder plugin."""
 
-    # 排行榜缓存 TTL（秒）
-    LEADERBOARD_CACHE_TTL = 30  # 30 秒
+    # 排行榜缓存兜底 TTL（秒）：未注入配置读取器时使用；实际值由配置项
+    # leaderboard_cache_seconds 决定（默认 120，0 表示不缓存）
+    LEADERBOARD_CACHE_TTL = 120
 
-    def __init__(self, db_manager: DatabaseManager):
-        """装配业务逻辑层：持有 DB 管理器与排行榜缓存（缓存 TTL 见 LEADERBOARD_CACHE_TTL）。"""
+    def __init__(self, db_manager: DatabaseManager, ttl_getter: Optional[Callable[[], int]] = None):
+        """装配业务逻辑层：持有 DB 管理器与排行榜缓存。
+
+        ttl_getter：返回当前榜单缓存秒数（0 = 不缓存）。插件侧注入配置读取，
+        便于 WebUI 改完立即生效。
+        """
         self.db = db_manager
-        # 排行榜缓存：{(group_id, limit): (players, timestamp)}
+        self._ttl_getter = ttl_getter
+        # 排行榜缓存：{(group_id, limit, min_score): (players, timestamp)}
         self._leaderboard_cache = {}
         self._pilgrimage_cache = {}
+
+    def _cache_ttl(self) -> int:
+        """当前榜单缓存秒数（0 = 不缓存）。配置异常时回落类默认值。"""
+        if self._ttl_getter is None:
+            return self.LEADERBOARD_CACHE_TTL
+        try:
+            return max(0, int(self._ttl_getter()))
+        except (TypeError, ValueError):
+            return self.LEADERBOARD_CACHE_TTL
 
     def invalidate_leaderboard_cache(self, group_id: str = None):
         """失效排行榜缓存。不传 group_id 则清空全部缓存。"""
@@ -76,14 +91,16 @@ class LadderService:
         缓存键必须带上门槛：门槛来自配置，WebUI 改完后若只按 (群, 人数) 命中旧缓存，
         会继续按旧门槛显示最多 30 秒。
         """
+        ttl = self._cache_ttl()
         cache_key = (group_id, limit, min_ladder_score)
         now = time.time()
-        if cache_key in self._leaderboard_cache:
+        if ttl > 0 and cache_key in self._leaderboard_cache:
             players, timestamp = self._leaderboard_cache[cache_key]
-            if now - timestamp < self.LEADERBOARD_CACHE_TTL:
+            if now - timestamp < ttl:
                 return players
         players = await self.db.get_top_players(group_id, limit, min_ladder_score)
-        self._leaderboard_cache[cache_key] = (players, now)
+        if ttl > 0:
+            self._leaderboard_cache[cache_key] = (players, now)
         return players
 
     async def get_pilgrimage_leaderboard_text(self, group_id: str, limit: int = 10) -> str:
@@ -93,14 +110,16 @@ class LadderService:
 
     async def get_top_players_by_pilgrimage(self, group_id: str, limit: int = 10) -> List[Player]:
         """获取觐见之梯排行榜，带 30 秒缓存。"""
+        ttl = self._cache_ttl()
         cache_key = (group_id, limit)
         now = time.time()
-        if cache_key in self._pilgrimage_cache:
+        if ttl > 0 and cache_key in self._pilgrimage_cache:
             players, timestamp = self._pilgrimage_cache[cache_key]
-            if now - timestamp < self.LEADERBOARD_CACHE_TTL:
+            if now - timestamp < ttl:
                 return players
         players = await self.db.get_top_players_by_pilgrimage(group_id, limit)
-        self._pilgrimage_cache[cache_key] = (players, now)
+        if ttl > 0:
+            self._pilgrimage_cache[cache_key] = (players, now)
         return players
 
     async def get_player_card_by_name(

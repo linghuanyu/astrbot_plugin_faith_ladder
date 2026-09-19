@@ -140,6 +140,8 @@ class PrayerCommandsMixin:
                         group_id, player.player_id, word, player.faith
                     )
                     player.class_ = word
+                    # 榜单会显示职业，回填后必须失效缓存（缓存默认 120 秒）
+                    self.ladder_service.invalidate_leaderboard_cache(group_id)
                     logger.info(f"[PrayerTrigger] 补全职业: {player.player_name} ← {word}")
                     break
                 # 检查具体职业（按长度降序匹配，避免短职业名抢先命中）
@@ -147,6 +149,8 @@ class PrayerCommandsMixin:
                     if word == specific_name or word.startswith(specific_name):
                         await self.db_manager.set_player_class(group_id, player.player_id, sc, sp)
                         player.class_ = sc
+                        # 同上：榜单会显示职业
+                        self.ladder_service.invalidate_leaderboard_cache(group_id)
                         if not player.specific_faith:
                             await self.db_manager.set_player_specific_faith(group_id, player.player_id, sf)
                             # 同步内存对象，否则下面的"无具体信仰"判断会把本次触发丢掉

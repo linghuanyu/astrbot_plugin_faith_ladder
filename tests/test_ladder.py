@@ -194,3 +194,82 @@ class TestLadderCommandThresholdWiring:
     async def test_threshold_and_limit_come_from_config(self):
         calls = await self._run({"leaderboard_min_ladder_score": 0, "ladder_display_limit": 5})
         assert calls == [("g1", 5, 0)]
+
+
+class TestLeaderboardCacheTtl:
+    """榜单缓存时长（leaderboard_cache_seconds）：默认 120 秒，0 = 不缓存。
+
+    插件内任何改分/录入/改名/改信仰都会显式失效缓存，所以 TTL 只影响"没有写入时
+    的兜底新鲜度"——这里既测命中与关闭，也测长 TTL 下写入后依然立刻可见。
+    """
+
+    async def test_default_ttl_is_120(self):
+        from astrbot_plugin_faith_ladder.plugin_config import schema_default
+
+        assert schema_default("leaderboard_cache_seconds") == 120
+
+    async def test_cache_hit_avoids_second_query(self, db_manager):
+        calls = {"n": 0}
+        original = db_manager.get_top_players
+
+        async def counting(*args, **kwargs):
+            calls["n"] += 1
+            return await original(*args, **kwargs)
+
+        db_manager.get_top_players = counting
+        service = LadderService(db_manager, ttl_getter=lambda: 120)
+        await service.get_leaderboard_text("g1", 10, 0)
+        await service.get_leaderboard_text("g1", 10, 0)
+        assert calls["n"] == 1
+
+    async def test_zero_ttl_disables_cache(self, db_manager):
+        calls = {"n": 0}
+        original = db_manager.get_top_players
+
+        async def counting(*args, **kwargs):
+            calls["n"] += 1
+            return await original(*args, **kwargs)
+
+        db_manager.get_top_players = counting
+        service = LadderService(db_manager, ttl_getter=lambda: 0)
+        await service.get_leaderboard_text("g1", 10, 0)
+        await service.get_leaderboard_text("g1", 10, 0)
+        assert calls["n"] == 2, "配置成 0 时每次都应查库"
+
+    async def test_bad_ttl_value_falls_back_to_default(self, db_manager):
+        service = LadderService(db_manager, ttl_getter=lambda: "abc")
+        assert service._cache_ttl() == LadderService.LEADERBOARD_CACHE_TTL
+        service = LadderService(db_manager, ttl_getter=lambda: -5)
+        assert service._cache_ttl() == 0
+
+    async def test_register_player_is_visible_immediately_with_long_ttl(self, db_manager):
+        """录入玩家后必须立刻上榜：长 TTL 不能把新玩家藏起来。"""
+        service = LadderService(db_manager, ttl_getter=lambda: 3600)
+        assert "Alice" not in await service.get_leaderboard_text("g1", 10, 0)
+
+        await service.register_player("g1", "Alice", "生命", "战士", 1200, 100, "admin")
+        assert "Alice" in await service.get_leaderboard_text("g1", 10, 0)
+
+    async def test_class_change_is_visible_immediately_with_long_ttl(self, db_manager):
+        service = LadderService(db_manager, ttl_getter=lambda: 3600)
+        await db_manager.upsert_player("g1", "u1", "Alice")
+        assert "未设定" in await service.get_leaderboard_text("g1", 10, 0)
+
+        await service.set_class("g1", "u1", "Alice", "法师")
+        text = await service.get_leaderboard_text("g1", 10, 0)
+        assert "[法师]" in text
+        assert "[未设定]" not in text, "职业变更后不该还显示旧的占位职业"
+
+    async def test_pilgrimage_cache_uses_same_ttl(self, db_manager):
+        calls = {"n": 0}
+        original = db_manager.get_top_players_by_pilgrimage
+
+        async def counting(*args, **kwargs):
+            calls["n"] += 1
+            return await original(*args, **kwargs)
+
+        db_manager.get_top_players_by_pilgrimage = counting
+        service = LadderService(db_manager, ttl_getter=lambda: 0)
+        await service.get_pilgrimage_leaderboard_text("g1", 10)
+        await service.get_pilgrimage_leaderboard_text("g1", 10)
+        assert calls["n"] == 2
