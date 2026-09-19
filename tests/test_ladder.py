@@ -135,6 +135,7 @@ class TestLadderCommandThresholdWiring:
     """命令层必须把配置里的门槛传给服务层（默认 1100）。"""
 
     from astrbot_plugin_faith_ladder.commands.config import ConfigMixin as _ConfigMixin
+    from astrbot_plugin_faith_ladder.commands.gate import GateMixin as _GateMixin
 
     class _Event:
         def __init__(self):
@@ -164,7 +165,7 @@ class TestLadderCommandThresholdWiring:
         def set_cooldown(self, key):
             pass
 
-    class _Host(_ConfigMixin):
+    class _Host(_ConfigMixin, _GateMixin):
         def __init__(self, service, config):
             self.ladder_service = service
             self.config = config

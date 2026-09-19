@@ -28,6 +28,11 @@ class AdminCommandsMixin:
 
     async def _admin_impl(self, event: "AstrMessageEvent"):
         """管理员/诸神操作。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
         is_admin = self._is_plugin_admin(event)
@@ -297,6 +302,10 @@ class AdminCommandsMixin:
 
             target_group = self._cfg("auto_whitelist_group")
             if not target_group or group_id != target_group or not user_id:
+                return
+
+            # 白名单自动同步跟着群访问控制走：插件没启用的群不该动它的成员
+            if self._group_access_blocked(group_id):
                 return
 
             bot_id = str(event.get_self_id()) if hasattr(event, 'get_self_id') else ''

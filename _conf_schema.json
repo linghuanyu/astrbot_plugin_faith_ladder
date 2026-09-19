@@ -99,6 +99,19 @@
       "type": "string"
     }
   },
+  "group_access_mode": {
+    "description": "群访问控制模式：off=所有群可用 / blacklist=名单内的群不启用 / whitelist=只在名单内的群启用",
+    "hint": "未启用的群里插件完全静默（不回复任何内容），适合只服务指定群的部署方式；改完立即生效，无需重载插件。",
+    "type": "string",
+    "default": "off",
+    "options": ["off", "blacklist", "whitelist"]
+  },
+  "group_access_list": {
+    "description": "群访问控制的群号列表（配合上面的模式使用）",
+    "hint": "blacklist 模式填要禁用的群号，whitelist 模式填要启用的群号；两者都留空时 off 以外不产生任何限制。",
+    "type": "list",
+    "default": []
+  },
   "ladder_display_limit": {
     "description": "排行榜显示人数上限",
     "hint": "只影响榜单显示多少名，不影响数据与名次计算。",

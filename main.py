@@ -47,6 +47,7 @@ from astrbot_plugin_faith_ladder.commands import (
     PrayerCommandsMixin,
     SharedSendMixin,
     ConfigMixin,
+    GateMixin,
 )
 
 
@@ -68,6 +69,7 @@ class FaithLadderPlugin(
     QueryCommandsMixin,
     SharedSendMixin,
     ConfigMixin,
+    GateMixin,
     Star,
 ):
     """信仰游戏天梯排行榜插件。
@@ -102,6 +104,8 @@ class FaithLadderPlugin(
             check_perm_fn=self.permission_service.check_score_permission,
             check_admin_fn=self._is_plugin_admin,
             get_faith_fn=self._get_god_faith,
+            # 群访问控制/功能开关与插件侧共用同一个闸门
+            gate_fn=self._gate,
         )
         self._pending_gifts_receive = {}  # (group_id, receiver_id) -> gift_dict（内存缓存）
 

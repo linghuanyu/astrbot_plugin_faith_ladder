@@ -16,6 +16,7 @@ from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.ladder_service import LadderService
 from astrbot_plugin_faith_ladder.permission_service import PermissionService
 from astrbot_plugin_faith_ladder.commands.config import ConfigMixin as _ConfigMixin
+from astrbot_plugin_faith_ladder.commands.gate import GateMixin as _GateMixin
 
 
 @pytest.fixture
@@ -889,7 +890,7 @@ class TestAdminStringTolerance:
         assert svc.is_admin("789") is True
 
 
-class _OathHost(_ConfigMixin):
+class _OathHost(_ConfigMixin, _GateMixin):
     """驱动 PlayerCommandsMixin 立誓/弃誓实现体的最小宿主。"""
 
     class _Event:
@@ -966,7 +967,7 @@ class TestOathCooldownOrdering:
         assert host.cooldown_manager.check_cooldown("10001:oath", 600) is False
 
 
-class _AdminHost(_ConfigMixin):
+class _AdminHost(_ConfigMixin, _GateMixin):
     """驱动 AdminCommandsMixin 管理动作的最小宿主。"""
 
     class _Event:

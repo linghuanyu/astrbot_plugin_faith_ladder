@@ -23,6 +23,11 @@ class QueryCommandsMixin:
 
     async def _query_impl(self, event: "AstrMessageEvent"):
         """查询玩家信息。支持查自己、诸神指定玩家名、@用户、批量查询。"""
+        blocked, gate_msg = await self._gate(event, "query")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -125,6 +130,11 @@ class QueryCommandsMixin:
 
     async def _query_inventory_impl(self, event: "AstrMessageEvent"):
         """查看玩家储物空间。查自己（含彩蛋）或诸神批量查询。"""
+        blocked, gate_msg = await self._gate(event, "query_inventory")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 

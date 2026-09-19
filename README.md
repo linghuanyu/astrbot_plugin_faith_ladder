@@ -22,6 +22,7 @@ AstrBot 群聊双积分排名插件，登神之路 + 觐见之梯双榜展示，
 - **直接回复** — 指令回复不经过 AI 处理，固定格式输出
 - **祷词触发** — 玩家每天第一次发送命中自己命途祷词的消息时，随机获得一次觐见分变化（默认命中信仰 -2~+2、信仰不匹配 -2~0，区间可在配置里改）。默认只作氛围互动、不改动实际分数，需开启 `prayer_score_enabled` 才真实计分
 - **榜单门槛** — 天梯榜默认只显示登神之路 ≥ 1100 分的玩家，门槛由 `leaderboard_min_ladder_score` 配置（0 为不过滤）
+- **群访问控制** — `group_access_mode` 可选 off/黑名单/白名单：未启用的群里插件完全静默（不回复、不抢事件），适合只服务指定群
 - **合并转发** — 天梯榜、觐见榜、储物空间默认使用合并转发卡片展示
 
 ## 职业与信仰
@@ -194,6 +195,8 @@ AstrBot 群聊双积分排名插件，登神之路 + 觐见之梯双榜展示，
 | `query_cooldown_seconds` | int | 5 | 查询指令冷却时间（秒） |
 | `ladder_display_limit` | int | 10 | 排行榜显示人数上限 |
 | `leaderboard_min_ladder_score` | int | 1100 | 天梯榜分数门槛：登神之路低于该分不上榜（0 为不过滤） |
+| `group_access_mode` | string | off | 群访问控制：off 所有群可用 / blacklist 名单内不用 / whitelist 只在名单内可用 |
+| `group_access_list` | list | [] | 群访问控制的群号列表（配合上面的模式） |
 | `init_ladder_score` | int | 1000 | 初始登神之路分 |
 | `init_pilgrimage_score` | int | 100 | 初始觐见之梯分 |
 | `allow_negative_scores` | bool | true | 允许录入负分 |

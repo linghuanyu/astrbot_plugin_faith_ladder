@@ -21,6 +21,11 @@ class ScoreboardCommandsMixin:
 
     async def _ladder_impl(self, event: "AstrMessageEvent"):
         """显示天梯排行榜（需要诸神权限）（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, "scoreboard")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         user_id = str(event.get_sender_id())
 
         # Permission check
@@ -51,6 +56,11 @@ class ScoreboardCommandsMixin:
 
     async def _pilgrimage_impl(self, event: "AstrMessageEvent"):
         """显示觐见之梯排行榜（需要诸神权限）（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, "scoreboard")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         user_id = str(event.get_sender_id())
 
         # Permission check

@@ -7,6 +7,7 @@ QQ 群管理命令逻辑。
 
 import asyncio
 import inspect
+from typing import Optional, Tuple
 from astrbot.core.message.components import At, Reply, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -46,6 +47,7 @@ class QQAdminHandler:
         check_perm_fn,  # async (user_id: str) -> bool
         check_admin_fn,  # (event) -> bool
         get_faith_fn=None,  # async (user_id: str) -> str|None
+        gate_fn=None,  # async (event, action: str) -> (blocked: bool, message: str|None)
     ):
         """注入权限/信仰/管理员判定回调，使群管逻辑不直接依赖插件实例，便于单独复用与测试。"""
         self._check_perm = check_perm_fn
@@ -55,6 +57,13 @@ class QQAdminHandler:
                 return None
             get_faith_fn = _no_faith
         self._get_faith = get_faith_fn
+        self._gate_fn = gate_fn
+
+    async def _preflight(self, event) -> Tuple[bool, Optional[str]]:
+        """入口闸门：群访问控制与功能开关。未注入回调时不拦截（保持可独立测试）。"""
+        if self._gate_fn is None:
+            return False, None
+        return await _resolve(self._gate_fn(event, "qq_admin"))
 
     async def _get_faith_message(self, event: AiocqhttpMessageEvent, action: str, **kwargs) -> str:
         """获取信仰专属消息。"""
@@ -95,6 +104,12 @@ class QQAdminHandler:
 
     async def handle_ban(self, event: AiocqhttpMessageEvent):
         """禁言 <秒数> @用户 — 成功静默，错误保留"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -160,6 +175,12 @@ class QQAdminHandler:
 
     async def handle_unban(self, event: AiocqhttpMessageEvent):
         """解禁 @用户 — 成功显示信仰消息"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -202,6 +223,12 @@ class QQAdminHandler:
 
     async def handle_kick(self, event: AiocqhttpMessageEvent):
         """踢出 @用户 — 成功显示信仰消息，错误保留"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -253,6 +280,12 @@ class QQAdminHandler:
 
     async def handle_recall(self, event: AiocqhttpMessageEvent):
         """撤回消息 — 成功静默，错误保留"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -333,6 +366,12 @@ class QQAdminHandler:
 
     async def handle_mute_all(self, event: AiocqhttpMessageEvent):
         """全员禁言 — 成功静默"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -350,6 +389,12 @@ class QQAdminHandler:
 
     async def handle_unmute_all(self, event: AiocqhttpMessageEvent):
         """关闭全员禁言 — 成功静默"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -367,6 +412,12 @@ class QQAdminHandler:
 
     async def handle_set_essence(self, event: AiocqhttpMessageEvent):
         """设置精华消息 — 引用一条消息设置为精华，成功静默"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()
@@ -391,6 +442,12 @@ class QQAdminHandler:
 
     async def handle_remove_essence(self, event: AiocqhttpMessageEvent):
         """移除精华消息 — 引用一条消息移除精华，成功静默"""
+        blocked, block_msg = await self._preflight(event)
+        if blocked:
+            if block_msg:
+                yield event.plain_result(block_msg)
+                event.stop_event()
+            return
         if not await self._check_permission(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             event.stop_event()

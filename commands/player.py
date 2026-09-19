@@ -26,6 +26,11 @@ class PlayerCommandsMixin:
 
     async def _register_player_impl(self, event: "AstrMessageEvent"):
         """录入新玩家。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -183,6 +188,11 @@ class PlayerCommandsMixin:
         随后用「赠送道具」取走其库存。限制调用者之后，这条路径只由受信用户触发，
         可疑绑定也由诸神人工审核。
         """
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
 
         if not await self._check_perm(event):
@@ -237,6 +247,11 @@ class PlayerCommandsMixin:
 
     async def _bind_qq_impl(self, event: "AstrMessageEvent"):
         """为指定玩家绑定 QQ（诸神权限）。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         if not await self._check_perm(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
@@ -311,6 +326,11 @@ class PlayerCommandsMixin:
 
     async def _rebind_qq_impl(self, event: "AstrMessageEvent"):
         """为玩家换绑 QQ（诸神权限）。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         if not await self._check_perm(event):
             yield event.plain_result(PERMISSION_DENIED["god_only"])
@@ -377,6 +397,11 @@ class PlayerCommandsMixin:
 
     async def _set_class_impl(self, event: "AstrMessageEvent"):
         """修改玩家职业。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
 
         if not await self._check_perm(event):
@@ -408,6 +433,11 @@ class PlayerCommandsMixin:
 
     async def _take_oath_impl(self, event: "AstrMessageEvent"):
         """设置信仰。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
 
         if not await self._check_perm(event):
@@ -445,6 +475,11 @@ class PlayerCommandsMixin:
 
     async def _abandon_oath_impl(self, event: "AstrMessageEvent"):
         """标记弃誓者。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 

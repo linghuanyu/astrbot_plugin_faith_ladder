@@ -23,6 +23,11 @@ class ScoreCommandsMixin:
 
     async def _add_score_impl(self, event: "AstrMessageEvent"):
         """录入积分变化。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -71,6 +76,11 @@ class ScoreCommandsMixin:
 
     async def _batch_add_score_impl(self, event: "AstrMessageEvent"):
         """批量录入积分。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 

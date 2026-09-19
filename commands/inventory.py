@@ -22,6 +22,11 @@ class InventoryCommandsMixin:
 
     async def _give_item_impl(self, event: "AstrMessageEvent"):
         """赐予道具。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -61,6 +66,11 @@ class InventoryCommandsMixin:
 
     async def _remove_item_impl(self, event: "AstrMessageEvent"):
         """收回道具。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -143,6 +153,11 @@ class InventoryCommandsMixin:
 
     async def _clear_inventory_impl(self, event: "AstrMessageEvent"):
         """清除储物空间。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -180,6 +195,11 @@ class InventoryCommandsMixin:
 
     async def _add_status_impl(self, event: "AstrMessageEvent"):
         """添加状态。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -217,6 +237,11 @@ class InventoryCommandsMixin:
 
     async def _remove_status_impl(self, event: "AstrMessageEvent"):
         """移除状态。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 
@@ -242,6 +267,11 @@ class InventoryCommandsMixin:
 
     async def _clear_status_impl(self, event: "AstrMessageEvent"):
         """清除所有状态。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         user_id = str(event.get_sender_id())
 

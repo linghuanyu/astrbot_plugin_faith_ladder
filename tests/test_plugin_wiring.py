@@ -575,3 +575,105 @@ class TestBanDurationParsing:
             monkeypatch, [self._Plain("禁言 "), self._At(qq="777"), self._Plain("拜托了")]
         )
         assert bot.bans == [(777, 60)]
+
+
+class TestQQAdminGate:
+    """群管指令的入口闸门（群访问控制 / 功能开关）。
+
+    这 8 条指令不走 mixin，而是 main.py 直接调用 QQAdminHandler.handle_*，
+    所以闸门靠注入的回调 `gate_fn` 接入，这里验证三种结果。
+    """
+
+    class _Bot:
+        def __init__(self):
+            self.bans = []
+
+        async def set_group_ban(self, group_id=None, user_id=None, duration=None):
+            self.bans.append((user_id, duration))
+
+    class _FakeEvent:
+        def __init__(self, bot):
+            self.bot = bot
+            self.stopped = False
+            self.message_str = ""
+            self._segments = []
+
+        def get_messages(self):
+            return self._segments
+
+        def get_self_id(self):
+            return "1"
+
+        def get_sender_id(self):
+            return "555"
+
+        def get_group_id(self):
+            return "1"
+
+        def plain_result(self, text):
+            return text
+
+        def stop_event(self):
+            self.stopped = True
+
+    @staticmethod
+    def _handler(monkeypatch, gate_fn):
+        from astrbot_plugin_faith_ladder import qq_admin_handle
+        from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+
+        async def allow(uid):
+            return True
+
+        def allow_admin(event):
+            return True
+
+        monkeypatch.setattr(qq_admin_handle, "get_ats", lambda event: ["777"])
+        handler = QQAdminHandler(
+            check_perm_fn=allow, check_admin_fn=allow_admin, gate_fn=gate_fn
+        )
+
+        async def member_info(event, uid):
+            return {"role": "member", "nickname": f"用户{uid}"}
+
+        handler._get_member_info = member_info
+        return handler
+
+    async def test_silent_block_does_not_act_or_stop(self, stubbed_astrbot, monkeypatch):
+        async def silent_block(event, action):
+            return True, None
+
+        bot = self._Bot()
+        event = self._FakeEvent(bot)
+        replies = [r async for r in self._handler(monkeypatch, silent_block).handle_ban(event)]
+        assert replies == []
+        assert bot.bans == [], "被静默拦截时不应执行禁言"
+        assert event.stopped is False, "插件未启用的群里不该抢事件（让其他插件/AI 正常处理）"
+
+    async def test_block_with_message_replies_and_stops(self, stubbed_astrbot, monkeypatch):
+        async def feature_off(event, action):
+            return True, "「群管」功能已被管理员关闭"
+
+        bot = self._Bot()
+        event = self._FakeEvent(bot)
+        replies = [r async for r in self._handler(monkeypatch, feature_off).handle_ban(event)]
+        assert replies == ["「群管」功能已被管理员关闭"]
+        assert bot.bans == []
+        assert event.stopped is True
+
+    async def test_without_gate_callback_nothing_is_blocked(self, stubbed_astrbot, monkeypatch):
+        """不注入 gate_fn 时保持原行为（QQAdminHandler 仍可独立复用/测试）。"""
+        bot = self._Bot()
+        event = self._FakeEvent(bot)
+        _ = [r async for r in self._handler(monkeypatch, None).handle_ban(event)]
+        assert bot.bans == [(777, 60)]
+
+    async def test_gate_receives_plugin_action_name(self, stubbed_astrbot, monkeypatch):
+        seen = []
+
+        async def spy(event, action):
+            seen.append(action)
+            return False, None
+
+        event = self._FakeEvent(self._Bot())
+        _ = [r async for r in self._handler(monkeypatch, spy).handle_ban(event)]
+        assert seen == ["qq_admin"]

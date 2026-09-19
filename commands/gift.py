@@ -28,6 +28,11 @@ class GiftCommandsMixin:
 
     async def _gift_item_impl(self, event: "AstrMessageEvent"):
         """赠送道具。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, "gift_send")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
 
         # 发送方 = 自己（强制 QQ 绑定鉴权）
@@ -128,6 +133,11 @@ class GiftCommandsMixin:
 
     async def _accept_gift_impl(self, event: "AstrMessageEvent"):
         """接收方接受赠送，无需参数。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, "gift_accept")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         is_god = await self._check_perm(event)
         args = self._get_args(event, "接受道具")
@@ -212,6 +222,11 @@ class GiftCommandsMixin:
 
     async def _reject_gift_impl(self, event: "AstrMessageEvent"):
         """接收方拒绝赠送，无需参数。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, "gift_reject")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         group_id = self._get_group_id(event)
         is_god = await self._check_perm(event)
         args = self._get_args(event, "拒绝道具")

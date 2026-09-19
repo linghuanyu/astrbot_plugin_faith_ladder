@@ -41,6 +41,11 @@ class PrayerCommandsMixin:
 
     async def _prayer_message_impl(self, event: "AstrMessageEvent"):
         """监听所有消息，检测祷词触发。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, "prayer")
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
         logger.debug(f"[PrayerTrigger] Message received: {event.message_str}")
 
         # 1. 快速过滤：必须是群消息（非私聊）
