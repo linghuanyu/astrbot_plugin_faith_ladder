@@ -57,7 +57,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.0"
+    "3.7.1"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -727,6 +727,14 @@ class FaithLadderPlugin(
     async def cmd_clear_status(self, event: AstrMessageEvent):
         """清除所有状态。格式: 清除状态 <玩家名>"""
         async for result in self._clear_status_impl(event):
+            yield result
+
+    # === 神明的赌局 ===
+
+    @filter.command("赌局", alias={"wager", "神明赌局"})
+    async def cmd_wager(self, event: AstrMessageEvent):
+        """手动抛下一场「神明的赌局」（需开启 wager_enabled；诸神/管理员）"""
+        async for result in self._wager_open_impl(event):
             yield result
 
     # === 赠送道具 ===

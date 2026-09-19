@@ -13,6 +13,7 @@ from astrbot_plugin_faith_ladder import wager_messages as wm
 from astrbot_plugin_faith_ladder.commands.config import ConfigMixin
 from astrbot_plugin_faith_ladder.commands.gate import GateMixin
 from astrbot_plugin_faith_ladder.commands.wager import WAGER_ACTION_LABELS, WagerMixin
+from astrbot_plugin_faith_ladder.messages import PERMISSION_DENIED
 from astrbot_plugin_faith_ladder.models import VALID_FAITHS
 
 GROUP = "g1"
@@ -36,12 +37,16 @@ class _Host(ConfigMixin, GateMixin, WagerMixin):
         self._clock = start
         self._wagers = {}
         self._wager_last = {}
+        self.perm_ok = True
 
     def _wager_now(self):
         return self._clock
 
     def _get_group_id(self, event):
         return str(event.message_obj.group_id)
+
+    async def _check_perm(self, event):
+        return self.perm_ok
 
     async def _wager_send(self, group_id, text):
         self.sent.append((group_id, text))
@@ -347,3 +352,149 @@ def test_prayer_listener_has_wager_hooks():
     src = (Path(__file__).resolve().parent.parent / "commands" / "prayer.py").read_text(encoding="utf-8")
     assert '_wager_entry(event, "speak")' in src
     assert '_wager_entry(event, "pray")' in src
+
+
+class TestWagerRespectsGroupAccess:
+    """赌局不能绕开群访问控制：被排除的群既不开局、也收不到任何播报。"""
+
+    async def test_blocked_group_gets_no_new_wager(self, db_manager):
+        host = _host(group_access_mode="blacklist", group_access_list=[GROUP])
+        host.db_manager = db_manager
+        await host._wager_tick()
+        assert host.sent == []
+        assert host._wager_state() == {}
+        async with db_manager._db.execute("SELECT COUNT(*) FROM god_wagers") as cursor:
+            assert (await cursor.fetchone())[0] == 0, "被排除的群不该留下赌局记录"
+
+    async def test_wager_started_earlier_still_settles_but_silently(self):
+        """配置改成排除该群后，进行中的赌局仍要收尾（否则状态永远卡住），但不发消息。"""
+        host = _host()
+        await host._wager_tick()
+        action = host._wager_state()[GROUP]["action"]
+        await host._wager_entry(_Event(), action)
+
+        host.config["group_access_mode"] = "blacklist"
+        host.config["group_access_list"] = [GROUP]
+        host.advance(61)
+        await host._wager_tick()
+
+        assert GROUP not in host._wager_state(), "状态必须清掉"
+        assert len(host.sent) == 1, "开奖消息不该发到被排除的群"
+
+    async def test_notify_guard_blocks_sends(self):
+        host = _host(group_access_mode="whitelist", group_access_list=["other"])
+        await host._wager_notify(GROUP, "不该出现")
+        assert host.sent == []
+
+    async def test_notify_allows_normal_group(self):
+        host = _host()
+        await host._wager_notify(GROUP, "正常播报")
+        assert host.sent == [(GROUP, "正常播报")]
+
+
+class TestWagerActionAvailability:
+    async def test_action_is_always_speak_without_prayer(self):
+        """该群没开祷词（或功能关闭）时，只可能抽到"开口说话"。"""
+        host = _host()   # 未配置 prayer_trigger_groups
+        for _ in range(30):
+            host._wager_state().clear()
+            host._wager_last_map().clear()
+            await host._wager_tick()
+            assert host._wager_state()[GROUP]["action"] == "speak"
+
+    async def test_pray_can_be_drawn_when_prayer_is_available(self, monkeypatch):
+        host = _host(prayer_trigger_groups=[GROUP])
+        real_choice = wm.random.choice
+
+        def fake_choice(seq):
+            if seq == ["speak", "pray"]:
+                return "pray"
+            return real_choice(seq)
+
+        monkeypatch.setattr("astrbot_plugin_faith_ladder.commands.wager.random.choice", fake_choice)
+        await host._wager_tick()
+        assert host._wager_state()[GROUP]["action"] == "pray"
+
+    async def test_prayer_feature_switch_off_blocks_pray(self):
+        host = _host(prayer_trigger_groups=[GROUP], feature_prayer_enabled=False)
+        for _ in range(20):
+            host._wager_state().clear()
+            host._wager_last_map().clear()
+            await host._wager_tick()
+            assert host._wager_state()[GROUP]["action"] == "speak"
+
+    async def test_prayer_available_helper(self):
+        assert _host()._prayer_available(GROUP) is False
+        assert _host(prayer_trigger_groups=[GROUP])._prayer_available(GROUP) is True
+        assert _host(prayer_trigger_groups=[GROUP], feature_prayer_enabled=False)._prayer_available(GROUP) is False
+
+
+class TestManualWagerCommand:
+    """手动开局指令：赌局（别名 wager / 神明赌局）。"""
+
+    class _CmdEvent(_Event):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.results = []
+
+        def plain_result(self, text):
+            self.results.append(text)
+            return text
+
+    async def _run(self, host, event):
+        return [r async for r in host._wager_open_impl(event)]
+
+    async def test_manual_open_starts_a_wager(self):
+        host = _host(wager_groups=[])   # 不在自动开局名单里也能手动开
+        event = self._CmdEvent()
+        replies = await self._run(host, event)
+
+        assert len(replies) == 1
+        state = host._wager_state()[GROUP]
+        assert state["god"] in VALID_FAITHS
+        assert state["action"] in WAGER_ACTION_LABELS
+        assert host.sent == [], "手动开局的文案由指令本身回复，不再重复广播"
+
+    async def test_manual_open_while_running_reports_remaining(self):
+        host = _host()
+        await host._wager_tick()
+        replies = await self._run(host, self._CmdEvent())
+        assert len(replies) == 1
+        assert "已有一场赌局" in replies[0]
+        assert "还剩" in replies[0]
+
+    async def test_manual_open_needs_master_switch(self):
+        host = _host(wager_enabled=False)
+        replies = await self._run(host, self._CmdEvent())
+        assert "总开关未开启" in replies[0]
+        assert host._wager_state() == {}
+
+    async def test_manual_open_needs_permission(self):
+        host = _host()
+        host.perm_ok = False
+        replies = await self._run(host, self._CmdEvent())
+        assert replies == [PERMISSION_DENIED["god_only"]]
+        assert host._wager_state() == {}
+
+    async def test_manual_open_is_silent_in_blocked_group(self):
+        host = _host(group_access_mode="blacklist", group_access_list=[GROUP])
+        replies = await self._run(host, self._CmdEvent())
+        assert replies == [], "被排除的群里插件应完全静默"
+        assert host._wager_state() == {}
+
+    async def test_manual_open_then_entry_counts(self):
+        host = _host(wager_groups=[])
+        await self._run(host, self._CmdEvent())
+        action = host._wager_state()[GROUP]["action"]
+        await host._wager_entry(_Event(), action)
+        assert list(host._wager_state()[GROUP]["entries"].values()) == ["张三"]
+
+    async def test_manual_open_ignores_interval(self):
+        host = _host()
+        await host._wager_tick()          # 自动开一场
+        action = host._wager_state()[GROUP]["action"]
+        await host._wager_entry(_Event(), action)
+        host.advance(61)
+        await host._wager_tick()          # 开奖
+        await self._run(host, self._CmdEvent())   # 立刻手动再开
+        assert GROUP in host._wager_state()

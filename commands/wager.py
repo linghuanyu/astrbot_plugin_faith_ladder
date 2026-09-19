@@ -21,6 +21,7 @@ import random
 import time
 from typing import TYPE_CHECKING, Dict, Optional
 
+from astrbot_plugin_faith_ladder.messages import PERMISSION_DENIED
 from astrbot_plugin_faith_ladder.models import VALID_FAITHS
 from astrbot_plugin_faith_ladder.wager_messages import pick_wager_line
 
@@ -103,22 +104,43 @@ class WagerMixin:
         for group_id in self._wager_groups():
             state = self._wager_state().get(group_id)
             if state is not None:
+                # 进行中的赌局照常结算（_wager_send 对被排除的群静默），
+                # 否则配置一改，这条状态就永远卡在内存里、再也不会被清掉
                 if now >= state["ends_at"]:
                     await self._wager_settle(group_id)
+                continue
+
+            # 被群访问控制排除的群不参与赌局：插件在那儿本该完全静默，
+            # 不能因为赌局走了另一条发送通道就绕开这个约束
+            if self._group_access_blocked(group_id):
                 continue
             # 用 None 而不是 0.0 表示"从没开过局"：单调时钟的起点是开机时间，
             # 若拿 0.0 相减，机器刚启动不久（运行时长 < 间隔）时首次开局会被莫名推迟
             last = self._wager_last_map().get(group_id)
             if last is None or now - last >= self._wager_interval_seconds():
-                await self._wager_announce(group_id, now)
+                text = await self._wager_announce(group_id, now)
+                if text:
+                    await self._wager_notify(group_id, text)
 
     # ── 开局 ──
 
-    async def _wager_announce(self, group_id: str, now: Optional[float] = None) -> None:
-        """抛下一场赌局：随机神明 + 随机入局动作。"""
+    def _prayer_available(self, group_id: str) -> bool:
+        """该群现在能不能触发祷词（功能开关 + 触发群列表）。
+
+        抽到"献上祷词"却没人能触发，开奖就只能走"无人入局"——所以只在能触发时才允许抽它。
+        """
+        if not self._cfg("feature_prayer_enabled"):
+            return False
+        groups = self._cfg("prayer_trigger_groups") or []
+        return str(group_id).strip() in {str(g).strip() for g in groups if str(g).strip()}
+
+    async def _wager_announce(self, group_id: str, now: Optional[float] = None) -> str:
+        """抛下一场赌局：随机神明 + 随机入局动作。返回开局文案，由调用方决定怎么发
+        （自动 tick 走 _wager_send 广播；手动指令直接把这条当作回复）。"""
         now = self._wager_now() if now is None else now
         god = random.choice(list(VALID_FAITHS))
-        action = random.choice(list(WAGER_ACTION_LABELS))
+        actions = ["speak", "pray"] if self._prayer_available(group_id) else ["speak"]
+        action = random.choice(actions)
         seconds = self._wager_duration()
         ends_at = now + seconds
 
@@ -136,7 +158,43 @@ class WagerMixin:
 
         wager_id = await self._wager_store_open(group_id, god, action, seconds)
         self._wager_state()[group_id]["wager_id"] = wager_id
-        await self._wager_send(group_id, text)
+        return text
+
+    # ── 手动开局（指令） ──
+
+    async def _wager_open_impl(self, event):
+        """手动抛下一场赌局。（注册在 main.py）
+
+        与自动开局的差别：不看 `wager_groups`（管理员在哪个群发就在哪个群开）、
+        不等间隔；其余条件相同（总开关、群未被访问控制排除、当前无进行中的赌局）。
+        """
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
+
+        if not await self._check_perm(event):
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
+            return
+
+        if not self._wager_enabled():
+            yield event.plain_result(
+                "「神明的赌局」总开关未开启（配置项 wager_enabled）。\n"
+                "开启后即可用本指令在任何未被群访问控制排除的群里开局。"
+            )
+            return
+
+        group_id = self._get_group_id(event)
+        state = self._wager_state().get(group_id)
+        if state is not None:
+            remain = max(0, int(state["ends_at"] - self._wager_now()))
+            yield event.plain_result(f"本群已有一场赌局正在进行（还剩 {remain} 秒）。")
+            return
+
+        text = await self._wager_announce(group_id)
+        if text:
+            yield event.plain_result(text)
 
     # ── 入局 ──
 
@@ -146,6 +204,8 @@ class WagerMixin:
             return
 
         group_id = self._get_group_id(event)
+        if self._group_access_blocked(group_id):
+            return
         state = self._wager_state().get(group_id)
         if state is None or state["action"] != action:
             return
@@ -189,7 +249,7 @@ class WagerMixin:
                 god=god, winner="", seconds="", action="", reward=""
             )
             await self._wager_store_close(state.get("wager_id"), None, None, 0)
-            await self._wager_send(group_id, text)
+            await self._wager_notify(group_id, text)
             return
 
         winner_id, winner_name = random.choice(list(entries.items()))
@@ -219,13 +279,24 @@ class WagerMixin:
             # 免责声明独立成行：塞进文案占位符里的话，遇到不含占位符的句子就丢了
             text += "\n（本次结果不影响实际分数）"
         await self._wager_store_close(state.get("wager_id"), winner_id, winner_name, len(entries))
-        await self._wager_send(group_id, text)
+        await self._wager_notify(group_id, text)
         logger.info(f"[Wager] 群 {group_id} 开奖：{god}/{outcome} 参与者 {len(entries)}")
 
     # ── 发送与落库（可被测试替换）──
 
+    async def _wager_notify(self, group_id: str, text: str) -> None:
+        """对外播报的统一出口：被群访问控制排除的群一律不发。
+
+        赌局有自己的发送通道（不走指令闸门），所以"该群完全静默"这条约定必须
+        在这里显式兜一次。策略放在这里而不是 `_wager_send` 里，是因为 _wager_send
+        是纯通道、测试会替换它——把策略藏在被替换的方法里等于测不到。
+        """
+        if self._group_access_blocked(group_id):
+            return
+        await self._wager_send(group_id, text)
+
     async def _wager_send(self, group_id: str, text: str) -> None:
-        """把播报发到群里；无 context（单测）时静默跳过。"""
+        """把播报发到群里（纯发送通道，不含策略）；无 context（单测）时静默跳过。"""
         context = getattr(self, "context", None)
         if context is None or not text:
             return
