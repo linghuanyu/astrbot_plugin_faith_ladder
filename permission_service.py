@@ -7,7 +7,7 @@ Whitelist is GLOBAL — not scoped to any group.
 import time
 from typing import Optional, Callable
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
-from astrbot_plugin_faith_ladder.plugin_config import cfg_get
+from astrbot_plugin_faith_ladder.plugin_config import cfg_get, config_snapshot
 
 
 def _normalize_entry_type(value) -> str:
@@ -32,12 +32,16 @@ class PermissionService:
     # 权限缓存 TTL（秒）
     CACHE_TTL = 300  # 5 分钟
 
+    # 参与权限判定的配置键：这几个键一变，缓存立即失效——
+    # 否则 WebUI 刚把某人加进 admin_ids，他要等最多 5 分钟才生效
+    CONFIG_KEYS = ("admin_ids", "whitelist")
+
     def __init__(self, db_manager: DatabaseManager, config: Optional[dict] = None, config_getter: Optional[Callable[[], dict]] = None):
         """config 与 config_getter 二选一：前者为静态快照，后者用于配置热重载且优先级更高。"""
         self.db = db_manager
         self._config_getter = config_getter
         self._config_static = config or {}
-        # 权限缓存：{user_id: (result, timestamp)}
+        # 权限缓存：{user_id: (result, timestamp, 配置快照)}
         self._permission_cache = {}
 
     def invalidate_cache(self, user_id: str = None):
@@ -97,10 +101,11 @@ class PermissionService:
         """
         # 检查缓存（过期条目顺手删掉，避免字典无上限增长）
         now = time.time()
+        snapshot = config_snapshot(self._config, self.CONFIG_KEYS)
         cached = self._permission_cache.get(user_id)
         if cached is not None:
-            result, timestamp = cached
-            if now - timestamp < self.CACHE_TTL:
+            result, timestamp, cached_snapshot = cached
+            if now - timestamp < self.CACHE_TTL and cached_snapshot == snapshot:
                 return result
             del self._permission_cache[user_id]
 
@@ -112,8 +117,8 @@ class PermissionService:
         else:
             result = await self.db.is_whitelisted(user_id)
 
-        # 写入缓存
-        self._permission_cache[user_id] = (result, now)
+        # 写入缓存（带配置快照：配置变了下次就读不到这条）
+        self._permission_cache[user_id] = (result, now, snapshot)
         return result
 
     async def add_to_whitelist(

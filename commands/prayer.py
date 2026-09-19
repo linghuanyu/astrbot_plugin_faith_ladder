@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from astrbot_plugin_faith_ladder.text_utils import PRAYER_NORMALIZE_RE
 
+from astrbot_plugin_faith_ladder.plugin_config import config_snapshot, schema_keys
 from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS
 try:
@@ -22,6 +23,17 @@ try:
 except ImportError:  # 无 AstrBot 环境（如跑测试）时退回标准库日志
     import logging
     logger = logging.getLogger(__name__)
+
+
+def _prayer_cache_config_keys() -> List[str]:
+    """参与祷词缓存构建的配置键：16 个祷词列表 + 全部 `cmd_*` 指令名前缀。
+
+    键名直接从 schema 取，以后新增信仰或指令前缀不会被漏掉（漏了就会出现
+    "改了配置但缓存没重建"的隐蔽问题）。
+    """
+    return [k for k in schema_keys() if k.startswith("prayer_text_")] + [
+        k for k in schema_keys() if k.startswith("cmd_")
+    ]
 
 
 class PrayerCommandsMixin:
@@ -38,6 +50,9 @@ class PrayerCommandsMixin:
 
         group_id = self._get_group_id(event)
         logger.debug(f"[PrayerTrigger] Group: {group_id}")
+
+        # 配置可能在 WebUI 里被改过：先确保祷词表/指令前缀是当前的
+        self._ensure_prayer_cache()
 
         # 2. 快速过滤：群是否在配置列表中
         trigger_groups = self._cfg("prayer_trigger_groups")
@@ -179,10 +194,10 @@ class PrayerCommandsMixin:
         event.stop_event()
 
     def _build_prayer_cache(self):
-        """构建祷词缓存：{归一化祷词: 具体信仰名}。只在插件初始化时调用。
+        """构建祷词缓存：{归一化祷词: 具体信仰名} 与指令前缀集合。
 
-        AstrBot 没有插件内的配置变更钩子，WebUI 改完祷词配置后需重载插件
-        （或重启）才会生效；不要在这里假设存在热更新。
+        初始化时调用一次；之后由 `_ensure_prayer_cache()` 按配置快照判断是否重建，
+        因此 WebUI 改完祷词文本/指令名**不需要**重载插件。
         """
         self._prayer_cache = {}
         # 祷词配置按具体信仰（faith）存储，16个信仰
@@ -203,6 +218,19 @@ class PrayerCommandsMixin:
         self._command_prefixes = {
             self._cfg(key) for key in cmd_keys if self._cfg(key)
         }
+        # 记下构建时的配置快照，供 _ensure_prayer_cache 比对
+        self._prayer_cache_snapshot = config_snapshot(self.config, _prayer_cache_config_keys())
+
+    def _ensure_prayer_cache(self) -> None:
+        """配置变过就重建祷词/指令前缀缓存（WebUI 保存后立即生效，无需重载插件）。
+
+        比对成本 = 读 28 个键 + 比一次元组，相比后面要做的归一化与 DB 查询可忽略。
+        """
+        if config_snapshot(self.config, _prayer_cache_config_keys()) != getattr(
+            self, "_prayer_cache_snapshot", None
+        ):
+            self._build_prayer_cache()
+            logger.info("[PrayerTrigger] 配置已变化，祷词缓存已重建")
 
     def _normalize_prayer_text(self, text: str) -> str:
         """去除所有标点和空格，仅保留中文字符和字母数字。"""

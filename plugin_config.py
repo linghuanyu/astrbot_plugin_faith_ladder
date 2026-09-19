@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -130,3 +130,13 @@ def cfg_get(config: Optional[dict], key: str, default: Any = None) -> Any:
     if raw is _MISSING or raw is None:
         return copy.deepcopy(schema_default)
     return _cast(raw, type_name, copy.deepcopy(schema_default))
+
+
+def config_snapshot(config: Optional[dict], keys: Iterable[str]) -> Tuple[str, ...]:
+    """取一组配置键的当前取值快照，用 `==` 比较即可判断"配置是否变过"。
+
+    用于启动时构建、之后要跟着配置走的缓存（祷词表、权限判定）：
+    调用方存一份快照，用时比一次，不一致就重建。取值统一转成字符串，
+    既可比较也可当缓存键（列表/字典也能稳定表示）。
+    """
+    return tuple(repr(cfg_get(config, key)) for key in keys)
