@@ -192,6 +192,22 @@ class TestPluginStartup:
         finally:
             await plugin.terminate()
 
+    async def test_wager_tick_is_wired(self, stubbed_astrbot):
+        """赌局的定时入口必须接上调度器（默认关闭，但循环要存在）。"""
+        import astrbot_plugin_faith_ladder.main as m
+
+        plugin = m.FaithLadderPlugin(m.Context(), {})
+        try:
+            await plugin.initialize()
+            assert plugin._scheduler._wager_tick is not None
+            assert plugin._scheduler._wager_task is not None, "wager 循环应随调度器启动"
+            # 默认关闭时 tick 不应做任何事（含不访问数据库）
+            assert plugin._cfg("wager_enabled") is False
+            await plugin._wager_tick()
+            assert plugin._wager_state() == {}
+        finally:
+            await plugin.terminate()
+
 class TestQQAdminCallbacks:
     """QQAdminHandler 注入的回调必须是可 await 的（或至少被兼容处理）。
 

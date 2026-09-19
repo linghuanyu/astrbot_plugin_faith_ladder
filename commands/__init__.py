@@ -25,6 +25,7 @@
     shared.py      通用发送辅助（合并转发）
     config.py      统一配置读取（默认值来自 _conf_schema.json）
     gate.py        指令入口闸门（群访问控制；功能开关/状态阻断也接在这里）
+    wager.py       神明的赌局（定时开局、限时入局、开奖）
 """
 
 from .query import QueryCommandsMixin
@@ -38,6 +39,7 @@ from .prayer import PrayerCommandsMixin
 from .shared import SharedSendMixin
 from .config import ConfigMixin
 from .gate import GateMixin
+from .wager import WagerMixin
 
 __all__ = [
     "QueryCommandsMixin",
@@ -51,4 +53,5 @@ __all__ = [
     "SharedSendMixin",
     "ConfigMixin",
     "GateMixin",
+    "WagerMixin",
 ]

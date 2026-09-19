@@ -48,6 +48,7 @@ from astrbot_plugin_faith_ladder.commands import (
     SharedSendMixin,
     ConfigMixin,
     GateMixin,
+    WagerMixin,
 )
 
 
@@ -56,7 +57,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.14"
+    "3.6.15"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -70,6 +71,7 @@ class FaithLadderPlugin(
     SharedSendMixin,
     ConfigMixin,
     GateMixin,
+    WagerMixin,
     Star,
 ):
     """信仰游戏天梯排行榜插件。
@@ -115,6 +117,8 @@ class FaithLadderPlugin(
         self._pending_gifts_receive = {}  # (group_id, receiver_id) -> gift_dict（内存缓存）
 
         # 祷词触发缓存
+        self._wagers: dict = {}       # group_id -> 进行中的赌局
+        self._wager_last: dict = {}   # group_id -> 上次开局时间（单调时钟）
         self._prayer_cache = {}  # {normalized_prayer: faith}
         self._command_prefixes = set()
         self._build_prayer_cache()
@@ -202,6 +206,7 @@ class FaithLadderPlugin(
             notify_gift_timeout=send_to_group,
             on_gift_refunded=self._forget_pending_gift_cache,
             backup_db=self.db_manager.backup_to,
+            wager_tick=self._wager_tick,
         )
         await self._scheduler.start()
 

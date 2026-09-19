@@ -148,6 +148,28 @@ class DatabaseManager:
                 PRIMARY KEY (group_id, player_id, hit_date)
             );
 
+            CREATE TABLE IF NOT EXISTS god_wagers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT NOT NULL,
+                god TEXT NOT NULL,
+                action TEXT NOT NULL,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ends_at TIMESTAMP NOT NULL,
+                settled INTEGER DEFAULT 0,
+                winner_id TEXT,
+                winner_name TEXT,
+                participant_count INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS god_wager_entries (
+                wager_id INTEGER NOT NULL,
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                player_name TEXT NOT NULL,
+                entered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (wager_id, player_id)
+            );
+
             CREATE TABLE IF NOT EXISTS gift_daily_accepts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id TEXT NOT NULL,
@@ -1424,6 +1446,45 @@ class DatabaseManager:
         )
         await self._db.commit()
         return cursor.rowcount
+
+    # ── 神明的赌局 ──
+
+    async def create_wager(self, group_id: str, god: str, action: str, seconds: int) -> Optional[int]:
+        """开一场赌局，返回赌局 id。自行 commit（调用方在调度循环里，没有外层事务）。"""
+        from datetime import datetime, timedelta, timezone
+        ends_at = (datetime.now(timezone.utc) + timedelta(seconds=max(0, int(seconds)))).strftime("%Y-%m-%d %H:%M:%S")
+        cursor = await self._db.execute(
+            "INSERT INTO god_wagers (group_id, god, action, ends_at) VALUES (?, ?, ?, ?)",
+            (group_id, god, action, ends_at),
+        )
+        await self._db.commit()
+        return cursor.lastrowid
+
+    async def add_wager_entry(self, wager_id: int, group_id: str, player_id: str, player_name: str) -> bool:
+        """记录一次入局；同一场赌局内同一玩家只记一次。"""
+        try:
+            await self._db.execute(
+                "INSERT INTO god_wager_entries (wager_id, group_id, player_id, player_name) "
+                "VALUES (?, ?, ?, ?)",
+                (wager_id, group_id, player_id, player_name),
+            )
+            await self._db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False  # 已入局（主键拦住）
+        except Exception as e:
+            await self.rollback()
+            logger.error(f"[Wager] 记录入局失败: {e}")
+            return False
+
+    async def finish_wager(self, wager_id: int, winner_id: Optional[str], winner_name: Optional[str], count: int) -> None:
+        """结算落库（谁赢了、多少人参与）。"""
+        await self._db.execute(
+            "UPDATE god_wagers SET settled = 1, winner_id = ?, winner_name = ?, participant_count = ? "
+            "WHERE id = ?",
+            (winner_id, winner_name, int(count), wager_id),
+        )
+        await self._db.commit()
 
     async def close(self):
         """Close the persistent database connection."""

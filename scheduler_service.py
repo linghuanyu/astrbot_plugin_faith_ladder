@@ -26,6 +26,7 @@ class SchedulerService:
         notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
         on_gift_refunded: Optional[Callable[[str, str], None]] = None,
         backup_db: Optional[Callable[[Path], Awaitable[None]]] = None,
+        wager_tick: Optional[Callable[[], Awaitable[None]]] = None,
     ):
         """注入各类回调与配置读取器；真正的定时任务在 start() 中创建。
 
@@ -41,9 +42,11 @@ class SchedulerService:
         self._notify_gift_timeout = notify_gift_timeout
         self._on_gift_refunded = on_gift_refunded
         self._backup_db = backup_db
+        self._wager_tick = wager_tick
         self._get_config = get_config
         self._backup_task: Optional[asyncio.Task] = None
         self._gift_cleanup_task: Optional[asyncio.Task] = None
+        self._wager_task: Optional[asyncio.Task] = None
         self._running = False
 
     async def start(self):
@@ -51,12 +54,14 @@ class SchedulerService:
         self._running = True
         self._backup_task = asyncio.create_task(self._backup_loop())
         self._gift_cleanup_task = asyncio.create_task(self._gift_cleanup_loop())
+        if self._wager_tick is not None:
+            self._wager_task = asyncio.create_task(self._wager_loop())
         logger.info("SchedulerService: tasks started")
 
     async def stop(self):
         """Stop all scheduler tasks gracefully."""
         self._running = False
-        for task in (self._backup_task, self._gift_cleanup_task):
+        for task in (self._backup_task, self._gift_cleanup_task, self._wager_task):
             if task:
                 task.cancel()
                 try:
@@ -129,6 +134,22 @@ class SchedulerService:
             except Exception as e:
                 logger.error(f"SchedulerService backup error: {e}")
                 await asyncio.sleep(600)
+
+    async def _wager_loop(self):
+        """每 5 秒看一眼赌局：到点的开奖、到间隔的开局。
+
+        只在内存里比较时间戳，几乎不耗资源；真正的开局/开奖判断在插件侧
+        （`WagerMixin._wager_tick`），调度器只负责"按时叫醒它"。
+        """
+        while self._running:
+            try:
+                if self._wager_tick:
+                    await self._wager_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Wager tick error: {e}")
+            await asyncio.sleep(5)
 
     async def _gift_cleanup_loop(self):
         """Loop that cleans up expired pending gifts every 60 seconds."""

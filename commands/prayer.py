@@ -51,6 +51,9 @@ class PrayerCommandsMixin:
         group_id = self._get_group_id(event)
         logger.debug(f"[PrayerTrigger] Group: {group_id}")
 
+        # 神明的赌局：开口即入局（放在祷词的各种过滤之前——赌局与祷词配置无关）
+        await self._wager_entry(event, "speak")
+
         # 配置可能在 WebUI 里被改过：先确保祷词表/指令前缀是当前的
         self._ensure_prayer_cache()
 
@@ -92,6 +95,9 @@ class PrayerCommandsMixin:
         if not matched_faith:
             logger.debug("[PrayerTrigger] No prayer match")
             return
+
+        # 赌局入局（献祷词）：真正命中祷词才算，闲聊不算
+        await self._wager_entry(event, "pray")
 
         # 8.5 过闸门（群访问控制/功能开关/状态阻断）。
         # 放在这里而不是函数开头：本实现体监听的是**所有**消息，闸门里的状态判定

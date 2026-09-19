@@ -196,6 +196,72 @@
     "type": "list",
     "default": ["☽", "☿", "♀", "♁", "♂", "♃", "♄", "♅", "☉"]
   },
+  "wager_enabled": {
+    "description": "启用「神明的赌局」（默认关闭）",
+    "hint": "开启后按间隔在指定群抛出限时赌局；开奖可能是兑现、嘲弄或嘴上反悔（不影响真实分数）。",
+    "type": "bool",
+    "default": false
+  },
+  "wager_groups": {
+    "description": "启用赌局的群号列表（留空则不在任何群开局）",
+    "hint": "与祷词触发群列表相互独立，可以只在一部分群玩。",
+    "type": "list",
+    "default": []
+  },
+  "wager_interval_minutes": {
+    "description": "赌局间隔（分钟）",
+    "hint": "同一群两次开局之间的最短间隔，最小 1 分钟。",
+    "type": "int",
+    "default": 30
+  },
+  "wager_duration_seconds": {
+    "description": "赌局时限（秒）",
+    "hint": "入局窗口长度，最小按 5 秒处理。",
+    "type": "int",
+    "default": 60
+  },
+  "wager_score_enabled": {
+    "description": "赌局是否真的改分（默认关闭，只出文案）",
+    "hint": "关闭时开奖只发文案并注明不影响实际分数；开启后只有「兑现」结果会给赢家加分。",
+    "type": "bool",
+    "default": false
+  },
+  "wager_reward": {
+    "description": "赌局兑现时给赢家的觐见分",
+    "hint": "仅在 wager_score_enabled 打开时生效。",
+    "type": "int",
+    "default": 3
+  },
+  "wager_messages_none": {
+    "description": "赌局无人入局台词池（留空使用内置；按神明可用 wager_messages_none_欺诈 覆盖）",
+    "hint": "可用占位符 {god} {winner} {seconds} {action} {reward}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wager_messages_tease": {
+    "description": "赌局反悔台词池（留空使用内置；按神明可用 wager_messages_tease_欺诈 覆盖）",
+    "hint": "可用占位符 {god} {winner} {seconds} {action} {reward}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wager_messages_lose": {
+    "description": "赌局嘲弄台词池（留空使用内置；按神明可用 wager_messages_lose_欺诈 覆盖）",
+    "hint": "可用占位符 {god} {winner} {seconds} {action} {reward}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wager_messages_win": {
+    "description": "赌局兑现台词池（留空使用内置；按神明可用 wager_messages_win_欺诈 覆盖）",
+    "hint": "可用占位符 {god} {winner} {seconds} {action} {reward}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wager_messages_announce": {
+    "description": "赌局开局台词池（留空使用内置；按神明可用 wager_messages_announce_欺诈 覆盖）",
+    "hint": "可用占位符 {god} {winner} {seconds} {action} {reward}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
   "auto_backup_enabled": {
     "description": "启用自动备份",
     "hint": "每天首次运行时把数据库备份到插件数据目录的 backups/ 下。",

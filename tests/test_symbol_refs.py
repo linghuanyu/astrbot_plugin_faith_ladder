@@ -68,7 +68,9 @@ def collect_plugin_symbols(sources: dict) -> set:
     syms = set()
     for src in sources.values():
         for cls in [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.ClassDef)]:
-            if cls.name == "FaithLadderPlugin" or cls.name.endswith(("CommandsMixin", "SendMixin")):
+            # 认所有 *Mixin：原来只列了两个后缀，新增的 ConfigMixin/GateMixin/WagerMixin
+            # 会悄悄漏检（这次就是 wager 的惰性状态没被覆盖才发现）
+            if cls.name == "FaithLadderPlugin" or cls.name.endswith("Mixin"):
                 syms |= class_symbols(src, cls.name)
     return syms
 
