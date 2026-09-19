@@ -214,6 +214,12 @@
     "type": "int",
     "default": 30
   },
+  "wager_jitter_minutes": {
+    "description": "开局时间的随机抖动（分钟）",
+    "hint": "开局按 UTC 时间等分点对齐（如间隔 30 分钟 → 每小时 :00 与 :30），再随机延后 0~N 分钟；填 0 表示正好卡在等分点。超过间隔时按间隔上限收敛。",
+    "type": "int",
+    "default": 5
+  },
   "wager_duration_seconds": {
     "description": "赌局时限（秒）",
     "hint": "入局窗口长度，最小按 5 秒处理。",

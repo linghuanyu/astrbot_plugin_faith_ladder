@@ -89,6 +89,43 @@ class WagerMixin:
         except (TypeError, ValueError):
             return 30 * 60
 
+    def _wager_jitter_seconds(self) -> int:
+        """开局时刻的随机抖动上限（秒）。收敛到间隔以内，避免漂到下一个时间槽。"""
+        try:
+            minutes = max(0, int(self._cfg("wager_jitter_minutes")))
+        except (TypeError, ValueError):
+            minutes = 5
+        return min(minutes * 60, max(0, self._wager_interval_seconds() - 60))
+
+    def _wager_slot_offset(self, group_id: str, slot: int) -> float:
+        """某个时间槽内、该群的随机延后秒数（0~抖动上限）。
+
+        以「群号 + 槽起点」为随机种子，所以同一个槽算多少次结果都一样——
+        重启后重新计算也不会突然换一个时刻，玩家不会看到"说好 8:03 却变成 8:07"。
+        """
+        jitter = self._wager_jitter_seconds()
+        if jitter <= 0:
+            return 0.0
+        return float(random.Random(f"{group_id}:{slot}").randint(0, jitter))
+
+    async def _wager_due(self, group_id: str, now: float) -> bool:
+        """现在该不该给这个群开一局。
+
+        时刻按 **UTC 时间轴等分**（间隔 30 分钟 → 每小时 :00/:30；间隔 60 → 整点），
+        再叠加每群固定的随机延后，避免所有群卡在同一秒。
+        槽内已经开过（含重启前，靠数据库记录）就等下一个槽；
+        全新安装（完全没有记录）立刻开一场，方便先看到效果。
+        """
+        interval = self._wager_interval_seconds()
+        slot = int(now // interval) * interval      # 当前槽起点（UTC 等分点）
+
+        last = await self._wager_last_announce_at(group_id)
+        if last is None:
+            return True                             # 从没开过：立刻来一场
+        if last >= slot:
+            return False                            # 这个槽已经开过了
+        return now >= slot + self._wager_slot_offset(group_id, slot)
+
     def _wager_reward(self) -> int:
         try:
             return max(0, int(self._cfg("wager_reward")))
@@ -125,8 +162,7 @@ class WagerMixin:
                 logger.info(f"[Wager] 群 {group_id} 尚未收到过消息，无法确定会话标识，跳过本次开局")
                 continue
 
-            last = await self._wager_last_announce_at(group_id)
-            if last is None or now - last >= self._wager_interval_seconds():
+            if await self._wager_due(group_id, now):
                 text = await self._wager_announce(group_id, now)
                 if text:
                     await self._wager_notify(group_id, text)

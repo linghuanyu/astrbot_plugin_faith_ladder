@@ -603,3 +603,70 @@ class TestManualWagerCommand:
         await host._wager_tick()          # 开奖
         await self._run(host, self._CmdEvent())   # 立刻手动再开
         assert GROUP in host._wager_state()
+
+
+class TestWagerSchedule:
+    """开局时刻：按 UTC 时间轴等分，再加每群固定的随机抖动。"""
+
+    def test_offset_is_deterministic(self):
+        host = _host(wager_interval_minutes=30, wager_jitter_minutes=5)
+        slot = 1800 * 1234
+        assert host._wager_slot_offset(GROUP, slot) == host._wager_slot_offset(GROUP, slot)
+
+    def test_offset_within_jitter(self):
+        host = _host(wager_interval_minutes=30, wager_jitter_minutes=5)
+        for slot in range(0, 1800 * 20, 1800):
+            assert 0 <= host._wager_slot_offset(GROUP, slot) <= 300
+
+    def test_zero_jitter_lands_on_the_boundary(self):
+        host = _host(wager_interval_minutes=30, wager_jitter_minutes=0)
+        assert host._wager_slot_offset(GROUP, 1800 * 7) == 0.0
+
+    def test_jitter_is_clamped_below_interval(self):
+        """抖动不能大到漂出本槽：间隔 1 分钟时收敛为 0。"""
+        host = _host(wager_interval_minutes=1, wager_jitter_minutes=99)
+        assert host._wager_jitter_seconds() == 0
+
+    async def test_no_second_wager_in_the_same_slot(self):
+        host = _host(wager_interval_minutes=30, wager_jitter_minutes=0)
+        slot = int(host._wager_now() // 1800) * 1800
+        host._wager_last_map()[GROUP] = slot + 10      # 本槽已经开过
+        await host._wager_tick()
+        assert host.sent == []
+        assert GROUP not in host._wager_state()
+
+    async def test_next_slot_opens_again(self):
+        host = _host(wager_interval_minutes=30, wager_jitter_minutes=0)
+        slot = 1800 * 5
+        host._wager_last_map()[GROUP] = slot - 100     # 上一槽开的
+        host._clock = slot + 5
+        await host._wager_tick()
+        assert len(host.sent) == 1
+        assert GROUP in host._wager_state()
+
+    async def test_jitter_delays_within_the_slot(self, monkeypatch):
+        host = _host(wager_interval_minutes=30, wager_jitter_minutes=5)
+        slot = 1800 * 9
+        host._wager_last_map()[GROUP] = slot - 100
+        monkeypatch.setattr(host, "_wager_slot_offset", lambda group_id, s: 120.0)
+
+        host._clock = slot + 60                        # 槽内 1 分钟，还没到随机时刻
+        await host._wager_tick()
+        assert host.sent == []
+
+        host._clock = slot + 130                       # 过了随机时刻
+        await host._wager_tick()
+        assert len(host.sent) == 1
+
+    async def test_hourly_interval_aligns_to_the_hour(self):
+        host = _host(wager_interval_minutes=60, wager_jitter_minutes=0)
+        hour = 3600 * 100
+        host._wager_last_map()[GROUP] = hour - 3600 + 10    # 本小时（本槽）内已开过
+        assert await host._wager_due(GROUP, hour - 1) is False, "同一小时内不该再开"
+        assert await host._wager_due(GROUP, hour + 1) is True, "跨到下一个整点就该开"
+
+    async def test_fresh_install_opens_immediately(self):
+        """全新安装（没有任何记录）先开一场，不必等下一个时间槽。"""
+        host = _host(wager_interval_minutes=60, wager_jitter_minutes=30)
+        await host._wager_tick()
+        assert len(host.sent) == 1
