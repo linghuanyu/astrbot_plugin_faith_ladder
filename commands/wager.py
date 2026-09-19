@@ -300,9 +300,14 @@ class WagerMixin:
         context = getattr(self, "context", None)
         if context is None or not text:
             return
+        umo = self._resolve_umo(group_id)
+        if not umo:
+            # 从未见过该群的任何消息时拿不到会话串；宁可跳过，也不要发到一个错的地方
+            logger.warning(f"[Wager] 群 {group_id} 的会话标识未知，跳过播报")
+            return
         try:
             from astrbot.api.message_components import Plain
-            await context.send_message(f"group:{group_id}", [Plain(text=text)])
+            await context.send_message(umo, [Plain(text=text)])
         except Exception as e:
             logger.error(f"[Wager] 发送失败: {e}")
 

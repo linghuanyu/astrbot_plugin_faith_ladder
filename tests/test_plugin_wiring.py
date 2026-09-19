@@ -693,3 +693,98 @@ class TestQQAdminGate:
         event = self._FakeEvent(self._Bot())
         _ = [r async for r in self._handler(monkeypatch, spy).handle_ban(event)]
         assert seen == ["qq_admin"]
+
+
+class TestGroupUmoResolution:
+    """定时任务发消息需要完整会话串（AstrBot v4 形如 xiaoyu:GroupMessage:<群号>）。
+
+    此前两处（赌局播报、赠送超时通知）手工拼 `group:<群号>`，只有两段；v4.28 的
+    send_message 会报「不合法的 session 字符串」，消息被丢掉、群里毫无动静。
+    """
+
+    class _Event:
+        def __init__(self, group_id="111", umo="xiaoyu:GroupMessage:111"):
+            import types
+
+            self.message_obj = types.SimpleNamespace(group_id=group_id)
+            if umo is not None:
+                self.unified_msg_origin = umo
+
+    @staticmethod
+    async def _plugin(stubbed_astrbot):
+        import astrbot_plugin_faith_ladder.main as m
+
+        plugin = m.FaithLadderPlugin(m.Context(), {})
+        return plugin
+
+    async def test_group_event_records_umo(self, stubbed_astrbot):
+        plugin = await self._plugin(stubbed_astrbot)
+        try:
+            assert plugin._get_group_id(self._Event()) == "111"
+            assert plugin._resolve_umo("111") == "xiaoyu:GroupMessage:111"
+        finally:
+            await plugin.terminate()
+
+    async def test_unknown_group_derives_from_known_platform(self, stubbed_astrbot):
+        """没见过该群消息时，用已知平台前缀拼一个（同一机器人通常只有一个平台）。"""
+        plugin = await self._plugin(stubbed_astrbot)
+        try:
+            plugin._remember_umo("111", self._Event())
+            assert plugin._resolve_umo("999") == "xiaoyu:GroupMessage:999"
+        finally:
+            await plugin.terminate()
+
+    async def test_no_known_platform_returns_none(self, stubbed_astrbot):
+        plugin = await self._plugin(stubbed_astrbot)
+        try:
+            assert plugin._resolve_umo("999") is None
+        finally:
+            await plugin.terminate()
+
+    async def test_event_without_umo_is_tolerated(self, stubbed_astrbot):
+        plugin = await self._plugin(stubbed_astrbot)
+        try:
+            assert plugin._get_group_id(self._Event(umo=None)) == "111"
+            assert plugin._resolve_umo("111") is None
+        finally:
+            await plugin.terminate()
+
+    async def test_wager_send_uses_full_session(self, stubbed_astrbot):
+        sent = []
+
+        async def capture(umo, chain):
+            sent.append(umo)
+
+        plugin = await self._plugin(stubbed_astrbot)
+        try:
+            plugin.context.send_message = capture
+            plugin._remember_umo("111", self._Event())
+            await plugin._wager_send("111", "播报")
+            assert sent == ["xiaoyu:GroupMessage:111"]
+        finally:
+            await plugin.terminate()
+
+    async def test_wager_send_skips_when_session_unknown(self, stubbed_astrbot):
+        sent = []
+
+        async def capture(umo, chain):
+            sent.append(umo)
+
+        plugin = await self._plugin(stubbed_astrbot)
+        try:
+            plugin.context.send_message = capture
+            await plugin._wager_send("999", "播报")
+            assert sent == [], "会话未知时宁可跳过，也不要发到错的地方"
+        finally:
+            await plugin.terminate()
+
+
+def test_no_legacy_session_string_in_production():
+    """静态守卫：生产代码不得再手工拼 `group:<群号>`（v4 会直接报错）。"""
+    root = Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in [root / "main.py"] + sorted((root / "commands").glob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        if 'f"group:{' in src or "f'group:{" in src:
+            offenders.append(path.name)
+    assert offenders == [], f"仍有旧式会话串: {offenders}"

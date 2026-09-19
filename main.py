@@ -57,7 +57,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.1"
+    "3.7.2"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -118,6 +118,7 @@ class FaithLadderPlugin(
 
         # 祷词触发缓存
         self._wagers: dict = {}       # group_id -> 进行中的赌局
+        self._group_umos: dict = {}   # group_id -> 会话标识（定时任务发消息要用完整 umo）
         self._wager_last: dict = {}   # group_id -> 上次开局时间（单调时钟）
         self._prayer_cache = {}  # {normalized_prayer: faith}
         self._command_prefixes = set()
@@ -185,7 +186,10 @@ class FaithLadderPlugin(
             - tuple ('image', bytes): image from bytes
             """
             try:
-                umo = f"group:{group_id}"
+                umo = self._resolve_umo(group_id)
+                if not umo:
+                    logger.warning(f"未知会话标识，跳过向群 {group_id} 发送通知")
+                    return
                 if isinstance(content, tuple) and len(content) == 2 and content[0] == "image":
                     from astrbot.api.message_components import Image
                     await self.context.send_message(umo, [Image.fromBytes(content[1])])
@@ -238,8 +242,36 @@ class FaithLadderPlugin(
     # === Helpers ===
 
     def _get_group_id(self, event: AstrMessageEvent) -> str:
-        """取事件所属群号（字符串）。插件仅支持群聊，私聊场景会取不到 group_id。"""
-        return str(event.message_obj.group_id)
+        """取事件所属群号（字符串）。插件仅支持群聊，私聊场景会取不到 group_id。
+
+        顺手记下该群的会话标识：定时任务（赌局开局/开奖、赠送超时通知）手里没有
+        event，而发消息需要一个完整会话串。
+        """
+        group_id = str(event.message_obj.group_id)
+        self._remember_umo(group_id, event)
+        return group_id
+
+    def _remember_umo(self, group_id: str, event) -> None:
+        """记下该群的会话标识 umo（AstrBot v4 形如 `xiaoyu:GroupMessage:821721918`）。
+
+        旧写法 `group:<群号>` 只有两段，v4 的 send_message 会直接报
+        「不合法的 session 字符串: not enough values to unpack (expected 3, got 2)」——
+        赌局开奖消息就是这样被丢掉的，所以这里必须在收到群消息时把真实 umo 存下来。
+        """
+        umo = getattr(event, "unified_msg_origin", None)
+        if umo and group_id:
+            self._group_umos[str(group_id)] = str(umo)
+
+    def _resolve_umo(self, group_id: str) -> Optional[str]:
+        """取该群的会话串。没见过这个群的消息时，用已知的平台前缀拼一个。"""
+        cached = self._group_umos.get(str(group_id))
+        if cached:
+            return cached
+        for known in self._group_umos.values():
+            prefix = str(known).rsplit(":", 1)[0]   # 形如 xiaoyu:GroupMessage
+            if prefix:
+                return f"{prefix}:{group_id}"
+        return None
 
     def _get_args(self, event: AstrMessageEvent, cmd_name: str) -> str:
         """取命令名之后的参数文本（精确前缀匹配）。
