@@ -81,7 +81,7 @@ class QueryCommandsMixin:
                 return
             target_name = self_player.player_name
 
-        cooldown_seconds = self.config.get("query_cooldown_seconds", 5)
+        cooldown_seconds = self._cfg("query_cooldown_seconds")
         cd_key = f"{user_id}:query"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
@@ -89,8 +89,8 @@ class QueryCommandsMixin:
             return
         self.cooldown_manager.set_cooldown(cd_key)
 
-        init_ladder = self.config.get("init_ladder_score", 1000)
-        init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
+        init_ladder = self._cfg("init_ladder_score")
+        init_pilgrimage = self._cfg("init_pilgrimage_score")
 
         # 批量查询模式
         if target_names:
@@ -150,15 +150,11 @@ class QueryCommandsMixin:
             names = [self_player.player_name]
 
             # 储物空间彩蛋：非诸神查自己时有概率触发
-            if self.config.get("inventory_easter_egg_enabled", False):
+            if self._cfg("inventory_easter_egg_enabled"):
                 import random
-                prob = self.config.get("inventory_easter_egg_probability", 0.05)
-                ee_messages = self.config.get("inventory_easter_egg_messages", [
-                    "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
-                    "【欺诈】对你的储物空间施了小把戏，什么都看不到了呢～",
-                    "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
-                    "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～",
-                ])
+                prob = self._cfg("inventory_easter_egg_probability")
+                # 默认文案在 _conf_schema.json 的 default 里，此处不再重复一份
+                ee_messages = self._cfg("inventory_easter_egg_messages")
                 # 配置成空列表时 random.choice 会抛 IndexError，此时跳过彩蛋
                 if ee_messages and random.random() < prob:
                     yield event.plain_result(random.choice(ee_messages))

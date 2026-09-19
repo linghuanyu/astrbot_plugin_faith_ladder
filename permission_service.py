@@ -7,6 +7,7 @@ Whitelist is GLOBAL — not scoped to any group.
 import time
 from typing import Optional, Callable
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
+from astrbot_plugin_faith_ladder.plugin_config import cfg_get
 
 
 def _normalize_entry_type(value) -> str:
@@ -66,7 +67,7 @@ class PermissionService:
 
     def is_admin(self, user_id: str) -> bool:
         """Check if user is in the global admin list (from config)."""
-        admin_ids = self._config.get("admin_ids", [])
+        admin_ids = cfg_get(self._config, "admin_ids")
         # 配成字符串（如 "123,456"）时逐个字符会被当成管理员 ID：
         # 用户 "1" 反而成了管理员，真正的 "123,456" 不是。这里统一按列表处理。
         if isinstance(admin_ids, str):
@@ -75,7 +76,7 @@ class PermissionService:
 
     def is_in_config_whitelist(self, user_id: str) -> bool:
         """Check if user is in the config-defined global whitelist."""
-        whitelist = self._config.get("whitelist", [])
+        whitelist = cfg_get(self._config, "whitelist")
         for entry in whitelist:
             if not isinstance(entry, dict):
                 continue
@@ -206,7 +207,7 @@ class PermissionService:
 
     def _get_config_whitelist_entries(self) -> list[dict]:
         """Get whitelist entries from config. 仅返回 user 类型（group 类型已废弃）。"""
-        whitelist = self._config.get("whitelist", [])
+        whitelist = cfg_get(self._config, "whitelist")
         result = []
         for entry in whitelist:
             if isinstance(entry, dict):

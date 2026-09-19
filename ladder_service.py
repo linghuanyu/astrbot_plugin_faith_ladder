@@ -15,6 +15,7 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_inventory,
     format_faith_line,
 )
+from astrbot_plugin_faith_ladder.plugin_config import cfg_get
 from astrbot_plugin_faith_ladder.item_utils import (
     parse_item_full_name,
     format_item_display,
@@ -338,9 +339,9 @@ class LadderService:
         specific_faith = player.specific_faith
         oath_text = None
         if specific_faith:
-            oath_text = config.get(f"oath_text_{specific_faith}")
+            oath_text = cfg_get(config, f"oath_text_{specific_faith}")
         if not oath_text:
-            oath_text = config.get(f"oath_text_{current_faith}")
+            oath_text = cfg_get(config, f"oath_text_{current_faith}")
         if not oath_text:
             oath_text = f"{player_name}背弃了{specific_faith or current_faith}之道。誓约已碎。"
         oath_text = oath_text.replace("{name}", player_name)

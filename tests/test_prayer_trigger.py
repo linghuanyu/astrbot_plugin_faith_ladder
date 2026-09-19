@@ -326,9 +326,10 @@ class TestPrayerScoreRangeConfig:
     """祷词分值区间来自配置：匹配与不匹配（渎神）各一对，默认保持 -2~+2 / -2~0。"""
 
     def _range(self, config, matched):
+        from astrbot_plugin_faith_ladder.commands.config import ConfigMixin
         from astrbot_plugin_faith_ladder.commands.prayer import PrayerCommandsMixin
 
-        class _Host:
+        class _Host(ConfigMixin):
             pass
 
         host = _Host()

@@ -204,6 +204,7 @@ AstrBot 群聊双积分排名插件，登神之路 + 觐见之梯双榜展示，
 | `prayer_score_min` / `prayer_score_max` | int | -2 / 2 | 祷词命中自己信仰时的分值区间（可负） |
 | `prayer_blasphemy_score_min` / `prayer_blasphemy_score_max` | int | -2 / 0 | 祷词信仰不匹配（渎神）时的分值区间 |
 | `prayer_text_诞育` ~ `prayer_text_命运` | list | 各1条 | 16信仰祷词短语（8字） |
+| `prayer_trigger_messages_positive` / `_negative` / `_neutral` / `_mismatch` | list | [] | 祷词回复文案池（留空用内置文案；按信仰可加 `_信仰名` 后缀，需手改配置） |
 | `gift_daily_accept_limit` | int | 1 | 每日接受道具上限（0为不限制；诸神代收不受此限制） |
 | `inventory_easter_egg_enabled` | bool | false | 启用储物空间彩蛋 |
 | `inventory_easter_egg_probability` | float | 0.05 | 彩蛋触发概率 |
@@ -211,6 +212,7 @@ AstrBot 群聊双积分排名插件，登神之路 + 觐见之梯双榜展示，
 ## 版本
 
 - **v3.6.8** — 修复调度器从未启动导致的静默降级（备份/清理停摆）、道具等级误删、表重建迁移可恢复；新增启动冒烟测试与属性检查两条防线
+- **v3.6.11** — 配置读取集中到 `plugin_config.py`（默认值以 schema 为唯一来源），全部配置项补齐中文提示，补上 4 个此前隐藏的祷词文案配置项
 - **v3.6.10** — 天梯榜新增分数门槛（默认 ≥1100 才上榜，可配置），祷词分值区间改为可配置（匹配/渎神各一对）
 - **v3.6.9** — 立誓/弃誓失败不再消耗冷却、管理端重置/清除弃誓如实报告失败、禁言时长取第一个数字、批量查询去重、帮助文案读配置
 - **v3.6.7** — 名片解析抽成可测试的 card_utils，main.py 降至 757 行

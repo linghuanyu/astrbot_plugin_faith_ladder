@@ -9,6 +9,8 @@ from typing import Optional, Callable, Awaitable, Any
 
 from astrbot.api import logger
 
+from astrbot_plugin_faith_ladder.plugin_config import cfg_get
+
 
 class SchedulerService:
     """Manages scheduled tasks: auto backups and gift cleanup."""
@@ -85,12 +87,12 @@ class SchedulerService:
                     continue
 
                 config = self._get_config()
-                if config.get("auto_backup_enabled", True):
+                if cfg_get(config, "auto_backup_enabled"):
                     await self._do_backup(config)
 
                 # Purge old score history
                 if self._purge_score_history:
-                    retention_days = config.get("score_history_retention_days", 90)
+                    retention_days = cfg_get(config, "score_history_retention_days")
                     try:
                         deleted = await self._purge_score_history(retention_days)
                         if deleted > 0:
@@ -176,7 +178,7 @@ class SchedulerService:
         这里只负责命名、记录日志与按保留天数清理旧文件。
         """
         # 保留天数下限为 1：配置成 0 会让截止时间落在"现在"，把刚生成的备份也删掉
-        retention_days = max(1, int(config.get("backup_retention_days", 7) or 1))
+        retention_days = max(1, int(cfg_get(config, "backup_retention_days") or 1))
         if not self._backup_db:
             return
 

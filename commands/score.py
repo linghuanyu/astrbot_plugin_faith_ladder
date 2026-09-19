@@ -44,7 +44,7 @@ class ScoreCommandsMixin:
 
         target_name, ladder_str, pilgrimage_str = parts
 
-        max_name_len = self.config.get("player_name_max_length", 20)
+        max_name_len = self._cfg("player_name_max_length")
         if len(target_name) > max_name_len:
             yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
             return
@@ -56,7 +56,7 @@ class ScoreCommandsMixin:
             yield event.plain_result("分数必须是整数。示例：100 50 或 -20 10")
             return
 
-        allow_negative = self.config.get("allow_negative_scores", True)
+        allow_negative = self._cfg("allow_negative_scores")
         if not allow_negative and (ladder_delta < 0 or pilgrimage_delta < 0):
             yield event.plain_result( "当前配置不允许录入负分。")
             return
@@ -80,7 +80,7 @@ class ScoreCommandsMixin:
 
         # Cooldown check（先查冷却，但等参数校验通过后才真正占用 —
         # 否则一条写错的指令会白白烧掉 600 秒冷却，改对了也发不出去）
-        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        cooldown_seconds = self._cfg("ladder_cooldown_seconds")
         cd_key = f"{user_id}:batch"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)

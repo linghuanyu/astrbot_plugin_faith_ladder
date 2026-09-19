@@ -40,7 +40,7 @@ class PrayerCommandsMixin:
         logger.debug(f"[PrayerTrigger] Group: {group_id}")
 
         # 2. 快速过滤：群是否在配置列表中
-        trigger_groups = self.config.get("prayer_trigger_groups", [])
+        trigger_groups = self._cfg("prayer_trigger_groups")
         logger.debug(f"[PrayerTrigger] Trigger groups: {trigger_groups}")
         if group_id not in trigger_groups:
             logger.debug(f"[PrayerTrigger] Group {group_id} not in trigger list")
@@ -154,7 +154,7 @@ class PrayerCommandsMixin:
         display_delta = random.randint(score_min, score_max)
 
         # 打分开关：默认关闭时只做氛围互动，展示随机结果但不改动实际分数
-        score_enabled = self.config.get("prayer_score_enabled", False)
+        score_enabled = self._cfg("prayer_score_enabled")
         db_delta = display_delta if score_enabled else 0
 
         # 13. 记录今日已触发（DB 写入本次实际生效的分值）
@@ -188,7 +188,7 @@ class PrayerCommandsMixin:
         # 祷词配置按具体信仰（faith）存储，16个信仰
         for faith in VALID_FAITHS:
             key = f"prayer_text_{faith}"
-            prayers = self.config.get(key, [])
+            prayers = self._cfg(key)
             for prayer in prayers:
                 normalized = self._normalize_prayer_text(prayer)
                 if normalized:
@@ -201,7 +201,7 @@ class PrayerCommandsMixin:
             "cmd_help", "cmd_batch_add_score", "cmd_abandon_oath", "cmd_take_oath"
         ]
         self._command_prefixes = {
-            self.config.get(key, "") for key in cmd_keys if self.config.get(key)
+            self._cfg(key) for key in cmd_keys if self._cfg(key)
         }
 
     def _normalize_prayer_text(self, text: str) -> str:
@@ -224,7 +224,7 @@ class PrayerCommandsMixin:
         values = []
         for key, default in zip(keys, defaults):
             try:
-                values.append(int(self.config.get(key, default)))
+                values.append(int(self._cfg(key)))
             except (TypeError, ValueError):
                 values.append(default)
 

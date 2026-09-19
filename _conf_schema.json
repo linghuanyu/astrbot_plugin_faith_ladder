@@ -1,56 +1,67 @@
 {
   "cmd_ladder": {
     "description": "天梯榜指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "天梯榜"
   },
   "cmd_pilgrimage": {
     "description": "觐见榜指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "觐见榜"
   },
   "cmd_query": {
     "description": "查询指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "查询"
   },
   "cmd_add_score": {
     "description": "录入积分指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "录入积分"
   },
   "cmd_set_class": {
     "description": "设置职业指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "设置职业"
   },
   "cmd_register_player": {
     "description": "录入玩家指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "录入玩家"
   },
   "cmd_admin": {
     "description": "管理指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "天梯榜管理"
   },
   "cmd_whitelist": {
     "description": "白名单指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "白名单"
   },
   "cmd_help": {
     "description": "帮助指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "天梯榜帮助"
   },
   "cmd_batch_add_score": {
     "description": "批量录入指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "批量录入"
   },
   "whitelist": {
     "description": "诸神列表（可在 WebUI 直接配置，无需指令操作）",
+    "hint": "每项一位诸神：id 填 QQ 号，faith 可留空。也可以用「白名单 add/remove/list」指令维护。",
     "type": "list",
     "default": [],
     "items": {
@@ -81,6 +92,7 @@
   },
   "admin_ids": {
     "description": "管理员用户ID列表（拥有全部管理权限，不受群管理员限制）",
+    "hint": "填 QQ 号，多个用英文逗号分隔。管理员与诸神权限相同，且不受群角色限制。",
     "type": "list",
     "default": [],
     "items": {
@@ -89,156 +101,187 @@
   },
   "ladder_display_limit": {
     "description": "排行榜显示人数上限",
+    "hint": "只影响榜单显示多少名，不影响数据与名次计算。",
     "type": "int",
     "default": 10
   },
   "leaderboard_min_ladder_score": {
     "description": "天梯榜（排行榜）分数门槛：登神之路低于该分的玩家不上榜，填 0 表示不过滤",
+    "hint": "默认 1100：低于该分不上榜。填 0 = 所有人都上榜，填 1000 = 刚录入的玩家也能上榜。",
     "type": "int",
     "default": 1100
   },
   "query_cooldown_seconds": {
     "description": "查询指令冷却时间（秒）",
+    "hint": "针对「查询」指令；填 0 表示不限制。",
     "type": "int",
     "default": 5
   },
   "ladder_cooldown_seconds": {
     "description": "天梯榜/觐见榜指令冷却时间（秒）",
+    "hint": "针对「天梯榜/觐见榜」，同时用于「批量录入」以及立誓/弃誓的冷却。",
     "type": "int",
     "default": 600
   },
   "auto_backup_enabled": {
     "description": "启用自动备份",
+    "hint": "每天首次运行时把数据库备份到插件数据目录的 backups/ 下。",
     "type": "bool",
     "default": true
   },
   "backup_retention_days": {
     "description": "备份保留天数",
+    "hint": "超过天数的备份会被自动删除；最小按 1 天处理（填 0 不会删掉刚生成的备份）。",
     "type": "int",
     "default": 7
   },
   "player_name_max_length": {
     "description": "玩家名最大长度（字符）",
+    "hint": "录入玩家与改名时超过该长度会被拒绝。",
     "type": "int",
     "default": 20
   },
   "allow_negative_scores": {
     "description": "是否允许录入负分",
+    "hint": "关闭后「录入积分」不接受负分。",
     "type": "bool",
     "default": true
   },
   "score_history_retention_days": {
     "description": "积分历史记录保留天数（超过自动清理）",
+    "hint": "积分历史表会随录入无限增长，这里控制保留天数（每天清理一次）。",
     "type": "int",
     "default": 90
   },
   "init_ladder_score": {
     "description": "录入玩家时默认登神之路分",
+    "hint": "录入玩家未指定分数时使用。注意榜单门槛默认 1100，用默认初始分的新玩家不会出现在榜上。",
     "type": "int",
     "default": 1000
   },
   "init_pilgrimage_score": {
     "description": "录入玩家时默认觐见分",
+    "hint": "录入玩家未指定第二个分数时使用。",
     "type": "int",
     "default": 100
   },
   "cmd_abandon_oath": {
     "description": "弃誓指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "弃誓"
   },
   "cmd_take_oath": {
     "description": "立誓指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
     "type": "string",
     "default": "立誓"
   },
   "oath_text_诞育": {
     "description": "诞育信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了诞育之誓。生命之根枯萎，新生不再降临"
   },
   "oath_text_繁荣": {
     "description": "繁荣信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了繁荣之誓。万物凋零，生机断绝"
   },
   "oath_text_死亡": {
     "description": "死亡信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了死亡之誓。终焉之门关闭，灵魂无处安息"
   },
   "oath_text_污堕": {
     "description": "污堕信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了污堕之誓。深渊不再接纳，沉沦之路断裂"
   },
   "oath_text_腐朽": {
     "description": "腐朽信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了腐朽之誓。连腐朽都拒绝了你，归于虚无"
   },
   "oath_text_湮灭": {
     "description": "湮灭信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了湮灭之誓。万物不存，连灰烬都不留"
   },
   "oath_text_秩序": {
     "description": "秩序信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了秩序之誓。法则崩塌，文明之光不再为你闪耀"
   },
   "oath_text_真理": {
     "description": "真理信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了真理之誓。真相远去，再无法看清本质"
   },
   "oath_text_战争": {
     "description": "战争信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了战争之誓。血与火不再眷顾，你已不配执刃"
   },
   "oath_text_混乱": {
     "description": "混乱信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了混乱之誓。荒诞不再有趣，混沌之门关闭"
   },
   "oath_text_痴愚": {
     "description": "痴愚信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了痴愚之誓。沉默吞没了你最后的喧嚣"
   },
   "oath_text_沉默": {
     "description": "沉默信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了沉默之誓。寰宇无音，你连被遗忘的资格都没有"
   },
   "oath_text_记忆": {
     "description": "记忆信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了记忆之誓。往昔开始遗忘你，铭刻化为空白"
   },
   "oath_text_时间": {
     "description": "时间信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了时间之誓。流光不再为你停留，此刻化为永恒的空"
   },
   "oath_text_欺诈": {
     "description": "欺诈信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了欺诈之誓。真伪不再分，命途不再回应你的低语"
   },
   "oath_text_命运": {
     "description": "命运信仰弃誓文本（按具体信仰匹配；玩家无具体信仰时用默认文案）",
+    "hint": "可用占位符 {name}；留空则使用内置兜底文案。玩家名片里只有命途（无具体信仰）时也会走内置文案。",
     "type": "string",
     "default": "{name}碎了命运之誓。命线断裂，繁星不再为你闪烁"
   },
   "auto_whitelist_group": {
     "description": "自动白名单群号（该群成员加入时自动加入白名单，退群时自动移除）",
+    "hint": "填群号：该群成员入群自动加入白名单、退群自动移除；留空表示关闭。",
     "type": "string",
     "default": ""
   },
   "prayer_trigger_groups": {
     "description": "启用祷词触发觐见分变动的群号列表（留空则不启用此功能）",
+    "hint": "填群号，可多个；留空表示任何群都不触发祷词。",
     "type": "list",
     "default": [],
     "items": {
@@ -247,126 +290,151 @@
   },
   "prayer_score_enabled": {
     "description": "祷词是否真实改动觐见分。关闭时（默认）只展示随机结果并提示不影响实际分数；开启后按下方配置的分值区间真实计入觐见分",
+    "hint": "关闭时玩家仍能看到随机结果与文案，但分数不变（回复里会注明）。",
     "type": "bool",
     "default": false
   },
   "prayer_score_min": {
     "description": "祷词命中自己信仰时的分值下限（可负）",
+    "hint": "可与上限相同（固定分值）；上下限写反会自动对调。",
     "type": "int",
     "default": -2
   },
   "prayer_score_max": {
     "description": "祷词命中自己信仰时的分值上限",
+    "hint": "可与下限相同（固定分值）。",
     "type": "int",
     "default": 2
   },
   "prayer_blasphemy_score_min": {
     "description": "祷词信仰不匹配（渎神）时的分值下限（可负）",
+    "hint": "想做到「渎神不掉分」就填 0。",
     "type": "int",
     "default": -2
   },
   "prayer_blasphemy_score_max": {
     "description": "祷词信仰不匹配（渎神）时的分值上限",
+    "hint": "可与下限相同（固定分值）。",
     "type": "int",
     "default": 0
   },
   "prayer_text_诞育": {
     "description": "诞育信仰祷词列表（8字短语，用户发送后触发）",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["感孕众生衔育自然"]
   },
   "prayer_text_繁荣": {
     "description": "繁荣信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["万物滋生亦繁亦荣"]
   },
   "prayer_text_死亡": {
     "description": "死亡信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["灵魂安眠生命终焉"]
   },
   "prayer_text_污堕": {
     "description": "污堕信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["解脱枷锁直面心欲"]
   },
   "prayer_text_腐朽": {
     "description": "腐朽信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["众生应腐万物将朽"]
   },
   "prayer_text_湮灭": {
     "description": "湮灭信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["于无中生于寂中灭"]
   },
   "prayer_text_秩序": {
     "description": "秩序信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["文明火起秩序长存"]
   },
   "prayer_text_真理": {
     "description": "真理信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["洞窥本质行见真理"]
   },
   "prayer_text_战争": {
     "description": "战争信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["何以求存唯血与火"]
   },
   "prayer_text_混乱": {
     "description": "混乱信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["虚构规律寰宇笑谈"]
   },
   "prayer_text_痴愚": {
     "description": "痴愚信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["生命皆痴文明皆愚"]
   },
   "prayer_text_沉默": {
     "description": "沉默信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["万物归寂寰宇无音"]
   },
   "prayer_text_记忆": {
     "description": "记忆信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["昔我长铭流光拓影"]
   },
   "prayer_text_时间": {
     "description": "时间信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["时光如隙我亦如风"]
   },
   "prayer_text_欺诈": {
     "description": "欺诈信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["不辨真伪勿论虚实"]
   },
   "prayer_text_命运": {
     "description": "命运信仰祷词列表",
+    "hint": "每条需恰好 8 个汉字（标点、空格会被忽略）；不同信仰的祷词互不通用。",
     "type": "list",
     "default": ["命若繁星望而不及"]
   },
   "gift_daily_accept_limit": {
     "description": "每日接受道具上限（0 为不限制）",
+    "hint": "按自然日（北京时间）计数；0 为不限制；诸神代收不受此限制。",
     "type": "int",
     "default": 1
   },
   "inventory_easter_egg_enabled": {
     "description": "是否启用储物空间查询彩蛋",
+    "hint": "只在非诸神查询自己的储物空间时可能触发。",
     "type": "bool",
     "default": false
   },
   "inventory_easter_egg_probability": {
     "description": "储物空间查询彩蛋触发概率（0~1，默认0.05=5%）",
+    "hint": "0~1 之间的小数，例如 0.05 表示 5%。",
     "type": "float",
     "default": 0.05
   },
   "inventory_easter_egg_messages": {
     "description": "储物空间查询彩蛋文案列表",
+    "hint": "配置成空列表则不会有彩蛋，也不会报错。",
     "type": "list",
     "default": [
       "【湮灭】令使路过你的储物空间，将你的道具都湮灭了，嘻～",
@@ -374,5 +442,29 @@
       "【沉默】的使者悄悄路过，你的储物空间陷入了沉默……",
       "你打开储物空间，却发现里面空无一物……一定是【记忆】跟你开了个玩笑～"
     ]
+  },
+  "prayer_trigger_messages_positive": {
+    "description": "祷词命中自己信仰且分值为正时的文案池（留空使用内置文案）",
+    "hint": "可用占位符 {god} 与 {delta}。按信仰单独定制需手改配置 JSON，键名为 prayer_trigger_messages_positive_欺诈 这种形式。",
+    "type": "list",
+    "default": []
+  },
+  "prayer_trigger_messages_negative": {
+    "description": "祷词命中自己信仰且分值为负时的文案池（留空使用内置文案）",
+    "hint": "可用占位符 {god} 与 {delta}。按信仰单独的键为 prayer_trigger_messages_negative_欺诈。",
+    "type": "list",
+    "default": []
+  },
+  "prayer_trigger_messages_neutral": {
+    "description": "祷词命中自己信仰且分值为 0 时的文案池（留空使用内置文案）",
+    "hint": "可用占位符 {god} 与 {delta}。按信仰单独的键为 prayer_trigger_messages_neutral_欺诈。",
+    "type": "list",
+    "default": []
+  },
+  "prayer_trigger_messages_mismatch": {
+    "description": "祷词信仰不匹配（渎神）时的文案池（留空使用内置文案）",
+    "hint": "可用占位符 {god}、{prayer} 与 {delta}；分值为 0 时走「宽宏大量」的固定文案。",
+    "type": "list",
+    "default": []
   }
 }

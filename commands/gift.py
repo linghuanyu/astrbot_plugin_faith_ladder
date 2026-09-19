@@ -171,7 +171,7 @@ class GiftCommandsMixin:
 
         # 检查今日接受道具次数（可配置上限，0 为不限制）。诸神代收不受此上限约束。
         if not is_god:
-            daily_limit = self.config.get("gift_daily_accept_limit", 1)
+            daily_limit = self._cfg("gift_daily_accept_limit")
             if daily_limit > 0:
                 accept_count = await self.db_manager.count_gift_accepts_today(group_id, receiver_id)
                 if accept_count >= daily_limit:

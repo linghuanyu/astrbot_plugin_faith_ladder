@@ -29,7 +29,7 @@ class ScoreboardCommandsMixin:
             return
 
         # Cooldown check
-        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        cooldown_seconds = self._cfg("ladder_cooldown_seconds")
         cd_key = f"{user_id}:ladder"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
@@ -38,9 +38,9 @@ class ScoreboardCommandsMixin:
         self.cooldown_manager.set_cooldown(cd_key)
 
         group_id = self._get_group_id(event)
-        limit = self.config.get("ladder_display_limit", 10)
+        limit = self._cfg("ladder_display_limit")
         # 榜单门槛：低于该分的玩家不上榜（0 表示不过滤）
-        min_ladder_score = self.config.get("leaderboard_min_ladder_score", 1100)
+        min_ladder_score = self._cfg("leaderboard_min_ladder_score")
         text = await self.ladder_service.get_leaderboard_text(group_id, limit, min_ladder_score)
 
         # 默认使用合并转发，失败时回退为纯文本
@@ -59,7 +59,7 @@ class ScoreboardCommandsMixin:
             return
 
         # Cooldown check
-        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        cooldown_seconds = self._cfg("ladder_cooldown_seconds")
         cd_key = f"{user_id}:pilgrimage"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)
@@ -68,7 +68,7 @@ class ScoreboardCommandsMixin:
         self.cooldown_manager.set_cooldown(cd_key)
 
         group_id = self._get_group_id(event)
-        limit = self.config.get("ladder_display_limit", 10)
+        limit = self._cfg("ladder_display_limit")
         text = await self.ladder_service.get_pilgrimage_leaderboard_text(group_id, limit)
 
         # 默认使用合并转发，失败时回退为纯文本

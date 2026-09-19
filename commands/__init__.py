@@ -23,6 +23,7 @@
     admin.py       天梯榜管理、白名单、同步白名单、天梯榜帮助、白名单自动同步事件
     prayer.py      祷词触发
     shared.py      通用发送辅助（合并转发）
+    config.py      统一配置读取（默认值来自 _conf_schema.json）
 """
 
 from .query import QueryCommandsMixin
@@ -34,6 +35,7 @@ from .gift import GiftCommandsMixin
 from .admin import AdminCommandsMixin
 from .prayer import PrayerCommandsMixin
 from .shared import SharedSendMixin
+from .config import ConfigMixin
 
 __all__ = [
     "QueryCommandsMixin",
@@ -45,4 +47,5 @@ __all__ = [
     "AdminCommandsMixin",
     "PrayerCommandsMixin",
     "SharedSendMixin",
+    "ConfigMixin",
 ]

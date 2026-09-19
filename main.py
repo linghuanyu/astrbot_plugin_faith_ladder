@@ -46,6 +46,7 @@ from astrbot_plugin_faith_ladder.commands import (
     AdminCommandsMixin,
     PrayerCommandsMixin,
     SharedSendMixin,
+    ConfigMixin,
 )
 
 
@@ -54,7 +55,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.6.10"
+    "3.6.11"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -66,6 +67,7 @@ class FaithLadderPlugin(
     PrayerCommandsMixin,
     QueryCommandsMixin,
     SharedSendMixin,
+    ConfigMixin,
     Star,
 ):
     """信仰游戏天梯排行榜插件。

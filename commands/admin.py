@@ -91,7 +91,7 @@ class AdminCommandsMixin:
                 yield event.plain_result("用法：天梯榜管理 改名 <旧名> <新名>")
                 return
             old_name, new_name = parts[1], parts[2]
-            max_name_len = self.config.get("player_name_max_length", 20)
+            max_name_len = self._cfg("player_name_max_length")
             if len(new_name) > max_name_len:
                 yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
                 return
@@ -133,8 +133,8 @@ class AdminCommandsMixin:
             if not target_player:
                 yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
                 return
-            init_ladder = self.config.get("init_ladder_score", 1000)
-            init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
+            init_ladder = self._cfg("init_ladder_score")
+            init_pilgrimage = self._cfg("init_pilgrimage_score")
             updated = await self.db_manager.update_scores(
                 group_id, target_player.player_id,
                 -target_player.ladder_score + init_ladder,
@@ -155,8 +155,8 @@ class AdminCommandsMixin:
                     f"确认请发送：天梯榜管理 全部重置 确认"
                 )
                 return
-            init_ladder = self.config.get("init_ladder_score", 1000)
-            init_pilgrimage = self.config.get("init_pilgrimage_score", 100)
+            init_ladder = self._cfg("init_ladder_score")
+            init_pilgrimage = self._cfg("init_pilgrimage_score")
             # 必须把配置里的初始分传下去：reset_all_scores 的默认值是硬编码的 1000/100，
             # 不改配置时看不出差别，改过初始分的群会出现「回复写 A、实际重置成 B」
             count = await self.db_manager.reset_all_scores(
@@ -254,7 +254,7 @@ class AdminCommandsMixin:
             yield event.plain_result(PERMISSION_DENIED["god_only"])
             return
 
-        target_group = self.config.get("auto_whitelist_group", "")
+        target_group = self._cfg("auto_whitelist_group")
         if not target_group:
             yield event.plain_result("请先在 WebUI 配置 auto_whitelist_group（诸神自动同步群号）。")
             return
@@ -295,7 +295,7 @@ class AdminCommandsMixin:
             group_id = str(raw.get('group_id', ''))
             user_id = str(raw.get('user_id', ''))
 
-            target_group = self.config.get("auto_whitelist_group", "")
+            target_group = self._cfg("auto_whitelist_group")
             if not target_group or group_id != target_group or not user_id:
                 return
 
@@ -312,7 +312,7 @@ class AdminCommandsMixin:
 
     async def _handle_auto_whitelist(self, user_id: str, action: str):
         """处理白名单自动同步（加入/离开指定群）。"""
-        target_group = self.config.get("auto_whitelist_group", "")
+        target_group = self._cfg("auto_whitelist_group")
         if not target_group:
             return
 

@@ -1,5 +1,21 @@
 # 更新日志
 
+## [3.6.11] - 2026-09-13
+
+### 修复
+- **帮助里的查询冷却显示的是假数字** — `format_help` 把 `query_cooldown_seconds` 写死成 600，而实际生效的是 schema 默认的 5 秒。现在帮助显示配置里的真实值（新增用例锁定，已验证改回旧写法会失败）
+
+### 重构（内部，运行时行为不变）
+- **配置读取集中到一处** — 新增 `plugin_config.py` 与 `ConfigMixin._cfg(key)`，60 处 `self.config.get(key, default)` 全部改为从 `_conf_schema.json` 取默认值与类型。此后默认值只写一份（改默认值不必再搜遍全仓），WebUI 写成 `null` 或字符串的脏值在读取层统一转换或回落默认值，业务代码不必各自写 `int()`/`str()` 兜底；也给后面的"配置热生效"留好了唯一入口
+
+### 配置
+- `_conf_schema.json` 全部配置项补齐 `hint` 中文提示（说明取值、边界与影响），WebUI 里鼠标悬停即可看到
+- 补上 4 个此前"代码在用、schema 里没有"的隐藏配置项：`prayer_trigger_messages_positive` / `_negative` / `_neutral` / `_mismatch`（祷词文案池）。此前只能手改配置 JSON，现在 WebUI 可直接编辑
+
+### 测试
+- 新增 `tests/test_config_access.py`（21 个用例）：schema 完整性（每项都要有 description/hint/type）、默认值与类型转换、坏值回落、`null` 处理、可变默认值必须返回副本、动态键读穿；外加两条静态守卫——生产代码不得再出现裸 `config.get(`、所有字面量配置键必须存在于 schema
+- 总计 466 通过
+
 ## [3.6.10] - 2026-09-13
 
 ### 新增

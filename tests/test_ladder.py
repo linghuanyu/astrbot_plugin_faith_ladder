@@ -134,6 +134,8 @@ class TestLeaderboardScoreThreshold:
 class TestLadderCommandThresholdWiring:
     """命令层必须把配置里的门槛传给服务层（默认 1100）。"""
 
+    from astrbot_plugin_faith_ladder.commands.config import ConfigMixin as _ConfigMixin
+
     class _Event:
         def __init__(self):
             self.stopped = False
@@ -162,7 +164,7 @@ class TestLadderCommandThresholdWiring:
         def set_cooldown(self, key):
             pass
 
-    class _Host:
+    class _Host(_ConfigMixin):
         def __init__(self, service, config):
             self.ladder_service = service
             self.config = config

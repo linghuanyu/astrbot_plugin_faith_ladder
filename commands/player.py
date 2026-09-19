@@ -121,7 +121,7 @@ class PlayerCommandsMixin:
             )
             return
 
-        max_name_len = self.config.get("player_name_max_length", 20)
+        max_name_len = self._cfg("player_name_max_length")
         if len(player_name) > max_name_len:
             yield event.plain_result(f"玩家名过长，最长 {max_name_len} 个字符。")
             return
@@ -139,10 +139,10 @@ class PlayerCommandsMixin:
             ladder_score, pilgrimage_score = scores[0], scores[1]
         elif len(scores) == 1:
             ladder_score = scores[0]
-            pilgrimage_score = self.config.get("init_pilgrimage_score", 100)
+            pilgrimage_score = self._cfg("init_pilgrimage_score")
         else:
-            ladder_score = self.config.get("init_ladder_score", 1000)
-            pilgrimage_score = self.config.get("init_pilgrimage_score", 100)
+            ladder_score = self._cfg("init_ladder_score")
+            pilgrimage_score = self._cfg("init_pilgrimage_score")
 
         # 检查玩家是否已存在
         existing = await self.db_manager.get_player_by_name(group_id, player_name)
@@ -415,7 +415,7 @@ class PlayerCommandsMixin:
             return
 
         # Cooldown（先检查，参数校验通过后才占用，避免写错格式就烧掉 600 秒冷却）
-        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        cooldown_seconds = self._cfg("ladder_cooldown_seconds")
         user_id = str(event.get_sender_id())
         cd_key = f"{user_id}:oath"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
@@ -453,7 +453,7 @@ class PlayerCommandsMixin:
             return
 
         # Cooldown（参数校验通过后才占用）
-        cooldown_seconds = self.config.get("ladder_cooldown_seconds", 600)
+        cooldown_seconds = self._cfg("ladder_cooldown_seconds")
         cd_key = f"{user_id}:oath"
         if not self.cooldown_manager.check_cooldown(cd_key, cooldown_seconds):
             remaining = self.cooldown_manager.get_remaining(cd_key, cooldown_seconds)

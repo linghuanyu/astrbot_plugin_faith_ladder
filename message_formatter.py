@@ -4,6 +4,7 @@ Message formatting utilities for the faith ladder plugin.
 
 from typing import List, Optional
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS, VALID_FAITHS, FAITH_TO_PATH
+from astrbot_plugin_faith_ladder.plugin_config import cfg_get
 
 
 def _name_with_tag(player: Player) -> str:
@@ -138,21 +139,23 @@ def format_player_card(
 
 def format_help(config: dict) -> str:
     """Format the help message."""
-    cmd_sb = config.get("cmd_ladder", "天梯榜")
-    cmd_pilgrimage = config.get("cmd_pilgrimage", "觐见榜")
-    cmd_query = config.get("cmd_query", "查询")
-    cmd_add = config.get("cmd_add_score", "录入积分")
-    cmd_batch = config.get("cmd_batch_add_score", "批量录入")
-    cmd_register = config.get("cmd_register_player", "录入玩家")
-    cmd_class = config.get("cmd_set_class", "设置职业")
-    cmd_admin = config.get("cmd_admin", "天梯榜管理")
-    cmd_wl = config.get("cmd_whitelist", "白名单")
-    cmd_help = config.get("cmd_help", "天梯榜帮助")
-    init_ladder = config.get("init_ladder_score", 1000)
-    init_pilgrimage = config.get("init_pilgrimage_score", 100)
+    # 帮助文案里的默认值同样来自 schema：此前 query_cooldown_seconds 这里写 600、
+    # 实际生效 5，帮助显示的是个假数字
+    cmd_sb = cfg_get(config, "cmd_ladder")
+    cmd_pilgrimage = cfg_get(config, "cmd_pilgrimage")
+    cmd_query = cfg_get(config, "cmd_query")
+    cmd_add = cfg_get(config, "cmd_add_score")
+    cmd_batch = cfg_get(config, "cmd_batch_add_score")
+    cmd_register = cfg_get(config, "cmd_register_player")
+    cmd_class = cfg_get(config, "cmd_set_class")
+    cmd_admin = cfg_get(config, "cmd_admin")
+    cmd_wl = cfg_get(config, "cmd_whitelist")
+    cmd_help = cfg_get(config, "cmd_help")
+    init_ladder = cfg_get(config, "init_ladder_score")
+    init_pilgrimage = cfg_get(config, "init_pilgrimage_score")
 
-    ladder_cd = config.get("ladder_cooldown_seconds", 600)
-    query_cd = config.get("query_cooldown_seconds", 600)
+    ladder_cd = cfg_get(config, "ladder_cooldown_seconds")
+    query_cd = cfg_get(config, "query_cooldown_seconds")
 
     classes_str = "/".join(VALID_CLASSES)
     faiths_str = "/".join(VALID_PATHS)
@@ -323,17 +326,17 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
     if faith_matches:
         god_name = player_faith
         if delta > 0:
-            messages = config.get(f"prayer_trigger_messages_positive_{prayer_faith}") or config.get("prayer_trigger_messages_positive") if config else None
+            messages = cfg_get(config, f"prayer_trigger_messages_positive_{prayer_faith}") or cfg_get(config, "prayer_trigger_messages_positive")
             if not messages:
                 messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("positive", DEFAULT_PRAYER_POSITIVE)
             template_vars = {"god": god_name, "delta": delta}
         elif delta < 0:
-            messages = config.get(f"prayer_trigger_messages_negative_{prayer_faith}") or config.get("prayer_trigger_messages_negative") if config else None
+            messages = cfg_get(config, f"prayer_trigger_messages_negative_{prayer_faith}") or cfg_get(config, "prayer_trigger_messages_negative")
             if not messages:
                 messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("negative", DEFAULT_PRAYER_NEGATIVE)
             template_vars = {"god": god_name, "delta": delta}
         else:
-            messages = config.get(f"prayer_trigger_messages_neutral_{prayer_faith}") or config.get("prayer_trigger_messages_neutral") if config else None
+            messages = cfg_get(config, f"prayer_trigger_messages_neutral_{prayer_faith}") or cfg_get(config, "prayer_trigger_messages_neutral")
             if not messages:
                 messages = PRAYER_MESSAGES.get(prayer_faith, {}).get("neutral", DEFAULT_PRAYER_NEUTRAL)
             template_vars = {"god": god_name, "delta": delta}
@@ -345,7 +348,7 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
         if delta == 0:
             msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚……\n但神明宽宏大量，放过了你这次渎神"
         else:
-            messages = config.get("prayer_trigger_messages_mismatch") if config else None
+            messages = cfg_get(config, "prayer_trigger_messages_mismatch")
             if not messages:
                 messages = PRAYER_MESSAGES.get(player_faith, {}).get("mismatch", DEFAULT_PRAYER_MISMATCH)
             template_vars = {"god": player_faith, "prayer": prayer_faith, "delta": str(delta)}
