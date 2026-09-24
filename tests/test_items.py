@@ -405,6 +405,61 @@ class TestGiveAndTakeItems:
         items = await service.db.get_player_items("g1", "u1")
         assert len(items) == 0
 
+    @pytest.mark.asyncio
+    async def test_take_items_queries_inventory_once(self, service, monkeypatch):
+        """一次命令只读一次道具表：此前循环内每件道具都重查一遍全量（N 件 = N 次查询）。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 5)
+        await service.db.add_item("g1", "u1", "生命药水", 5)
+
+        calls = []
+        original = service.db.get_player_items
+
+        async def counting(*args, **kwargs):
+            calls.append(args)
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(service.db, "get_player_items", counting)
+        success, msg = await service.take_items(
+            "g1", "Alice", [("铁剑", 1), ("生命药水", 1), ("铁剑", 1)]
+        )
+        assert success is True
+        assert len(calls) == 1, f"道具表被读了 {len(calls)} 次，应只读 1 次"
+
+    @pytest.mark.asyncio
+    async def test_take_items_same_item_twice_sees_reduced_stock(self, service):
+        """同一件道具在一次命令里出现两次时，第二次按扣减后的数量判定，而不是首读的旧值。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 5)
+        success, msg = await service.take_items("g1", "Alice", [("铁剑", 3), ("铁剑", 3)])
+        assert success is True
+        assert "已从 Alice 收回: 铁剑×3" in msg
+        assert "只有 2 个" in msg
+        items = await service.db.get_player_items("g1", "u1")
+        assert items[0]["quantity"] == 2
+
+    @pytest.mark.asyncio
+    async def test_take_items_all_twice_second_reports_absent(self, service):
+        """第一次「全部收回」后，第二次应报"没有道具"，而不是"还剩 0 个"。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 2)
+        success, msg = await service.take_items("g1", "Alice", [("铁剑", None), ("铁剑", None)])
+        assert success is True
+        assert "没有道具 铁剑" in msg
+
+    @pytest.mark.asyncio
+    async def test_take_items_all_notes_other_grades(self, service):
+        """「全部收回」只碰选中的那一行，同名其它等级要提示且数量取自扣减后的副本。"""
+        await service.db.upsert_player("g1", "u1", "Alice")
+        await service.db.add_item("g1", "u1", "铁剑", 2)
+        await service.db.add_item("g1", "u1", "铁剑", 1, grade="A")
+        success, msg = await service.take_items("g1", "Alice", [("铁剑", None)])
+        assert success is True
+        assert "铁剑×2" in msg
+        assert "另有" in msg and "铁剑（A级）" in msg
+        items = await service.db.get_player_items("g1", "u1")
+        assert [(i["grade"], i["quantity"]) for i in items] == [("A", 1)]
+
 
 class TestExtractItemQuantity:
     """数量标记（*N / ×N）的分离，位置不限。"""

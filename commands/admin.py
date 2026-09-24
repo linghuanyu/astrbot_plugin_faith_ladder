@@ -129,7 +129,8 @@ class AdminCommandsMixin:
             return
 
         if action == "migrate_inventory":
-            count = await self.db_manager.migrate_player_items()
+            # force：这条指令就是"再迁一次"的入口，不能因为启动时已记过账而跳过
+            count = await self.db_manager.migrate_player_items(force=True)
             yield event.plain_result(f"储物空间迁移完成，共处理 {count} 条记录。")
             return
 

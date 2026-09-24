@@ -132,8 +132,10 @@ class FaithLadderPlugin(
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
             data_path = Path(get_astrbot_data_path())
             return data_path / "plugin_data" / "astrbot_plugin_faith_ladder"
-        except Exception:
-            pass
+        except Exception as e:
+            # 下面还有两级回退，这里只记 debug：单看这一条不能说明数据目录不对，
+            # 但排查"数据存到别处去了"时需要知道第一级为什么没生效。
+            logger.debug(f"[DataDir] 取 AstrBot 数据路径失败，尝试下一级回退: {e}")
 
         # 回退：尝试从 context 获取
         for method_name in ("get_data_path", "get_astrbot_data_path"):
@@ -453,8 +455,11 @@ class FaithLadderPlugin(
                         if player and player.specific_faith != specific_faith:
                             await self.db_manager.set_player_specific_faith(group_id, player.player_id, specific_faith)
                 return await self._resolve_name_from_card(card, group_id)
-        except Exception:
-            pass
+        except Exception as e:
+            # 取群名片失败（机器人不在群、无权限、协议端异常）会让"自动识别自己"
+            # 直接失效，用户只看到一句"请指定玩家名"。此前这里是 pass，
+            # 排查时完全看不出是没读到名片还是名片里确实没有匹配的名字。
+            logger.warning(f"[ResolvePlayer] 读取群名片失败，自动识别不可用: {e}")
         return None
 
     async def _parse_target_name(self, event: AstrMessageEvent, args: str) -> Tuple[str, str]:
@@ -513,8 +518,10 @@ class FaithLadderPlugin(
                 logger.warning(
                     f"[FindMember] 玩家名 {player_name} 匹配到 {len(matches)} 个成员，无法确定"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            # 群成员列表取不到（无权限 / 协议端不支持）时，@ 录入会退化成按名字录入；
+            # 没有这行日志的话，"@ 了人却提示玩家不存在"会被当成名字写错。
+            logger.warning(f"[FindMember] 取群成员列表失败，无法按名片定位 @ 的成员: {e}")
         return None
 
     def _extract_card_words(self, card: str) -> list:
@@ -537,8 +544,10 @@ class FaithLadderPlugin(
                 if qq == "all" or qq == str(event.get_self_id()):
                     continue
                 return qq
-        except Exception:
-            pass
+        except Exception as e:
+            # 取不到 @ 的 QQ 时，@ 类指令会退化成"未指定目标"或按名字解析；
+            # 常见原因是宿主版本没有 At 组件或消息段结构不同，值得留痕。
+            logger.warning(f"[AtUser] 解析 @ 用户失败，将按玩家名处理: {e}")
         return None
 
     def _parse_card_info(self, card: str) -> dict:

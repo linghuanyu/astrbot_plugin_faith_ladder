@@ -117,6 +117,14 @@ def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, Specific
                     result["faith"] = specific_path
                 found_specific = True
                 break
+            # 前缀匹配：具体职业名写在词首时剩下的部分算玩家名（"酋长张三" → 张三）。
+            #
+            # 这是**既定行为，不是待修的 bug**：广告型昵称把职业与姓名连写（"魔术师1218"、
+            # "酋长张三"）是常态，不拆就解析不出职业。代价是名字本身以具体职业名开头时会
+            # 被截断——玩家叫「小丑鱼」会被读成 职业=小丑（欺诈·牧师）+ 名字="鱼"，
+            # 「小丑鱼丸」→ 名字="鱼丸"。用户已确认维持此语义，别再"顺手修"：
+            # 改成整体当名字，会让上面那类连写名片整段变成玩家名、职业全丢。
+            # 钉死用例见 tests/test_card_utils.py::TestParsingAmbiguities。
             elif word.startswith(specific_name) and len(word) > len(specific_name):
                 result["class_"] = specific_class
                 if result["specific_faith"] is None:
@@ -156,6 +164,9 @@ def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, Specific
         name_parts.append(word)
 
     if name_parts:
+        # 多个非关键词**直接拼接**，不加分隔符：名片被空格切开的名字（"张 三"）要还原成
+        # "张三"，否则按名字查找会落空。副作用是两段以上的独立词也会粘在一起
+        # （"张三 小明 阿伟" → "张三小明阿伟"），同样属既定行为。
         result["player_name"] = "".join(name_parts)
 
     return result

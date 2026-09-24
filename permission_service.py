@@ -16,6 +16,12 @@ from typing import Optional, Callable
 from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get, config_snapshot
 
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
 
 class PermissionService:
     """Manages whitelist-based permissions for score entry.
@@ -77,8 +83,10 @@ class PermissionService:
         if self._config_getter:
             try:
                 return self._config_getter()
-            except Exception:
-                pass
+            except Exception as e:
+                # 配置 getter 抛错时会静默退回初始化时的静态快照：表现为「WebUI 改了
+                # admin_ids 却一直不生效」，必须留痕，否则只能靠读代码猜。
+                logger.warning(f"[Permission] 读取配置失败，回退到启动时的静态配置: {e}")
         return self._config_static
 
     def set_config(self, config: dict):

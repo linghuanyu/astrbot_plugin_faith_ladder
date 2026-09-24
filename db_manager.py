@@ -24,6 +24,13 @@ from astrbot_plugin_faith_ladder.item_utils import (
 # 其余时间戳统一用 UTC，见 add_status / purge_old_score_history）
 BEIJING_TZ = timezone(timedelta(hours=8))
 
+# 一次性数据迁移的记账名（存在 schema_migrations 表里）。
+#
+# **改名规则**：迁移逻辑本身一变（新增一类脏数据、换了判定条件），就必须换一个新名字。
+# 否则老库上已有标记会让新逻辑永远不执行——这是"记账式迁移"唯一的坑。
+MIGRATION_ITEM_NAMES = "item_names_star_suffix"
+MIGRATION_ITEM_GRADE = "player_items_grade_split"
+
 from astrbot_plugin_faith_ladder.models import Player, FAITH_TO_PATH
 
 try:
@@ -188,6 +195,11 @@ class DatabaseManager:
             );
             CREATE INDEX IF NOT EXISTS idx_gift_accepts_lookup
                 ON gift_daily_accepts(group_id, receiver_id, accept_date);
+
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         await self._db.commit()
 
@@ -198,12 +210,19 @@ class DatabaseManager:
         await self._migrate_oathbreaker()
 
         # Migrate: clean up old item names with *N suffix
-        await self._migrate_item_names()
+        # （会全表扫 player_items 且逐行查一次，故走一次性记账）
+        if not await self._migration_done(MIGRATION_ITEM_NAMES):
+            await self._migrate_item_names()
 
         # Migrate: add grade column to player_items
+        # （同样全表扫 + 逐行查；记账在方法内部，成功提交后才落标记）
         await self.migrate_player_items()
 
         # Migrate: rebuild player_items so the PK includes grade
+        #
+        # 这条**不进记账表**：它只做 PRAGMA table_info 判断，健康库上是 O(1)，
+        # 没有性能收益；而它的判断条件会随代码演进变化，用标记跳过反而危险
+        # （改了期望的主键却因为"迁移已做过"而不重建）。
         await self._migrate_items_grade_pk()
 
         # Migrate: add qq_id column to players (QQ binding for anti-impersonation)
@@ -220,6 +239,30 @@ class DatabaseManager:
 
         # Migrate: add block_actions column to player_statuses（状态阻断）
         await self._migrate_status_block_actions()
+
+    # === 一次性数据迁移记账 ===
+
+    async def _migration_done(self, name: str) -> bool:
+        """该一次性迁移是否已在成功提交后记过账。"""
+        async with self._db.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?", (name,)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def _mark_migration_done(self, name: str) -> None:
+        """记账，表示该迁移已完成。**只在整趟成功且数据已提交之后调用。**
+
+        顺序是「先提交数据、再记账」：若崩在两者之间，下次启动会重跑一遍，
+        而这些迁移都幂等，重跑无副作用。反过来（先记账后提交）会留下
+        "以为做过、其实没做完"的库，脏数据永远清不掉。
+        """
+        await self._db.execute(
+            "INSERT OR REPLACE INTO schema_migrations (name, applied_at) "
+            "VALUES (?, CURRENT_TIMESTAMP)",
+            (name,),
+        )
+        await self._db.commit()
+        logger.info(f"[Migration] {name} 已完成并记账，之后的启动不再重复扫描")
 
     async def _migrate_status_block_actions(self):
         """给 player_statuses 加 block_actions 列（状态可阻断的动作，逗号分隔）。"""
@@ -301,17 +344,24 @@ class DatabaseManager:
                 )
 
         await self._db.commit()
+        # 成功提交后才记账：此前每次启动都全表扫一遍 player_items 并逐行查重
+        await self._mark_migration_done(MIGRATION_ITEM_NAMES)
 
-    async def migrate_player_items(self) -> int:
+    async def migrate_player_items(self, force: bool = False) -> int:
         """把旧数据里写在道具名中的等级拆到 grade 列，并清理重复行。
 
         '共生噬刃（C级）' → item_name='共生噬刃', grade='C'；目标行已存在时合并数量。
-        幂等：启动时自动执行，也可用「天梯榜管理 迁移储物空间」手动重跑。
+        幂等：启动时自动执行，也可用「天梯榜管理 迁移储物空间」手动重跑（force=True）。
 
         目标行的匹配必须带上 grade（存储形态），否则带等级的道具会被合并进
         同名无等级那一行、等级直接丢失（这正是本次修复的问题之一）。
         返回处理过的行数。
+
+        已记过账时直接返回 0，不再全表扫描（这是启动期最重的一步：全表读 +
+        逐行一次查询）。force=True 用于手动重跑。
         """
+        if not force and await self._migration_done(MIGRATION_ITEM_GRADE):
+            return 0
         from astrbot_plugin_faith_ladder.item_utils import parse_item_full_name, grade_to_storage
 
         async with self._db.execute("PRAGMA table_info(player_items)") as cursor:
@@ -365,9 +415,12 @@ class DatabaseManager:
             if migrated or merged:
                 await self._db.commit()
                 logger.info(f"[Migration] 道具等级迁移：改写 {migrated} 行，合并 {merged} 行")
+            # 没有脏数据可迁也要记账——否则"健康库"每次启动都得再全表扫一遍
+            await self._mark_migration_done(MIGRATION_ITEM_GRADE)
             return migrated + merged
         except Exception as e:
             await self._db.rollback()
+            # 不记账：下次启动（或「迁移储物空间」）会重试
             logger.error(f"[Migration] 道具等级迁移失败（下次启动会重试）: {e}")
             return 0
 

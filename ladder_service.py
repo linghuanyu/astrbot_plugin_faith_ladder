@@ -538,8 +538,10 @@ class LadderService:
                 if lore_line:
                     body += f"\n{lore_line}"
                 return True, body
-        except Exception:
-            pass
+        except Exception as e:
+            # 这里抛错会静默改用下面那套默认文案——玩家的注册回复神不知鬼不觉地
+            # 少了神明定称号那几行，而配置里"明明配着信仰文案"。
+            logger.warning(f"[Register] 信仰专属文案渲染失败，改用默认文案: {e}")
 
         # 回退到默认文案
         ladder_tag = "凡人之始" if ladder_score == 1000 else ""
@@ -765,12 +767,13 @@ class LadderService:
         success_details = []
         fail_details = []
         extra_notes = []  # 「全部收回」时同名其它等级的提示
+        # 一次读全量，循环内只改本地副本：此前每件道具都要重查一遍玩家的全部道具
+        # （收回 N 件 = N 次全表查询）。副本里的行与 found_items 共享同一个 dict，
+        # 因此同一件道具被请求两次时，第二次看到的是扣减后的数量。
+        inventory = list(await self.db.get_player_items(group_id, player.player_id))
         for raw_name, quantity in items:
             base_name, grade = parse_item_full_name(raw_name)
-            found_items = [
-                i for i in await self.db.get_player_items(group_id, player.player_id)
-                if i["item_name"] == base_name
-            ]
+            found_items = [i for i in inventory if i["item_name"] == base_name]
             match = self._pick_item_row(found_items, grade)
             if not match:
                 fail_details.append(f"收回失败：{player_name} 没有道具 {base_name}")
@@ -785,9 +788,18 @@ class LadderService:
                 continue
             if not await self.db.remove_item(group_id, player.player_id, base_name, quantity,
                                              grade=actual_grade, require_sufficient=True):
-                # 预读与扣减之间被并发扣走
+                # 预读与扣减之间被并发扣走：本地副本已经不准，重读一次再继续
+                inventory = list(await self.db.get_player_items(group_id, player.player_id))
                 fail_details.append(f"收回失败：{player_name} 的 {base_name} 数量不足（可能刚被其他操作扣走）")
                 continue
+            # 扣减成功，同步本地副本（数量归零就整行移出，避免下一次按"还剩 0 个"报错）。
+            # 按身份而不是相等来剔除：dict 相等判定在语义上是"另一行也可能相等"，容易读错。
+            if quantity is None:
+                inventory = [i for i in inventory if i is not match]
+            else:
+                match["quantity"] = actual_qty - quantity
+                if match["quantity"] <= 0:
+                    inventory = [i for i in inventory if i is not match]
             if quantity is None:
                 # 全部收回，显示实际收回数量
                 success_details.append(format_item_display(base_name, actual_grade, actual_qty))

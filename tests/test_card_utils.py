@@ -147,6 +147,41 @@ class TestParseCardInfo:
         assert r["player_name"] == "子琅"
 
 
+class TestParsingAmbiguities:
+    """把已知歧义的现状钉死：这些是**有意保留**的行为，不是待修的 bug。
+
+    历次计划都把它们当成"顺手能修"的缺陷，改一次就要重新论证一遍。这里连同
+    card_utils 里的注释一起固定下来——要改先改这里，并确认连写名片的解析不退化。
+    """
+
+    def test_specific_class_prefix_truncates_name(self, sorted_classes):
+        """名字以具体职业名开头时会被截断：「小丑鱼」→ 职业=小丑 + 名字「鱼」。
+
+        不拆的话，连写型名片「酋长张三」「魔术师1218」就解析不出职业。
+        """
+        r = parse("【欺诈】小丑鱼 1000 100", sorted_classes)
+        assert r["class_"] == "牧师"
+        assert r["specific_faith"] == "欺诈"
+        assert r["player_name"] == "鱼"
+
+    def test_specific_class_prefix_keeps_longer_remainder(self, sorted_classes):
+        """剩余超过一个字时同样归入名字：「小丑鱼丸」→「鱼丸」。"""
+        r = parse("【欺诈】小丑鱼丸 1000 100", sorted_classes)
+        assert r["class_"] == "牧师"
+        assert r["player_name"] == "鱼丸"
+
+    def test_digit_remainder_not_in_name(self, sorted_classes):
+        """剩余是数字时（广告昵称）不进玩家名——这条与上一条是同源规则的两种走向。"""
+        r = parse("【欺诈】小丑1218", sorted_classes)
+        assert r["class_"] == "牧师"
+        assert r["player_name"] is None
+
+    def test_name_words_joined_without_separator(self, sorted_classes):
+        """多个非关键词直接拼接：被空格切开的名字能还原，独立词也会粘在一起。"""
+        assert parse("张 三 战士", sorted_classes)["player_name"] == "张三"
+        assert parse("张三 小明 阿伟", sorted_classes)["player_name"] == "张三小明阿伟"
+
+
 class TestExtractSpecificFaith:
     def test_from_tag(self):
         assert card_utils.extract_specific_faith("【欺诈】法师 李四") == "欺诈"
