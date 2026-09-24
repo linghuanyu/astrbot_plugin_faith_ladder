@@ -17,6 +17,7 @@ from astrbot_plugin_faith_ladder.text_utils import PRAYER_NORMALIZE_RE
 
 from astrbot_plugin_faith_ladder.plugin_config import config_snapshot, schema_keys
 from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
+from astrbot_plugin_faith_ladder.messages import GOD_PRAISE
 from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_FAITHS
 try:
     from astrbot.api import logger
@@ -109,6 +110,22 @@ class PrayerCommandsMixin:
                 yield event.plain_result(gate_msg)
             return
 
+        # 8.6 诸神（诸神列表成员）发送命中**自己信仰**的祷词：只回一句赞美。
+        #
+        # 位置：放在闸门之后（群访问控制/功能开关/状态阻断对诸神同样生效），
+        # 放在身份解析之前——诸神按约定不是玩家（与玩家是不同的 QQ），走到第 9 步
+        # 只会因为查不到玩家记录而被静默丢弃，这里顺带省下那次解析。
+        # 口径：严格只认诸神列表（超管与群角色都不算），且只认自己的信仰——
+        # 无信仰不触发，祈祷别的信仰也不触发。不计分、不写今日记录、不限次数
+        # （与玩家「每天一次」无关；玩家流程一个字都没动）。
+        sender_id = str(event.get_sender_id())
+        if await self.db_manager.is_whitelisted(sender_id):
+            god_faith = await self._get_god_faith(sender_id)
+            if god_faith and god_faith == matched_faith:
+                yield event.plain_result(GOD_PRAISE.format(faith=god_faith))
+                event.stop_event()
+                return
+
         # 9. 现在才解析玩家身份（昂贵操作，仅对潜在祷词消息执行）
         player = await self._resolve_self_player_lenient(event)
         logger.debug(f"[PrayerTrigger] Player resolved: {player.player_name if player else None}, specific_faith: {player.specific_faith if player else None}")
@@ -117,7 +134,6 @@ class PrayerCommandsMixin:
             return
 
         # 10. 只在字段缺失时才获取名片补全
-        sender_id = str(event.get_sender_id())
         card = ""
         if not player.specific_faith or not player.class_:
             try:
@@ -232,10 +248,24 @@ class PrayerCommandsMixin:
         for faith in VALID_FAITHS:
             key = f"prayer_text_{faith}"
             prayers = self._cfg(key)
+            if not prayers:
+                # 该信仰没有祷词 = 玩家发不出它的祷词，该信仰的诸神也永远拿不到赞美。
+                # 两种情况都完全静默，只有这里能留痕。
+                logger.warning(f"[PrayerTrigger] {key} 为空，该信仰的祷词无法触发")
             for prayer in prayers:
                 normalized = self._normalize_prayer_text(prayer)
-                if normalized:
-                    self._prayer_cache[normalized] = faith
+                if not normalized:
+                    continue
+                previous = self._prayer_cache.get(normalized)
+                if previous and previous != faith:
+                    # 归一化后撞车（标点差异或直接照抄）时后写者覆盖前者：被覆盖的
+                    # 信仰就此静默，而配置里两条看起来"都配了"。行为保持覆盖不变，
+                    # 只在建表时（启动 + 配置变更）告警一次。
+                    logger.warning(
+                        f"[PrayerTrigger] 祷词「{normalized}」同时配给了 {previous} 与 {faith}，"
+                        f"{faith} 生效，{previous} 将无法触发"
+                    )
+                self._prayer_cache[normalized] = faith
 
         # 缓存命令前缀
         cmd_keys = [

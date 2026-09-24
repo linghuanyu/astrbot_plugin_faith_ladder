@@ -44,3 +44,8 @@ def feature_disabled_message(feature_key: str) -> str:
 
 # ========== 状态阻断 ==========
 STATUS_BLOCKED_MSG = "你正处于「{status}」状态，暂时无法{action}。"
+
+# ========== 诸神的赞美 ==========
+# 诸神列表里配了信仰的人，发出命中**自己信仰**的祷词时回这一句。整句就是它，
+# 没有后缀、不随机、不可配置——{faith} 填该诸神自己的信仰名（见 commands/prayer.py 的 8.6 段）。
+GOD_PRAISE = "赞美【{faith}】"
