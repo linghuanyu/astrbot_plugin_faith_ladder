@@ -149,19 +149,45 @@ class TestDateAndQuota:
         assert nxt == (clock.value + timedelta(days=1)).strftime("%Y-%m-%d")
         assert svc.slot_limit(svc.slot_date_of(datetime.strptime(nxt, "%Y-%m-%d"))) > 0
 
-    async def test_hall_says_whether_open_today(self, ctx):
+    async def test_hall_says_closed_on_closed_day(self, ctx):
         _, svc, _, clock = ctx
-
         clock.jump_to_weekday("周三")
-        closed = await svc.list_open(GROUP)
-        assert "今天不能开团" in closed.reply
-        assert "不安排周三、周六" in closed.reply
-        assert "下一次" in closed.reply
 
+        outcome = await svc.list_open(GROUP)
+        assert "今天不能开团" in outcome.reply
+        assert "不安排周三、周六" in outcome.reply
+        assert "下一次" in outcome.reply
+
+    async def test_hall_says_open_today(self, ctx):
+        _, svc, _, clock = ctx
         clock.jump_to_weekday("周一")  # 周一开团 → 队名日期周四，允许 1 支
         opened = await svc.list_open(GROUP)
         assert "今天可以开团" in opened.reply
         assert "名额：1 支，已用 0 支" in opened.reply
+
+    async def test_hall_says_closed_when_quota_used_up(self, ctx):
+        """名额用尽后大厅也要直说不能再开，而不是只报「已用 1 支」。"""
+        _, svc, _, _ = ctx
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
+        await svc.join(GROUP, _pid("乙"), "乙")  # 发车，用掉唯一名额
+
+        outcome = await svc.list_open(GROUP)
+        assert "今天不能开团" in outcome.reply
+        assert "名额已用尽" in outcome.reply
+        assert "下一次" in outcome.reply
+
+    async def test_hall_still_open_when_quota_partially_used(self, ctx):
+        """名额还没用完（默认表里周四那支日期有 2 个名额）时仍要报「可以开团」。"""
+        _, svc, _, clock = ctx
+        clock.jump_to_weekday("周四")
+        assert svc.slot_limit(svc.slot_date_of()) == 2
+
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
+        await svc.join(GROUP, _pid("乙"), "乙")
+
+        outcome = await svc.list_open(GROUP)
+        assert "今天可以开团" in outcome.reply
+        assert "已用 1 支" in outcome.reply
 
     async def test_quota_exhausted_blocks_create(self, ctx):
         db, svc, _, _ = ctx
