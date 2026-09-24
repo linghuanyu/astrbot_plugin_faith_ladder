@@ -1,5 +1,15 @@
 # 更新日志
 
+## [3.7.9] - 2026-09-24
+
+### 变更
+- **内部清理（无用户可见变化）**
+  - 删掉 `_pending_gifts_receive`：它从来只被写入、弹出，**没有任何读取点**，注释却写着"内存缓存减少查询"。待处理赠送本来就以数据库为权威（`_get_valid_pending_gift` 每次查库并带 `created_at` 判超时），所以这套缓存连同 `_forget_pending_gift_cache` 与调度器的 `on_gift_refunded` 接线一并移除。`LadderService.cleanup_expired_gifts` 的 `on_refunded` 钩子保留——它是给调用方的通用能力，仍有用例覆盖
+  - 清掉未使用导入与重复导入：`main.py` 里 8 个已迁去 `commands/` 的消息常量、`message_formatter` / `qq_admin_handle` / `scheduler_service` 的多余符号，以及 `commands/*.py` 里只写不用的 typing 名；`qq_admin_handle._get_faith_message` 内与模块顶部重复的 faith_messages 导入也去掉（此前它把模块级导入整个遮住）
+
+### 测试
+- 总计 702 通过；版本 3.7.9（未推送）
+
 ## [3.7.8] - 2026-09-24
 
 ### 修复

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from astrbot_plugin_faith_ladder.messages import STATUS_BLOCKED_MSG, feature_disabled_message
 

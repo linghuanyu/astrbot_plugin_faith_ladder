@@ -29,12 +29,6 @@ from astrbot_plugin_faith_ladder.item_utils import parse_item_args
 from astrbot_plugin_faith_ladder import card_utils
 from astrbot_plugin_faith_ladder.text_utils import strip_mentions
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
-from astrbot_plugin_faith_ladder.messages import (
-    PERMISSION_DENIED, PLAYER_NOT_FOUND,
-    INVALID_ITEM_FORMAT,
-    BATCH_ALL_SUCCESS, BATCH_PARTIAL_SKIP,
-    COOLDOWN_MSG, BATCH_COOLDOWN_MSG, OATH_COOLDOWN_MSG,
-)
 from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 from astrbot_plugin_faith_ladder.commands import (
     QueryCommandsMixin,
@@ -57,7 +51,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.8"
+    "3.7.9"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -114,7 +108,6 @@ class FaithLadderPlugin(
             # 群访问控制/功能开关与插件侧共用同一个闸门
             gate_fn=self._gate,
         )
-        self._pending_gifts_receive = {}  # (group_id, receiver_id) -> gift_dict（内存缓存）
 
         # 祷词触发缓存
         self._wagers: dict = {}       # group_id -> 进行中的赌局
@@ -156,7 +149,6 @@ class FaithLadderPlugin(
 
     def _load_specific_classes(self):
         """加载具体职业映射文件，构建 具体职业 -> (信仰, 命途, 普通职业) 的反向映射。"""
-        from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
         json_path = _plugin_dir / "specific_classes.json"
         try:
             with open(json_path, "r", encoding="utf-8") as f:
@@ -210,7 +202,6 @@ class FaithLadderPlugin(
             purge_expired_statuses=self.db_manager.purge_expired_statuses,
             cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
             notify_gift_timeout=send_to_group,
-            on_gift_refunded=self._forget_pending_gift_cache,
             backup_db=self.db_manager.backup_to,
             wager_tick=self._wager_tick,
         )

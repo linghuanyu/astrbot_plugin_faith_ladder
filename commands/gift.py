@@ -8,7 +8,7 @@ AstrBot 只扫描插件类自身的方法来注册指令，装饰器放进 mixin
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, List, Dict, Tuple
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
@@ -121,7 +121,6 @@ class GiftCommandsMixin:
             )
             yield event.plain_result(f"{receiver_name} 有未处理的赠送，道具已退回。")
             return
-        self._pending_gifts_receive[gift_key] = gift_data
 
         from astrbot_plugin_faith_ladder.message_formatter import format_gift_request
         notification = format_gift_request(
@@ -194,7 +193,6 @@ class GiftCommandsMixin:
             return
 
         # 先认领（删除记录）再发放：并发下只有一方能删到，避免同一笔赠送被发放两次
-        self._forget_pending_gift_cache(group_id, receiver_id)
         if not await self.db_manager.delete_pending_gift(group_id, receiver_id):
             yield event.plain_result("没有待接受的赠送（或赠送已被处理）。")
             return
@@ -273,7 +271,6 @@ class GiftCommandsMixin:
             return
 
         # 先认领（删除记录）再退回：并发下只有一方能删到，避免重复退款
-        self._forget_pending_gift_cache(group_id, receiver_id)
         if not await self.db_manager.delete_pending_gift(group_id, receiver_id):
             yield event.plain_result("没有待拒绝的赠送（或赠送已被处理）。")
             return
@@ -293,12 +290,10 @@ class GiftCommandsMixin:
     async def _get_valid_pending_gift(self, group_id: str, receiver_id: str,
                                        max_age_seconds: int = 240) -> Optional[dict]:
         """获取有效的待处理赠送（未超时）。超时则自动退回发送方并返回 None。"""
-        gift_key = (group_id, receiver_id)
 
         # 从 DB 获取（含 created_at）
         db_gift = await self.db_manager.get_pending_gift(group_id, receiver_id)
         if not db_gift:
-            self._forget_pending_gift_cache(group_id, receiver_id)
             return None
 
         # 检查超时
@@ -306,7 +301,6 @@ class GiftCommandsMixin:
         created_at = datetime.strptime(db_gift["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
             # 超时：先认领（删除记录）再退款，避免与调度器清理并发时重复退款
-            self._forget_pending_gift_cache(group_id, receiver_id)
             if not await self.db_manager.delete_pending_gift(group_id, receiver_id):
                 return None
             items = db_gift["items"]
@@ -328,9 +322,4 @@ class GiftCommandsMixin:
             "grade": db_gift["items"].get("grade"),
             "quantity": db_gift["items"]["quantity"],
         }
-        self._pending_gifts_receive[gift_key] = gift
         return gift
-
-    def _forget_pending_gift_cache(self, group_id: str, receiver_id: str) -> None:
-        """清掉内存里的待处理赠送缓存。DB 才是权威来源，缓存只用于减少查询。"""
-        self._pending_gifts_receive.pop((group_id, receiver_id), None)

@@ -14,7 +14,6 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 from astrbot_plugin_faith_ladder.messages import PERMISSION_DENIED
 from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
-from astrbot.api import logger
 
 
 async def _resolve(value):
@@ -68,7 +67,6 @@ class QQAdminHandler:
     async def _get_faith_message(self, event: AiocqhttpMessageEvent, action: str, **kwargs) -> str:
         """获取信仰专属消息。"""
         import random
-        from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
 
         user_id = str(event.get_sender_id())
         faith = await _resolve(self._get_faith(user_id))

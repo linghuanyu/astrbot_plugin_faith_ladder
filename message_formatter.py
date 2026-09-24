@@ -3,7 +3,7 @@ Message formatting utilities for the faith ladder plugin.
 """
 
 from typing import List, Optional
-from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS, VALID_FAITHS, FAITH_TO_PATH
+from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
 
 
@@ -398,7 +398,6 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
     streak 为连续祷词天数（含今天），≥2 天才追加提示。
     """
     import random
-    from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH
     from astrbot_plugin_faith_ladder.prayer_messages import (
         PRAYER_MESSAGES, PRAYER_CRIT_MESSAGES, DEFAULT_PRAYER_POSITIVE, DEFAULT_PRAYER_NEGATIVE,
         DEFAULT_PRAYER_NEUTRAL, DEFAULT_PRAYER_MISMATCH, pick_prayer_streak_line,

@@ -8,7 +8,7 @@ AstrBot 只扫描插件类自身的方法来注册指令，装饰器放进 mixin
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, List, Dict, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent

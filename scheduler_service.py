@@ -5,7 +5,7 @@ Scheduler service for automatic backups and cleanup tasks.
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable, Awaitable, Any
+from typing import Optional, Callable, Awaitable
 
 from astrbot.api import logger
 
@@ -24,7 +24,6 @@ class SchedulerService:
         purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
         cleanup_expired_gifts: Optional[Callable[..., Awaitable[int]]] = None,
         notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
-        on_gift_refunded: Optional[Callable[[str, str], None]] = None,
         backup_db: Optional[Callable[[Path], Awaitable[None]]] = None,
         wager_tick: Optional[Callable[[], Awaitable[None]]] = None,
     ):
@@ -40,7 +39,6 @@ class SchedulerService:
         self._purge_expired_statuses = purge_expired_statuses
         self._cleanup_expired_gifts = cleanup_expired_gifts
         self._notify_gift_timeout = notify_gift_timeout
-        self._on_gift_refunded = on_gift_refunded
         self._backup_db = backup_db
         self._wager_tick = wager_tick
         self._get_config = get_config
@@ -163,7 +161,6 @@ class SchedulerService:
                     try:
                         refunded = await self._cleanup_expired_gifts(
                             notify=self._notify_gift_timeout,
-                            on_refunded=self._on_gift_refunded,
                         )
                         if refunded > 0:
                             logger.info(f"Cleaned up {refunded} expired pending gifts")
