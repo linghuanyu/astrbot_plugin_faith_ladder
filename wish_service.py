@@ -255,8 +255,8 @@ class WishService:
     def _quota_text(slot_date: str, limit: int, used: int) -> str:
         label = WishService.format_slot(slot_date)
         if limit <= 0:
-            return f"{label} 不安排试炼：本群不能开团（名额 0）"
-        return f"{label} 的名额：{limit} 支，已用 {used} 支"
+            return f"{label}不安排试炼：本群不能开团（名额 0）"
+        return f"{label}名额：{limit} 支，已用 {used} 支"
 
     def _open_status_line(self, slot_date: str, limit: int, used: int) -> str:
         """大厅里那句直白的「今天能不能开团」。
@@ -270,10 +270,11 @@ class WishService:
             return f"今天不能开团（{reason}）{self.next_open_hint()}".replace("\n", "；")
         if used >= limit:
             return (
-                f"今天不能开团（{self.format_slot(slot_date)} 的名额已用尽）"
+                f"今天不能开团（{self.format_slot(slot_date)}名额已用尽）"
                 f"{self.next_open_hint()}".replace("\n", "；")
             )
-        return f"今天可以开团（{self._quota_text(slot_date, limit, used)}）"
+        # 不用括号包住名额细节：「（09月27日（周日）名额…）」这种嵌套括号读起来很别扭
+        return f"今天可以开团 · {self._quota_text(slot_date, limit, used)}"
 
     def _depart_broadcast(self, team: dict) -> str:
         return self._line(
