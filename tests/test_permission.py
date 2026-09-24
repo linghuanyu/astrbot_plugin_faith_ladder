@@ -46,6 +46,16 @@ class TestPermissionService:
         assert success is False
         assert "已是诸神" in msg
 
+    async def test_duplicate_add_with_faith_updates_faith(self, db_manager):
+        """带信仰重复 add 视为改信仰：否则用户以为改了、实际信仰还在旧的。"""
+        service = PermissionService(db_manager)
+        await service.add_to_whitelist("u123", "admin", faith="沉默")
+        success, msg = await service.add_to_whitelist("u123", "admin", faith="湮灭")
+
+        assert success is True
+        assert "湮灭" in msg
+        assert await service.get_god_faith("u123") == "湮灭"
+
     async def test_remove_whitelist_success(self, db_manager):
         """Test removing from whitelist."""
         await db_manager.add_to_whitelist("user", "u123", "admin")
@@ -79,8 +89,8 @@ class TestPermissionService:
 
 
 @pytest.mark.asyncio
-class TestConfigWhitelist:
-    """Tests for config-defined whitelist and admin_ids."""
+class TestAdminAndDbWhitelist:
+    """config.admin_ids 是唯一管理权限来源；诸神名单只存在 DB（配置层已废弃）。"""
 
     async def test_config_admin_has_permission(self, db_manager):
         """Test that config admin_ids always have permission."""
@@ -98,28 +108,26 @@ class TestConfigWhitelist:
         assert service.is_admin("admin_002") is False
         assert service.is_admin("random") is False
 
-    async def test_config_whitelist_user(self, db_manager):
-        """Test config whitelist with user entry."""
+    async def test_deprecated_config_whitelist_is_ignored(self, db_manager):
+        """已废弃的 WebUI whitelist 配置：既不授权，也不出现在诸神列表里。"""
         config = {
             "whitelist": [
                 {"type": "user", "id": "u123", "note": "积分管理员"},
             ]
         }
         service = PermissionService(db_manager, config)
-        assert service.is_in_config_whitelist("u123") is True
-        assert service.is_in_config_whitelist("u456") is False
+        assert await service.check_score_permission("u123") is False
+        text = await service.get_whitelist_text()
+        assert "u123" not in text
+        assert "诸神列表为空" in text
 
-    async def test_config_whitelist_combined_with_db(self, db_manager):
-        """Test that config whitelist and DB whitelist are both checked."""
-        config = {
-            "whitelist": [
-                {"type": "user", "id": "config_user", "note": ""},
-            ]
-        }
+    async def test_only_db_whitelist_grants(self, db_manager):
+        """授权来源只有 admin_ids 与 DB 白名单；配置层条目不再参与。"""
+        config = {"whitelist": [{"type": "user", "id": "config_user", "note": ""}]}
         await db_manager.add_to_whitelist("user", "db_user", "admin")
         service = PermissionService(db_manager, config)
 
-        assert await service.check_score_permission("config_user") is True
+        assert await service.check_score_permission("config_user") is False
         assert await service.check_score_permission("db_user") is True
         assert await service.check_score_permission("random") is False
 
@@ -127,7 +135,6 @@ class TestConfigWhitelist:
         """Test with empty config."""
         service = PermissionService(db_manager, {})
         assert service.is_admin("anyone") is False
-        assert service.is_in_config_whitelist("anyone") is False
 
     async def test_none_config(self, db_manager):
         """Test with None config (backward compatibility)."""
@@ -144,19 +151,12 @@ class TestConfigWhitelist:
         assert service.is_admin("old_admin") is False
         assert service.is_admin("new_admin") is True
 
-    async def test_get_whitelist_combined_text(self, db_manager):
-        """Test combined whitelist text display."""
-        config = {
-            "whitelist": [
-                {"type": "user", "id": "config_u1", "note": "配置用户"},
-            ]
-        }
+    async def test_whitelist_text_lists_db_entries_only(self, db_manager):
+        """诸神列表只列 DB 条目；配置层已废弃的条目不再出现。"""
+        config = {"whitelist": [{"type": "user", "id": "config_u1", "note": "旧配置"}]}
         await db_manager.add_to_whitelist("user", "db_u1", "admin")
         service = PermissionService(db_manager, config)
         text = await service.get_whitelist_text()
-        assert "config_u1" in text
         assert "db_u1" in text
-        assert "WebUI 配置" in text
-        assert "运行时添加" in text
-        assert "配置: 1" in text
-        assert "运行时: 1" in text
+        assert "config_u1" not in text
+        assert "共 1 位" in text

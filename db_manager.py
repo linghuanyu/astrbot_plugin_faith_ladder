@@ -589,9 +589,14 @@ class DatabaseManager:
         return cursor.rowcount > 0
 
     async def get_whitelist_with_faith(self) -> List[dict]:
-        """获取白名单列表，包含信仰字段。"""
+        """获取白名单列表，包含信仰字段。仅返回已授权的 user 条目。
+
+        过滤放在 SQL 里：调用方此前各自再过滤一遍 entry_type，
+        漏掉一处就会把非授权条目（如待审）当成诸神展示出去。
+        """
         async with self._db.execute(
-            "SELECT entry_type, entry_id, faith, added_by, added_at FROM whitelist ORDER BY id"
+            "SELECT entry_type, entry_id, faith, added_by, added_at FROM whitelist "
+            "WHERE entry_type = 'user' ORDER BY id"
         ) as cursor:
             rows = await cursor.fetchall()
             return [
@@ -604,6 +609,150 @@ class DatabaseManager:
                 }
                 for r in rows
             ]
+
+    # --- 待审白名单：入群先进待审，超管确认后才授权 ---
+    #
+    # 复用 whitelist 表的 entry_type 列承载 'pending'：所有授权路径都写死
+    # entry_type = 'user'，所以待审条目天然不授权，也不需要新表或迁移。
+
+    async def _whitelist_row_exists(self, entry_type: str, entry_id: str) -> bool:
+        """该 (类型, id) 是否已有行。私有：只在已持有写闸门的方法内部调用。"""
+        async with self._db.execute(
+            "SELECT 1 FROM whitelist WHERE entry_type = ? AND entry_id = ?",
+            (entry_type, entry_id)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def _whitelist_row_exists_any(self, entry_id: str) -> bool:
+        """该 id 在白名单里是否有任何类型的条目（user 或 pending）。"""
+        async with self._db.execute(
+            "SELECT 1 FROM whitelist WHERE entry_id = ?",
+            (entry_id,)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def get_pending_whitelist(self) -> List[dict]:
+        """待审条目，按加入顺序返回。"""
+        async with self._db.execute(
+            "SELECT entry_id, added_by, added_at FROM whitelist "
+            "WHERE entry_type = 'pending' ORDER BY id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {"entry_id": r[0], "added_by": r[1], "added_at": r[2]}
+                for r in rows
+            ]
+
+    async def _approve_pending_locked(self, entry_id: str) -> bool:
+        """待审转正的落库动作。调用方负责事务与提交。"""
+        if await self._whitelist_row_exists("user", entry_id):
+            # 已经是诸神：待审行只是冗余（UNIQUE 只约束 entry_type+entry_id，两者可并存）
+            cursor = await self._db.execute(
+                "DELETE FROM whitelist WHERE entry_type = 'pending' AND entry_id = ?",
+                (entry_id,)
+            )
+        else:
+            cursor = await self._db.execute(
+                "UPDATE whitelist SET entry_type = 'user' "
+                "WHERE entry_type = 'pending' AND entry_id = ?",
+                (entry_id,)
+            )
+        return cursor.rowcount > 0
+
+    async def approve_pending(self, entry_id: str) -> bool:
+        """把一条待审条目转成正式诸神，返回是否确实发生了转换。"""
+        async with self.transaction():
+            return await self._approve_pending_locked(entry_id)
+
+    async def approve_all_pending(self) -> int:
+        """把所有待审条目转为诸神，返回转换条数（同一事务内完成）。"""
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT entry_id FROM whitelist WHERE entry_type = 'pending' ORDER BY id"
+            ) as cursor:
+                ids = [r[0] for r in await cursor.fetchall()]
+            converted = 0
+            for entry_id in ids:
+                if await self._approve_pending_locked(entry_id):
+                    converted += 1
+            return converted
+
+    async def reject_pending(self, entry_id: str) -> bool:
+        """丢弃一条待审条目（不授权）。返回是否删掉了一行。"""
+        cursor = await self._db.execute(
+            "DELETE FROM whitelist WHERE entry_type = 'pending' AND entry_id = ?",
+            (entry_id,)
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def remove_whitelist_entry_everywhere(self, entry_id: str) -> int:
+        """删除该 id 的全部白名单条目（user 与 pending），返回删除行数。
+
+        退群时用：只删 user 会把待审行留在超管的待审列表里阴魂不散。
+        """
+        cursor = await self._db.execute(
+            "DELETE FROM whitelist WHERE entry_id = ? AND entry_type IN ('user', 'pending')",
+            (entry_id,)
+        )
+        await self._db.commit()
+        return cursor.rowcount
+
+    async def add_pending(self, entry_id: str, added_by: str) -> bool:
+        """记入待审名单（不授权）。返回是否真的新增了一条。
+
+        守卫是"该 id 在白名单里已有任何条目就跳过"：唯一键只是
+        (entry_type, entry_id)，光靠 INSERT OR IGNORE 挡不住"已是诸神的人
+        入群又拿到一条 pending"，那种冗余行会让他出现在待审列表里等着被批准。
+        """
+        entry_id = str(entry_id).strip()
+        if not entry_id:
+            return False
+        async with self.transaction():
+            if await self._whitelist_row_exists_any(entry_id):
+                return False
+            cursor = await self._db.execute(
+                "INSERT INTO whitelist (entry_type, entry_id, added_by) "
+                "VALUES ('pending', ?, ?)",
+                (entry_id, added_by)
+            )
+            return cursor.rowcount > 0
+
+    async def add_many_pending(self, entry_ids, added_by: str) -> int:
+        """批量记入待审名单，返回实际新增条数。
+
+        先读一次现有 id、再只插差集：写锁在手，读-写之间没有并发窗口，
+        计数因此是精确的（不依赖 INSERT...SELECT 的 rowcount 语义）。
+        差集按 id 排序后写入，让待审列表与回复文案的顺序稳定可复现
+        （调用方传进来的常常是 set，迭代顺序随 hash 随机化）。
+        """
+        ids = list(dict.fromkeys(str(i).strip() for i in entry_ids if str(i).strip()))
+        if not ids:
+            return 0
+        async with self.transaction():
+            async with self._db.execute("SELECT entry_id FROM whitelist") as cursor:
+                existing = {str(r[0]) for r in await cursor.fetchall()}
+            fresh = sorted(i for i in ids if i not in existing)
+            for entry_id in fresh:
+                await self._db.execute(
+                    "INSERT INTO whitelist (entry_type, entry_id, added_by) "
+                    "VALUES ('pending', ?, ?)",
+                    (entry_id, added_by)
+                )
+            return len(fresh)
+
+    async def remove_many_from_whitelist(self, entry_ids, entry_type: str = "user") -> int:
+        """批量移除指定类型的条目，返回删除行数。"""
+        ids = list(dict.fromkeys(str(i).strip() for i in entry_ids if str(i).strip()))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        cursor = await self._db.execute(
+            f"DELETE FROM whitelist WHERE entry_type = ? AND entry_id IN ({placeholders})",
+            (entry_type, *ids)
+        )
+        await self._db.commit()
+        return cursor.rowcount
 
     def _row_to_player(self, row) -> Player:
         """Convert a database row tuple to a Player object."""

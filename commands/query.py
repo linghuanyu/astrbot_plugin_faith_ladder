@@ -4,7 +4,7 @@
 装饰器注册在 main.py 上，本模块只提供实现体（见 commands/__init__.py 的约定）。
 宿主类需具备：config / db_manager / ladder_service / permission_service /
 cooldown_manager，以及 main.py 中的 _get_group_id / _get_args / _check_perm /
-_is_plugin_admin / _get_at_user_id / _resolve_name_from_card /
+_get_at_user_id / _resolve_name_from_card /
 _resolve_target_or_self / _resolve_self_player / _send_forward_text。
 """
 
@@ -38,13 +38,12 @@ class QueryCommandsMixin:
                 if args:
                     break
 
-        # 先检测权限
-        has_perm = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
+        # 先检测权限（超管/诸神/群主·群管理统一走 _check_perm，避免这里再抄一份判定）
+        has_perm = await self._check_perm(event)
         target_name = None
         target_names = None  # 批量查询用
 
-        if has_perm or is_admin:
+        if has_perm:
             # 诸神/管理员：处理 @ 或玩家名参数
             at_user_id = await self._get_at_user_id(event)
             if at_user_id:

@@ -17,8 +17,9 @@ from astrbot_plugin_faith_ladder.commands.gate import GateMixin
 ROOT = Path(__file__).resolve().parent.parent
 COMMANDS_DIR = ROOT / "commands"
 
-# 这些实现体不针对某个群，故不过群访问闸门
-GATE_EXEMPT = {"_help_impl", "_whitelist_impl", "_sync_whitelist_impl", "_group_member_change_impl"}
+# 这些实现体不针对某个群，故不过群访问闸门。
+# _help_impl 必须过闸门：帮助文本也是该群可见的输出，未启用的群要"完全静默"。
+GATE_EXEMPT = {"_whitelist_impl", "_sync_whitelist_impl", "_group_member_change_impl"}
 
 
 class _Host(ConfigMixin, GateMixin):
@@ -212,3 +213,34 @@ def test_qq_admin_handlers_go_through_preflight():
     assert len(handlers) == 8, f"群管 handler 数量变了（{len(handlers)}），请同步更新守卫"
     missing = [f"{n.name}:{n.lineno}" for n in handlers if "_preflight(" not in ast.unparse(n)]
     assert missing == [], "这些群管 handler 没有过闸门：\n" + "\n".join(missing)
+
+
+class TestHelpRespectsGroupAccess:
+    """帮助文本也是该群可见的输出，未启用的群必须同样静默。"""
+
+    class _Event:
+        def plain_result(self, text):
+            return text
+
+    class _HelpHost(ConfigMixin, GateMixin):
+        def __init__(self, config):
+            self.config = config
+
+        def _get_group_id(self, event):
+            return "100"
+
+    async def _run(self, config):
+        from astrbot_plugin_faith_ladder.commands.admin import AdminCommandsMixin
+
+        host = self._HelpHost(config)
+        return [r async for r in AdminCommandsMixin._help_impl(host, self._Event())]
+
+    async def test_blacklisted_group_gets_silence(self):
+        replies = await self._run(
+            {"group_access_mode": "blacklist", "group_access_list": ["100"]}
+        )
+        assert replies == []
+
+    async def test_enabled_group_gets_help(self):
+        replies = await self._run({"group_access_mode": "off"})
+        assert replies and "天梯榜" in replies[0]

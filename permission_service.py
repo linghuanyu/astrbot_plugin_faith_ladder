@@ -1,7 +1,14 @@
 """
 Permission service for whitelist management.
-Checks both config-defined whitelist and database whitelist.
-Whitelist is GLOBAL — not scoped to any group.
+
+白名单只有一个存储：数据库 whitelist 表的 entry_type = 'user' 条目。此前还有
+一份 WebUI 配置里的 whitelist 名单，但只有部署者一个人会填、而部署者本身就是
+超管，那一层是冗余的，已移除。权限来源因此收敛为两处：
+
+1. config.admin_ids — 超管
+2. DB whitelist     — 诸神
+
+白名单是全局的，不按群作用域。
 """
 
 import time
@@ -10,23 +17,12 @@ from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get, config_snapshot
 
 
-def _normalize_entry_type(value) -> str:
-    """白名单条目的类型归一化：缺失或空值都视为 user（group 类型已废弃）。
-
-    授权侧与展示侧此前各自判断（一处 `or "user"`、一处 `str(get(...,"user"))`），
-    空 type 的条目会"权限生效但在列表里看不到"。
-    """
-    text = str(value).strip() if value is not None else ""
-    return text or "user"
-
-
 class PermissionService:
     """Manages whitelist-based permissions for score entry.
 
     Permission sources (checked in order):
-    1. config.admin_ids - global admin list (always has permission)
-    2. config.whitelist - WebUI-defined whitelist entries (global)
-    3. DB whitelist - runtime whitelist managed via commands (global)
+    1. config.admin_ids - 超管（唯一的管理权限来源，天然具备诸神权限）
+    2. DB whitelist     - 诸神（指令与群成员同步写入，全局生效）
     """
 
     # 权限缓存 TTL（秒）
@@ -34,7 +30,11 @@ class PermissionService:
 
     # 参与权限判定的配置键：这几个键一变，缓存立即失效——
     # 否则 WebUI 刚把某人加进 admin_ids，他要等最多 5 分钟才生效
-    CONFIG_KEYS = ("admin_ids", "whitelist")
+    CONFIG_KEYS = ("admin_ids",)
+
+    # 缓存条数上限。过期清理只发生在"再次查同一个 user"时，从未重复出现的
+    # user 永不回收；自动同步群持续进人时这个字典会单调增长，所以兜一个上限。
+    MAX_CACHE_SIZE = 1024
 
     def __init__(self, db_manager: DatabaseManager, config: Optional[dict] = None, config_getter: Optional[Callable[[], dict]] = None):
         """config 与 config_getter 二选一：前者为静态快照，后者用于配置热重载且优先级更高。"""
@@ -43,13 +43,33 @@ class PermissionService:
         self._config_static = config or {}
         # 权限缓存：{user_id: (result, timestamp, 配置快照)}
         self._permission_cache = {}
+        # 缓存代数：每次失效自增，用于识别"查询途中缓存被失效"
+        self._cache_generation = 0
 
     def invalidate_cache(self, user_id: str = None):
-        """失效权限缓存。不传 user_id 则清空全部缓存。"""
+        """失效权限缓存。不传 user_id 则清空全部缓存。
+
+        同时递增代数：check_score_permission 会在 await DB 之前记下代数，
+        回写缓存前比对。否则"失效发生在查询中途"时，那个失效前的旧结论会被
+        当成新结果写回去，刚被移出白名单的人还能继续通过最长 5 分钟。
+        """
+        self._cache_generation += 1
         if user_id:
             self._permission_cache.pop(user_id, None)
         else:
             self._permission_cache.clear()
+
+    def _evict_cache_slot(self) -> None:
+        """为即将写入的新条目腾空间：先清全部过期项，仍满则丢最旧的一条。"""
+        if len(self._permission_cache) < self.MAX_CACHE_SIZE:
+            return
+        now = time.time()
+        for uid in [uid for uid, (_, ts, _) in self._permission_cache.items()
+                    if now - ts >= self.CACHE_TTL]:
+            del self._permission_cache[uid]
+        if len(self._permission_cache) >= self.MAX_CACHE_SIZE:
+            oldest = min(self._permission_cache, key=lambda uid: self._permission_cache[uid][1])
+            del self._permission_cache[oldest]
 
     @property
     def _config(self) -> dict:
@@ -78,24 +98,10 @@ class PermissionService:
             admin_ids = [part.strip() for part in admin_ids.split(",")]
         return str(user_id) in [str(aid).strip() for aid in admin_ids]
 
-    def is_in_config_whitelist(self, user_id: str) -> bool:
-        """Check if user is in the config-defined global whitelist."""
-        whitelist = cfg_get(self._config, "whitelist")
-        for entry in whitelist:
-            if not isinstance(entry, dict):
-                continue
-            # 缺省 type 视为 user：与 _get_config_whitelist_entries 的展示逻辑保持一致，
-            # 否则 WebUI 里不填 type 的条目会「显示在诸神列表里但不生效」
-            entry_type = _normalize_entry_type(entry.get("type"))
-            entry_id = str(entry.get("id", ""))
-            if entry_type == "user" and entry_id == str(user_id):
-                return True
-        return False
-
     async def check_score_permission(self, user_id: str, group_id: str = None) -> bool:
         """
         Check if a user has permission to enter scores.
-        Global check: config admin_ids → config whitelist → DB whitelist.
+        Global check: config admin_ids → DB whitelist.
         group_id is accepted but ignored (kept for backward compatibility).
         结果缓存 5 分钟，减少 DB 查询。
         """
@@ -109,22 +115,30 @@ class PermissionService:
                 return result
             del self._permission_cache[user_id]
 
+        # 记下当前代数：DB 查询期间若缓存被失效（白名单增删），结论可能已过期
+        generation = self._cache_generation
+
         # 原有逻辑
         if self.is_admin(user_id):
-            result = True
-        elif self.is_in_config_whitelist(user_id):
             result = True
         else:
             result = await self.db.is_whitelisted(user_id)
 
-        # 写入缓存（带配置快照：配置变了下次就读不到这条）
-        self._permission_cache[user_id] = (result, now, snapshot)
+        # 写入缓存（带配置快照：配置变了下次就读不到这条）。
+        # 代数变了说明查询途中发生过失效，这个结果不能再进缓存。
+        if generation == self._cache_generation:
+            self._evict_cache_slot()
+            self._permission_cache[user_id] = (result, now, snapshot)
         return result
 
     async def add_to_whitelist(
         self, user_id: str, added_by: str, faith: str = None
     ) -> tuple[bool, str]:
-        """添加用户到诸神列表。返回 (success, message)。"""
+        """添加用户到诸神列表。返回 (success, message)。
+
+        已在名单里且带了信仰时按「改信仰」处理：否则 `白名单 add <id> <新信仰>`
+        会回一句"已是诸神之一"，用户以为信仰改了、实际没改。
+        """
         if not user_id.strip():
             return False, "ID 不能为空。"
 
@@ -132,8 +146,9 @@ class PermissionService:
         if added:
             faith_str = f"（信仰：{faith}）" if faith else ""
             return True, f"已将 {user_id} 列入诸神列表{faith_str}。"
-        else:
-            return False, f"{user_id} 已是诸神之一。"
+        if faith and await self.db.set_whitelist_faith(user_id, faith):
+            return True, f"{user_id} 已是诸神，信仰已更新为：{faith}。"
+        return False, f"{user_id} 已是诸神之一。"
 
     async def set_whitelist_faith(
         self, user_id: str, faith: str
@@ -164,72 +179,98 @@ class PermissionService:
             return False, f"未找到 {user_id}。"
 
     async def get_god_faith(self, user_id: str) -> Optional[str]:
-        """获取诸神对应的信仰名（用于选取信仰主题文案）。
-
-        先查 DB（指令添加的诸神），再回退到 WebUI 配置里的同名条目——
-        配置里配了信仰却只显示在列表、执行操作时走通用文案，是之前的不一致来源。
-        """
-        faith = await self.db.get_whitelist_faith(user_id)
-        if faith:
-            return faith
-        for entry in self._get_config_whitelist_entries():
-            if entry["entry_id"] == str(user_id):
-                return entry.get("faith") or None
-        return None
+        """获取诸神对应的信仰名（用于选取信仰主题文案）。信仰只存在 DB 里。"""
+        return await self.db.get_whitelist_faith(user_id)
 
     async def remove_from_whitelist(
         self, user_id: str
     ) -> tuple[bool, str]:
-        """从诸神列表移除用户。返回 (success, message)。"""
-        removed = await self.db.remove_from_whitelist("user", user_id)
+        """从诸神列表移除用户。返回 (success, message)。
+
+        `remove` 的语义是「把这个 id 从我名单里拿掉」，所以待审行一并清掉——
+        否则同一 id 若同时有 user 与 pending 两行（手动 add 后对方又入群），
+        移除之后他还会出现在待审列表里。
+        """
+        removed = await self.db.remove_whitelist_entry_everywhere(user_id)
         if removed:
             return True, f"已从诸神列表移除 {user_id}。"
         else:
             return False, f"未找到 {user_id}。"
 
     async def get_whitelist_text(self) -> str:
-        """Get formatted whitelist text: WebUI 配置项 + 运行时用指令添加的条目。"""
-        from astrbot_plugin_faith_ladder.message_formatter import format_whitelist_combined
-        config_entries = self._get_config_whitelist_entries()
-        db_entries = await self._get_db_whitelist_entries()
-        return format_whitelist_combined(config_entries, db_entries)
+        """Get formatted whitelist text（数据全部来自 DB）。"""
+        from astrbot_plugin_faith_ladder.message_formatter import format_whitelist
+        return format_whitelist(await self._get_db_whitelist_entries())
+
+    # --- 待审名单：入群先进待审，超管确认后才授权 ---
+
+    async def list_pending_text(self) -> str:
+        """待审名单的展示文本。"""
+        from astrbot_plugin_faith_ladder.message_formatter import format_pending_whitelist
+        return format_pending_whitelist(await self.db.get_pending_whitelist())
+
+    async def approve_pending(self, user_id: str) -> tuple[bool, str]:
+        """把一条待审条目转为诸神。返回 (success, message)。"""
+        if not user_id.strip():
+            return False, "ID 不能为空。"
+        if await self.db.approve_pending(user_id):
+            return True, f"已通过 {user_id} 的入群申请，列入诸神列表。"
+        return False, f"{user_id} 不在待审名单中。"
+
+    # 待审一次通过多少人以上必须先看名单再确认。同步白名单会把「群成员里还不是
+    # 诸神的」全写进待审，所以一句「全部通过」可能等于全群封神，挡一下。
+    BULK_APPROVE_CONFIRM_THRESHOLD = 5
+
+    # 回复里回显多少个 id（再多也只报总数）
+    APPROVE_ECHO_LIMIT = 20
+
+    def _echo_ids(self, entry_ids: list) -> str:
+        """把待通过/已通过的 id 回显成一行，过长则截断。"""
+        shown = "、".join(entry_ids[:self.APPROVE_ECHO_LIMIT])
+        if len(entry_ids) > self.APPROVE_ECHO_LIMIT:
+            return f"{shown}… 等 {len(entry_ids)} 人"
+        return shown
+
+    async def approve_all_pending(self, confirm: bool = False) -> tuple[int, str]:
+        """通过全部待审条目。返回 (通过人数, message)。
+
+        待审人数超过阈值且未带确认时**不落库**，只回一条名单预览与确认方式——
+        回显本身不构成拦截，所以真正的设防在"这一句不执行"。
+        """
+        pending = [r["entry_id"] for r in await self.db.get_pending_whitelist()]
+        if not pending:
+            return 0, "没有待审的入群申请。"
+
+        if len(pending) > self.BULK_APPROVE_CONFIRM_THRESHOLD and not confirm:
+            return 0, (
+                f"本次将一次授权 {len(pending)} 人：{self._echo_ids(pending)}\n"
+                f"确认请发送：白名单 全部通过 确认"
+            )
+
+        count = await self.db.approve_all_pending()
+        return count, f"已通过 {count} 人的入群申请：{self._echo_ids(pending)}"
+
+    async def reject_pending(self, user_id: str) -> tuple[bool, str]:
+        """丢弃一条待审条目。返回 (success, message)。"""
+        if not user_id.strip():
+            return False, "ID 不能为空。"
+        if await self.db.reject_pending(user_id):
+            return True, f"已拒绝 {user_id} 的入群申请。"
+        return False, f"{user_id} 不在待审名单中。"
 
     async def _get_db_whitelist_entries(self) -> list[dict]:
-        """Get runtime whitelist entries from DB. 仅返回 user 类型（group 类型已废弃）。"""
+        """Get whitelist entries from DB.
+
+        `get_whitelist_with_faith` 已在 SQL 层过滤 entry_type = 'user'，
+        非授权条目（如待审）不会走到这里。
+        """
         rows = await self.db.get_whitelist_with_faith()
-        result = []
-        for row in rows:
-            if str(row.get("entry_type", "")) != "user":
-                continue
-            result.append({
+        return [
+            {
                 "entry_type": "user",
                 "entry_id": str(row.get("entry_id", "")),
                 "faith": row.get("faith") or None,
-                "note": "",
                 "source": "db",
-            })
-        return result
-
-    def _get_config_whitelist_entries(self) -> list[dict]:
-        """Get whitelist entries from config. 仅返回 user 类型（group 类型已废弃）。"""
-        whitelist = cfg_get(self._config, "whitelist")
-        result = []
-        for entry in whitelist:
-            if isinstance(entry, dict):
-                # 与 is_in_config_whitelist 用同一套缺省判定：空 type 视为 user，
-                # 否则会出现"授权通过但列表里看不到"的不一致
-                entry_type = _normalize_entry_type(entry.get("type"))
-                # 仅返回 user 类型，group 类型已废弃不再支持
-                if entry_type != "user":
-                    continue
-                # 键存在但值为 None（WebUI 写 null）时 .strip() 会抛 AttributeError，
-                # 而这里被 白名单 list 与 get_god_faith 共用，崩了会影响多个指令
-                faith = (entry.get("faith") or "").strip() or None
-                result.append({
-                    "entry_type": entry_type,
-                    "entry_id": str(entry.get("id", "")),
-                    "faith": faith,
-                    "note": str(entry.get("note", "")),
-                    "source": "config",
-                })
-        return result
+            }
+            for row in rows
+        ]

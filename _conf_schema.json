@@ -60,8 +60,8 @@
     "default": "批量录入"
   },
   "whitelist": {
-    "description": "诸神列表（可在 WebUI 直接配置，无需指令操作）",
-    "hint": "每项一位诸神：id 填 QQ 号，faith 可留空。也可以用「白名单 add/remove/list」指令维护。",
+    "description": "【已废弃】此配置项不再生效，请勿使用",
+    "hint": "已废弃：诸神白名单现在只存在数据库里，请用「白名单 add <QQ> [信仰]」指令管理。这里填的内容会被忽略（不会迁移）。",
     "type": "list",
     "default": [],
     "items": {
@@ -91,8 +91,8 @@
     }
   },
   "admin_ids": {
-    "description": "管理员用户ID列表（拥有全部管理权限，不受群管理员限制）",
-    "hint": "填 QQ 号，多个用英文逗号分隔。管理员与诸神权限相同，且不受群角色限制。",
+    "description": "管理员用户ID列表（唯一的插件管理权限来源）",
+    "hint": "填 QQ 号，多个用英文逗号分隔。管理员拥有全部权限。注意：群主/群管理员不是管理员，他们只有诸神级权限（不能用白名单、不能清空/重置）。",
     "type": "list",
     "default": [],
     "items": {
@@ -108,9 +108,12 @@
   },
   "group_access_list": {
     "description": "群访问控制的群号列表（配合上面的模式使用）",
-    "hint": "blacklist 模式填要禁用的群号，whitelist 模式填要启用的群号；两者都留空时 off 以外不产生任何限制。",
+    "hint": "blacklist 模式填要禁用的群号，whitelist 模式填要启用的群号。注意 whitelist 模式下留空会拦下所有群（不是不限制）；只有 off（或模式写错）才完全不限制。",
     "type": "list",
-    "default": []
+    "default": [],
+    "items": {
+      "type": "string"
+    }
   },
   "feature_gift_enabled": {
     "description": "启用道具赠送（赠送道具 / 接受道具 / 拒绝道具）",
@@ -419,8 +422,8 @@
     "default": "{name}碎了命运之誓。【虚无】命途的第二神收回了骰子，命线不再为你转动"
   },
   "auto_whitelist_group": {
-    "description": "自动白名单群号（该群成员加入时自动加入白名单，退群时自动移除）",
-    "hint": "填群号：该群成员入群自动加入白名单、退群自动移除；留空表示关闭。",
+    "description": "待审群号（该群成员入群时进入待审名单，需管理员确认后才成为诸神；退群自动移除）",
+    "hint": "填群号：该群成员入群先进待审（不授权），用「白名单 待审 / 通过 / 全部通过」确认；退群自动移除；留空表示关闭。",
     "type": "string",
     "default": ""
   },

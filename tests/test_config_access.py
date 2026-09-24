@@ -56,7 +56,7 @@ class TestCfgGetDefaults:
         assert cfg_get({}, "init_ladder_score") == 1000
         assert cfg_get({}, "leaderboard_min_ladder_score") == 1100
         assert cfg_get({}, "auto_backup_enabled") is True
-        assert cfg_get({}, "whitelist") == []
+        assert cfg_get({}, "admin_ids") == []
         assert cfg_get({}, "gift_daily_accept_limit") == 1
 
     def test_none_config_falls_back_to_defaults(self):
@@ -65,14 +65,14 @@ class TestCfgGetDefaults:
     def test_null_value_falls_back_to_default(self):
         """WebUI 存了 null 时按默认值处理，而不是把 None 传进业务代码。"""
         assert cfg_get({"query_cooldown_seconds": None}, "query_cooldown_seconds") == 5
-        assert cfg_get({"whitelist": None}, "whitelist") == []
+        assert cfg_get({"admin_ids": None}, "admin_ids") == []
 
     def test_list_default_is_copied(self):
         """默认值是可变对象时必须是副本，否则调用方一改就污染全局。"""
-        first = cfg_get({}, "whitelist")
-        first.append({"id": "123"})
-        assert cfg_get({}, "whitelist") == []
-        assert schema_default("whitelist") == []
+        first = cfg_get({}, "admin_ids")
+        first.append("123")
+        assert cfg_get({}, "admin_ids") == []
+        assert schema_default("admin_ids") == []
 
 
 class TestCfgGetCasting:

@@ -77,7 +77,8 @@ class TestPrayerCacheHotReload:
 
 
 class TestPermissionCacheHotReload:
-    async def test_config_change_invalidates_cached_result(self, db_manager):
+    async def test_deprecated_config_whitelist_no_longer_grants(self, db_manager):
+        """WebUI 的 whitelist 配置已废弃：改它既不授权，也不该刷新权限缓存。"""
         from astrbot_plugin_faith_ladder.permission_service import PermissionService
 
         config = {"admin_ids": [], "whitelist": []}
@@ -85,9 +86,9 @@ class TestPermissionCacheHotReload:
 
         assert await service.check_score_permission("10001") is False
 
-        # 模拟 WebUI 把该用户加进白名单：下一次调用必须立刻生效
+        # 这一层已经不再参与判定——权限只认 admin_ids 与 DB 白名单
         config["whitelist"] = [{"type": "user", "id": "10001"}]
-        assert await service.check_score_permission("10001") is True
+        assert await service.check_score_permission("10001") is False
 
     async def test_admin_ids_change_invalidates_cached_result(self, db_manager):
         from astrbot_plugin_faith_ladder.permission_service import PermissionService

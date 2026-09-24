@@ -51,7 +51,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.10"
+    "3.8.0"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -103,7 +103,9 @@ class FaithLadderPlugin(
         self._scheduler = None
         self._qq_admin = QQAdminHandler(
             check_perm_fn=self.permission_service.check_score_permission,
-            check_admin_fn=self._is_plugin_admin,
+            # 群管指令本质是群务：超管或该群的群主/群管理员都可以执行。
+            # 这不等于插件管理权——白名单/清空/重置走 _is_super_admin，群角色拿不到。
+            check_admin_fn=self._is_group_staff,
             get_faith_fn=self._get_god_faith,
             # 群访问控制/功能开关与插件侧共用同一个闸门
             gate_fn=self._gate,
@@ -167,9 +169,23 @@ class FaithLadderPlugin(
         except Exception as e:
             logger.warning(f"[SpecificClasses] 加载具体职业映射失败: {e}")
 
+    def _warn_deprecated_config_whitelist(self):
+        """WebUI 的 whitelist 配置已废弃：残留非空时提醒一次，且不迁移。
+
+        不提醒的话，"配置里明明配着人、权限却不生效"会被当成 bug 来排查——
+        白名单现在只存在 DB 里。
+        """
+        stale = self._cfg("whitelist")
+        if stale:
+            logger.warning(
+                f"[Whitelist] WebUI 的 whitelist 配置已废弃，其中 {len(stale)} 条不会生效"
+                f"（也不迁移）；请改用「白名单 add <QQ> [信仰]」管理诸神"
+            )
+
     async def initialize(self):
         """插件加载：建库与迁移、启动调度器、注册群成员变动监听。"""
         await self.db_manager.initialize()
+        self._warn_deprecated_config_whitelist()
         from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
 
         async def send_to_group(group_id: str, content):
@@ -279,11 +295,16 @@ class FaithLadderPlugin(
             return ""
         return strip_mentions(text[len(cmd_name):])
 
-    def _is_plugin_admin(self, event: AstrMessageEvent) -> bool:
-        """是否为插件管理员（config.admin_ids）。与白名单权限是两套：管理员看配置，诸神看白名单。"""
-        user_id = str(event.get_sender_id())
-        if self.permission_service.is_admin(user_id):
-            return True
+    def _is_super_admin(self, event: AstrMessageEvent) -> bool:
+        """插件超管：只认 config.admin_ids。
+
+        与诸神权限是两套，也与群角色无关——群主/群管理员不因身份获得管理类操作
+        （白名单、同步、清空、重置），他们的权限上限是「诸神级」。
+        """
+        return self.permission_service.is_admin(str(event.get_sender_id()))
+
+    def _is_group_moderator(self, event: AstrMessageEvent) -> bool:
+        """是否为该群的群主/群管理员（QQ 群角色）。"""
         try:
             if hasattr(event, 'message_obj') and hasattr(event.message_obj, 'sender'):
                 return event.message_obj.sender.role in ('admin', 'owner')
@@ -291,12 +312,18 @@ class FaithLadderPlugin(
             pass
         return False
 
+    def _is_group_staff(self, event: AstrMessageEvent) -> bool:
+        """群管指令的执行者：超管，或该群的群主/群管理员。"""
+        return self._is_super_admin(event) or self._is_group_moderator(event)
+
     async def _check_perm(self, event: AstrMessageEvent) -> bool:
-        """检查诸神/管理员权限。返回 True 表示有权限，False 表示无权限。"""
-        user_id = str(event.get_sender_id())
-        has_permission = await self.permission_service.check_score_permission(user_id)
-        is_admin = self._is_plugin_admin(event)
-        return has_permission or is_admin
+        """诸神级判定：超管、DB 白名单诸神，或该群的群主/群管理员。
+
+        check_score_permission 已含 admin_ids，故不在这里重复判超管。
+        """
+        if await self.permission_service.check_score_permission(str(event.get_sender_id())):
+            return True
+        return self._is_group_moderator(event)
 
     async def _get_god_faith(self, qq_id: str) -> Optional[str]:
         """获取诸神对应的信仰名（如果在白名单中且配置了信仰）。"""

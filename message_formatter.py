@@ -253,8 +253,9 @@ def format_help(config: dict) -> str:
         f"  保护: 群主和管理员不可被禁言/踢出\n"
         f"\n"
         f"[管理] (管理员权限)\n"
-        f"{cmd_wl} add/remove/list\n"
-        f"同步白名单 — 同步指定群成员到{GODS_ROSTER}\n"
+        f"{cmd_wl} add/remove/list/setfaith\n"
+        f"{cmd_wl} 待审/通过/全部通过 [确认]/拒绝 — 审核入群申请（超过 5 人需加「确认」）\n"
+        f"同步白名单 [清理] — 同步群成员到待审名单，再用「{cmd_wl} 全部通过」授权（加「清理」才移除已不在群者）\n"
         f"{cmd_admin} 重置/删除/改名/清空/清除弃誓\n"
         f"\n"
         f"初始之位：登神之路 {init_ladder} · 觐见之梯 {init_pilgrimage}\n"
@@ -276,39 +277,31 @@ def format_gift_request(
     )
 
 
-def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]) -> str:
-    """Format whitelist display: WebUI 配置项 + 运行时用指令添加的条目。"""
-    if not config_entries and not db_entries:
-        return f"{GODS_ROSTER}为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
+def format_whitelist(entries: List[dict]) -> str:
+    """Format whitelist display（数据全部来自 DB，是诸神白名单的唯一存储）。"""
+    if not entries:
+        return f"{GODS_ROSTER}为空。\n可用指令 /白名单 add 添加。"
 
     lines = [f"═══ {GODS_ROSTER} ═══", ""]
+    for i, entry in enumerate(entries, 1):
+        faith = entry.get("faith")
+        faith_str = f" <{faith}>" if faith else ""
+        lines.append(f"  {i}. {entry['entry_id']}{faith_str}")
+    lines.append("")
+    lines.append(f"─── 共 {len(entries)} 位 ───")
+    return "\n".join(lines)
 
-    if config_entries:
-        lines.append("── WebUI 配置 ──")
-        lines.append("")
-        for i, entry in enumerate(config_entries, 1):
-            note = f" ({entry.get('note', '')})" if entry.get("note") else ""
-            faith = entry.get("faith")
-            faith_str = f" <{faith}>" if faith else ""
-            lines.append(f"  {i}. {entry['entry_id']}{faith_str}{note}")
-        lines.append("")
 
-    if db_entries:
-        lines.append("── 运行时添加 ──")
-        lines.append("")
-        for i, entry in enumerate(db_entries, 1):
-            faith = entry.get("faith")
-            faith_str = f" <{faith}>" if faith else ""
-            lines.append(f"  {i}. {entry['entry_id']}{faith_str}")
-        lines.append("")
+def format_pending_whitelist(entries: List[dict]) -> str:
+    """Format pending entries（入群后等待超管确认的名单，尚未授权）。"""
+    if not entries:
+        return "没有待审的入群申请。"
 
-    summary_parts = []
-    if config_entries:
-        summary_parts.append(f"配置: {len(config_entries)}")
-    if db_entries:
-        summary_parts.append(f"运行时: {len(db_entries)}")
-    summary_parts.append(f"共 {len(config_entries) + len(db_entries)} 位")
-    lines.append(f"─── {' | '.join(summary_parts)} ───")
+    lines = [f"═══ {GODS_ROSTER}·待审 ═══", ""]
+    for i, entry in enumerate(entries, 1):
+        lines.append(f"  {i}. {entry['entry_id']}")
+    lines.append("")
+    lines.append("「白名单 通过 <QQ>」逐条确认，「白名单 全部通过」一次通过，「白名单 拒绝 <QQ>」丢弃。")
     return "\n".join(lines)
 
 

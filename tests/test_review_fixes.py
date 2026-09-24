@@ -771,31 +771,26 @@ class TestQQIndexFailSoft:
 
 
 class TestWhitelistConfigRobustness:
-    """白名单配置里的 None / 缺省 type 不应造成崩溃或"权限生效但列表看不到"。"""
+    """配置层的 whitelist 已废弃：不授权、不展示，残留脏值也不应造成崩溃。"""
 
-    async def test_faith_none_does_not_crash(self, db):
+    async def test_deprecated_config_whitelist_is_fully_ignored(self, db):
         svc = PermissionService(db, {
-            "whitelist": [{"type": "user", "id": "u1", "note": "x", "faith": None}],
+            "whitelist": [
+                {"type": "user", "id": "u1", "note": "x", "faith": None},
+                {"id": "u2"},                       # 不写 type
+                {"type": "group", "id": "g1"},      # 已废弃的类型
+            ],
             "admin_ids": [],
         })
-        text = await svc.get_whitelist_text()   # 旧实现会 AttributeError
-        assert "u1" in text
-        assert await svc.get_god_faith("u1") is None   # 回退路径同样不应崩
+        for uid in ("u1", "u2", "g1"):
+            assert await svc.check_score_permission(uid) is False
 
-    async def test_blank_type_is_treated_as_user_everywhere(self, db):
-        svc = PermissionService(db, {
-            "whitelist": [{"id": "u1"}],   # 不写 type
-            "admin_ids": [],
-        })
-        # 授权侧
-        assert await svc.check_score_permission("u1") is True
-        # 展示侧（旧实现会跳过空 type，导致列表里看不到）
+        # 展示侧同样不应出现（旧实现在 faith=None 时会 AttributeError）
         text = await svc.get_whitelist_text()
-        assert "u1" in text
-
-    async def test_group_type_is_still_ignored(self, db):
-        svc = PermissionService(db, {"whitelist": [{"type": "group", "id": "g1"}], "admin_ids": []})
-        assert await svc.check_score_permission("g1") is False
+        assert "u1" not in text
+        assert "u2" not in text
+        assert "诸神列表为空" in text
+        assert await svc.get_god_faith("u1") is None
 
 
 class TestRebindQQ:
@@ -1013,7 +1008,7 @@ class _AdminHost(_ConfigMixin, _GateMixin):
     def _get_args(self, event, cmd):
         return event._text
 
-    def _is_plugin_admin(self, event):
+    def _is_super_admin(self, event):
         return True
 
     async def _check_perm(self, event):

@@ -42,6 +42,26 @@ async def db_manager(temp_data_dir):
 
 
 @pytest.fixture
+def stubbed_astrbot(tmp_path):
+    """注入最小 astrbot 桩，使 main.py 可在无 AstrBot 的环境导入。
+
+    桩本身实现在 tests/test_plugin_wiring.py（启动冒烟测试是它的第一现场，
+    框架 API 变了要跟着改），这里只负责按用例隔离并还原 sys.modules。
+    """
+    from tests.test_plugin_wiring import _install_astrbot_stub
+
+    data_root = tmp_path / "astrbot_data"
+    saved = _install_astrbot_stub(data_root)
+    try:
+        yield data_root
+    finally:
+        for name in list(sys.modules):
+            if name == "astrbot" or name.startswith("astrbot."):
+                del sys.modules[name]
+        sys.modules.update(saved)
+
+
+@pytest.fixture
 def sample_player_data():
     """Sample player data for tests."""
     return {

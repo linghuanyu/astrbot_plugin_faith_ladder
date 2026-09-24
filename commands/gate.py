@@ -97,7 +97,8 @@ class GateMixin:
             return False  # off 或写错的值：一律放行（宁可失效也不要因为配置笔误把功能全关掉）
 
         raw = self._cfg("group_access_list") or []
-        listed = {str(item).strip() for item in raw if str(item).strip()}
+        # None / 空白条目要跳过：str(None) == "None" 会被当成一个真实群号留在名单里
+        listed = {str(item).strip() for item in raw if item is not None and str(item).strip()}
         group_key = str(group_id or "").strip()
         if not group_key:
             return False
