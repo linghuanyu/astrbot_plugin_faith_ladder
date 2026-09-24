@@ -92,8 +92,9 @@ class SchedulerService:
                     continue
 
                 config = self._get_config()
+                backup_ok = True
                 if cfg_get(config, "auto_backup_enabled"):
-                    await self._do_backup(config)
+                    backup_ok = await self._do_backup(config)
 
                 # Purge old score history
                 if self._purge_score_history:
@@ -125,8 +126,11 @@ class SchedulerService:
                         logger.error(f"Status purge error: {e}")
 
                 # 执行成功才记日期：中途失败会在下个周期（10 分钟后）重试，
-                # 而不是把当天的备份与清理整个跳过
-                last_run_date = today
+                # 而不是把当天的备份与清理整个跳过。
+                # 备份失败同样不记：否则「自动备份开着」会安静地变成
+                # 「今天没有备份」，而且一整天不再重试（此前 _do_backup 把异常吞了）
+                if backup_ok:
+                    last_run_date = today
                 await asyncio.sleep(600)
 
             except asyncio.CancelledError:
@@ -192,8 +196,8 @@ class SchedulerService:
             return None
         return max(dates) if dates else None
 
-    async def _do_backup(self, config: dict):
-        """生成备份并清理过期备份。
+    async def _do_backup(self, config: dict) -> bool:
+        """生成备份并清理过期备份。返回本次备份是否成功（调用方据此决定要不要重试）。
 
         备份内容交给 backup_db 回调（DB 层用 VACUUM INTO 出一致性快照），
         这里只负责命名、记录日志与按保留天数清理旧文件。
@@ -201,7 +205,9 @@ class SchedulerService:
         # 保留天数下限为 1：配置成 0 会让截止时间落在"现在"，把刚生成的备份也删掉
         retention_days = max(1, int(cfg_get(config, "backup_retention_days") or 1))
         if not self._backup_db:
-            return
+            # 没注入备份回调说明装配有问题：不算"今天备份过了"，但也无可重试
+            logger.warning("SchedulerService: 未注入 backup_db 回调，跳过备份")
+            return True
 
         backup_dir = self.backup_dir
         await asyncio.to_thread(backup_dir.mkdir, parents=True, exist_ok=True)
@@ -218,13 +224,15 @@ class SchedulerService:
             await self._backup_db(backup_path)
             logger.info(f"Backup created: {backup_path}")
         except Exception as e:
-            # 备份失败不应影响其它定时任务，也不该留下半成品文件
+            # 备份失败不应影响其它定时任务，也不该留下半成品文件；
+            # 但必须把失败告诉调用方——否则当天会被当成"已备份"
             logger.error(f"Backup failed: {e}")
             if backup_path.exists():
                 try:
                     backup_path.unlink()
                 except OSError:
                     pass
+            return False
 
         # Clean old backups (non-blocking)
         cutoff = datetime.now().timestamp() - (retention_days * 86400)
@@ -237,3 +245,4 @@ class SchedulerService:
                     logger.info(f"Old backup removed: {f}")
 
         await asyncio.to_thread(_remove_old)
+        return True

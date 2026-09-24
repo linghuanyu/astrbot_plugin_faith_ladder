@@ -409,6 +409,61 @@ class TestBackupGuards:
         await sched._do_backup({})
         assert len(set(created)) == 2, f"同一秒的两次备份不应同名: {created}"
 
+    async def test_backup_failure_is_reported_to_caller(self, stubbed_astrbot, tmp_path):
+        """备份失败要能被调用方看见：此前异常被吞掉，返回值也没有。"""
+        from astrbot_plugin_faith_ladder.scheduler_service import SchedulerService
+
+        async def failing_backup(dest):
+            raise RuntimeError("disk full")
+
+        sched = SchedulerService(data_dir=tmp_path, get_config=lambda: {}, backup_db=failing_backup)
+        assert await sched._do_backup({}) is False
+
+        async def ok_backup(dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("x", encoding="utf-8")
+
+        sched_ok = SchedulerService(data_dir=tmp_path, get_config=lambda: {}, backup_db=ok_backup)
+        assert await sched_ok._do_backup({}) is True
+
+    async def test_failed_backup_retries_next_cycle(
+        self, stubbed_astrbot, tmp_path, monkeypatch
+    ):
+        """备份失败不能把当天标记为已完成。
+
+        否则「自动备份开着」会安静地变成「今天没有备份」，而且一整天不再重试——
+        这正是备份失败被吞掉 + 无条件记日期组合出来的后果。
+        """
+        from astrbot_plugin_faith_ladder import scheduler_service as mod
+
+        calls = []
+
+        async def failing_backup(dest):
+            calls.append(dest)
+            raise RuntimeError("disk full")
+
+        sched = mod.SchedulerService(
+            data_dir=tmp_path,
+            get_config=lambda: {"auto_backup_enabled": True},
+            backup_db=failing_backup,
+        )
+        sched._running = True
+        iterations = {"n": 0}
+        real_sleep = asyncio.sleep  # 下面会替换 asyncio.sleep，先留一份原函数
+
+        async def fast_sleep(_seconds):
+            # 把 10 分钟的睡眠换成立刻返回，并跑够几轮就停：循环是死循环，
+            # 只有「备份失败 → 下个周期再来一次」才会让 calls 增长
+            iterations["n"] += 1
+            if iterations["n"] >= 3:
+                sched._running = False
+            await real_sleep(0)
+
+        monkeypatch.setattr(mod.asyncio, "sleep", fast_sleep)
+        await sched._backup_loop()
+
+        assert len(calls) >= 2, "备份失败后应当在下一个周期重试，而不是当天不再备份"
+
 
 class TestCheckPlayerPermissionGate:
     """「检测玩家」的权限已收归诸神/管理员。

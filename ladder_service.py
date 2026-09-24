@@ -36,6 +36,13 @@ except ImportError:
 MAX_ITEM_QUANTITY = 9999
 
 
+class _QqBindConflict(Exception):
+    """事务内发现该 QQ 刚被别的玩家绑走：抛错以触发 transaction() 整体回滚。
+
+    不能用 return：return 从 `async with` 块里出来时事务会正常提交。
+    """
+
+
 class LadderService:
     """Core business logic for the faith ladder plugin."""
 
@@ -481,43 +488,46 @@ class LadderService:
                     "一个 QQ 在同一群只能绑定一个玩家。"
                 )
 
-        # 以下四步共用同一个事务（commit=False），QQ 绑定失败时 rollback 才真正能撤销，
-        # 否则子操作各自提交，"注册回滚"只是句谎话（玩家/职业/历史记录其实已经落库）
+        # 以下四步 + QQ 绑定必须整体成立，包进 transaction()：块内期间别的命令
+        # 无法执行提交，QQ 绑定失败时 rollback 才真的能撤销（此前各子操作共用
+        # 一条连接但各自 commit，"注册回滚"只是句谎话）
         player_id = f"name:{player_name}"
-        await self.db.upsert_player(
-            group_id, player_id, player_name,
-            initial_ladder=ladder_score,
-            initial_pilgrimage=pilgrimage_score,
-            commit=False,
-        )
+        try:
+            async with self.db.transaction():
+                await self.db.upsert_player(
+                    group_id, player_id, player_name,
+                    initial_ladder=ladder_score,
+                    initial_pilgrimage=pilgrimage_score,
+                    commit=False,
+                )
 
-        # Set class and faith
-        await self.db.set_player_class(group_id, player_id, class_name, faith_name, commit=False)
+                # Set class and faith
+                await self.db.set_player_class(group_id, player_id, class_name, faith_name, commit=False)
 
-        # 具体信仰（如"繁荣"）：名片里解析到就一并落库，查询/文案/主题消息都用它；
-        # 放在同一事务内，失败时随其它步骤一起回滚
-        if specific_faith:
-            await self.db.set_player_specific_faith(
-                group_id, player_id, specific_faith, commit=False
-            )
+                # 具体信仰（如"繁荣"）：名片里解析到就一并落库，查询/文案/主题消息都用它
+                if specific_faith:
+                    await self.db.set_player_specific_faith(
+                        group_id, player_id, specific_faith, commit=False
+                    )
 
-        # Record in score history
-        await self.db.update_scores(
-            group_id, player_id, 0, 0,
-            operator_id, f"录入玩家: {player_name}",
-            commit=False,
-        )
+                # Record in score history
+                await self.db.update_scores(
+                    group_id, player_id, 0, 0,
+                    operator_id, f"录入玩家: {player_name}",
+                    commit=False,
+                )
 
-        # Bind QQ if provided
-        if qq_id:
-            qq_binding_ok = await self.db.set_player_qq(group_id, player_id, str(qq_id), commit=False)
-            if not qq_binding_ok:
-                # Race: another player bound this QQ between our check and now
-                await self.db.rollback()
-                return False, f"QQ {qq_id} 已被其他玩家绑定，注册回滚。"
+                # Bind QQ if provided
+                if qq_id:
+                    qq_binding_ok = await self.db.set_player_qq(
+                        group_id, player_id, str(qq_id), commit=False
+                    )
+                    if not qq_binding_ok:
+                        # Race: another player bound this QQ between our check and now
+                        raise _QqBindConflict(str(qq_id))
+        except _QqBindConflict as conflict:
+            return False, f"QQ {conflict} 已被其他玩家绑定，注册回滚。"
 
-        # Commit all operations atomically
-        await self.db.commit()
         # 新玩家会影响榜单名次，必须失效缓存（否则榜单最多陈旧 30 秒）
         self.invalidate_leaderboard_cache(group_id)
 
@@ -667,65 +677,63 @@ class LadderService:
         skipped = []
 
         try:
-            for entry in parsed_list:
-                name = entry["name"]
-                ladder_delta = entry["ladder_delta"]
-                pilgrimage_delta = entry["pilgrimage_delta"]
-                items = entry.get("items", [])
+            # 整个批次一个事务：中途失败整体回滚，且块内不会被别的命令提交掉半步
+            async with self.db.transaction():
+                for entry in parsed_list:
+                    name = entry["name"]
+                    ladder_delta = entry["ladder_delta"]
+                    pilgrimage_delta = entry["pilgrimage_delta"]
+                    items = entry.get("items", [])
 
-                # Check if player exists
-                player = await self.db.get_player_by_name(group_id, name)
-                if not player:
-                    skipped.append(name)
-                    continue
+                    # Check if player exists
+                    player = await self.db.get_player_by_name(group_id, name)
+                    if not player:
+                        skipped.append(name)
+                        continue
 
-                # Update scores (without individual commit — deferred to end of batch)
-                updated = await self.db.update_scores(
-                    group_id, player.player_id,
-                    ladder_delta, pilgrimage_delta,
-                    operator_id, "批量录入",
-                    commit=False
-                )
+                    # Update scores (without individual commit — deferred to end of batch)
+                    updated = await self.db.update_scores(
+                        group_id, player.player_id,
+                        ladder_delta, pilgrimage_delta,
+                        operator_id, "批量录入",
+                        commit=False
+                    )
 
-                # Add items (count occurrences of each (base_name, grade) pair)
-                item_details = []
-                if items:
-                    from collections import Counter
-                    # 解析每个道具的基础名和等级，按 (base_name, grade) 分组计数
-                    parsed_items = []
-                    for raw in items:
-                        base_name, grade = parse_item_full_name(raw)
-                        parsed_items.append((base_name, grade))
-                    item_counts = Counter(parsed_items)
-                    for (base_name, grade), qty in item_counts.items():
-                        await self.db.add_item(group_id, player.player_id, base_name, qty, grade=grade)
-                        item_details.append(format_item_display(base_name, grade, qty))
+                    # Add items (count occurrences of each (base_name, grade) pair)
+                    item_details = []
+                    if items:
+                        from collections import Counter
+                        # 解析每个道具的基础名和等级，按 (base_name, grade) 分组计数
+                        parsed_items = []
+                        for raw in items:
+                            base_name, grade = parse_item_full_name(raw)
+                            parsed_items.append((base_name, grade))
+                        item_counts = Counter(parsed_items)
+                        for (base_name, grade), qty in item_counts.items():
+                            await self.db.add_item(group_id, player.player_id, base_name, qty, grade=grade)
+                            item_details.append(format_item_display(base_name, grade, qty))
 
-                if updated or item_details:
-                    success_count += 1
-                    parts = []
-                    if ladder_delta != 0 or pilgrimage_delta != 0:
-                        ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
-                        pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
-                        parts.append(f"登神之路{ladder_str}, 觐见之梯{pilgrimage_str}")
-                    if item_details:
-                        parts.append(f"道具: {', '.join(item_details)}")
-                    success_details.append(f"  {name}: {', '.join(parts)}")
-
-            # Commit all updates atomically
-            await self.db.commit()
-
-            # 失效排行榜缓存（批量录入后排行榜可能变化）
-            if success_count > 0:
-                self.invalidate_leaderboard_cache(group_id)
+                    if updated or item_details:
+                        success_count += 1
+                        parts = []
+                        if ladder_delta != 0 or pilgrimage_delta != 0:
+                            ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
+                            pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
+                            parts.append(f"登神之路{ladder_str}, 觐见之梯{pilgrimage_str}")
+                        if item_details:
+                            parts.append(f"道具: {', '.join(item_details)}")
+                        success_details.append(f"  {name}: {', '.join(parts)}")
 
         except Exception as e:
             logger.error(f"Batch update failed, rolling back: {e}")
-            await self.db.rollback()
             # 返回空的 skipped：调用方据此区分「事务失败」与「玩家全都不存在」
             # （后者会带回具体名字）。此前把所有人塞进 skipped，界面上会被误报成
             # 「以下玩家不存在，已跳过」，掩盖了真正的数据库错误。
             return 0, [], []
+
+        # 失效排行榜缓存（批量录入后排行榜可能变化）
+        if success_count > 0:
+            self.invalidate_leaderboard_cache(group_id)
 
         return success_count, success_details, skipped
 

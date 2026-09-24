@@ -6,6 +6,9 @@
 """
 
 import asyncio
+import contextlib
+import functools
+import inspect
 import aiosqlite
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -40,12 +43,19 @@ class DatabaseManager:
         "ladder_score, pilgrimage_score, created_at, updated_at, oathbreaker, qq_id"
     )
 
+    # current_task() 在非任务上下文里是 None：拿它当持有者占位，保证重入判定
+    # 依然成立（否则那种场景下的嵌套调用会自我阻塞）
+    _NO_TASK = object()
+
     def __init__(self, data_dir: Path):
         """只记录数据目录与库文件路径；建表、迁移与连接建立都在 initialize() 里做。"""
         self.data_dir = data_dir
         self.db_path = data_dir / "ladder.db"
         self._db: Optional[aiosqlite.Connection] = None
         self._initialized = False
+        # 串行化闸门：见 _write_guard / transaction
+        self._lock = asyncio.Lock()
+        self._lock_owner: Optional[asyncio.Task] = None
 
     async def initialize(self):
         """Create database and tables if they don't exist. Opens persistent connection."""
@@ -1512,6 +1522,39 @@ class DatabaseManager:
             await self._db.close()
             self._db = None
 
+    @contextlib.asynccontextmanager
+    async def _write_guard(self):
+        """串行化闸门；同一任务的嵌套调用直接放行（否则会自调用死锁）。
+
+        aiosqlite 只串行化**单条**语句：一条逻辑操作的多个 await 之间，别的命令
+        可以插进来执行并 commit()，把这里的半成品一起提交掉——"原子提交"就只是
+        文档里的一句话。单连接 SQLite 本来就是串行资源，所以对外方法统一排队。
+        """
+        task = asyncio.current_task() or self._NO_TASK
+        if task is self._lock_owner:
+            yield
+            return
+        async with self._lock:
+            self._lock_owner = task
+            try:
+                yield
+            finally:
+                self._lock_owner = None
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        """多步写入的原子边界：正常退出统一提交，中途抛错则整体回滚。
+
+        块内调用各写方法时传 `commit=False`，不要自己 commit。
+        """
+        async with self._write_guard():
+            try:
+                yield
+            except BaseException:
+                await self.rollback()
+                raise
+            await self.commit()
+
     async def commit(self):
         """Commit the current transaction. Exposed for multi-step atomic operations."""
         if self._db:
@@ -1521,7 +1564,7 @@ class DatabaseManager:
         """Rollback the current transaction. Used on error to discard uncommitted writes."""
         if self._db:
             try:
-                await self._db.execute("ROLLBACK")
+                await self._db.rollback()
             except Exception:
                 pass
 
@@ -1686,3 +1729,34 @@ class DatabaseManager:
             await self.rollback()
             logger.error(f"[Gift] 记录接受道具次数失败: {e}")
             return False
+
+
+def _serialized(fn):
+    """把对外方法包进 `_write_guard`：调用期间独占数据库连接。
+
+    可重入——同一个任务里嵌套调用（`transaction()` 里再调写方法、写方法内部
+    再查询）不会自我阻塞。
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(self, *args, **kwargs):
+        async with self._write_guard():
+            return await fn(self, *args, **kwargs)
+
+    return wrapper
+
+
+# 需要独立连接的备份方法独占不了 shared connection，且耗时可观（VACUUM INTO）：
+# 把它挡在闸门外，免得每天备份时把所有指令一起卡住。
+_SERIALIZE_EXEMPT = {"backup_to"}
+
+# 逐个手工标注容易漏（72 个方法里 48 个会写库），所以按签名统一包装：
+# 所有对外的 async 方法都走闸门，读也一样——单连接 SQLite 上没有"并发读"，
+# 少一个分类就少一次"哪几个方法忘了加锁"的排查。
+for _name, _member in list(vars(DatabaseManager).items()):
+    if _name.startswith("_") or _name in _SERIALIZE_EXEMPT:
+        continue
+    if not inspect.iscoroutinefunction(_member):
+        continue
+    setattr(DatabaseManager, _name, _serialized(_member))
+del _name, _member
