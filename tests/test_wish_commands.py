@@ -450,6 +450,18 @@ class TestAdminCommand:
         await _collect(host._wish_admin_impl(bad))
         assert "用法：祈愿管理 延期" in bad.results[0]
 
+    async def test_stats_command(self, ctx):
+        host, _, _, _ = ctx
+        await _create_team(host)
+
+        event = _Event("祈愿管理 统计")
+        await _collect(host._wish_admin_impl(event))
+        assert "开团 1 次" in event.results[0]
+
+        bad = _Event("祈愿管理 统计 七天")
+        await _collect(host._wish_admin_impl(bad))
+        assert "用法：祈愿管理 统计" in bad.results[0]
+
     async def test_clear_needs_confirm(self, ctx):
         host, db, _, _ = ctx
         await _create_team(host)
@@ -508,18 +520,6 @@ class TestSchedulerAndEvents:
         await host._wish_tick()
         assert host.sent == [], "被排除的群不该收到任何播报"
 
-    async def test_member_leave_removes_and_broadcasts(self, ctx):
-        host, db, service, _ = ctx
-        await _create_team(host)  # 甲
-        await service.join(GROUP, "name:乙", "乙")  # 发车
-        host.sent.clear()
-
-        await host._wish_member_leave(GROUP, "name:乙")
-        assert len(host.sent) == 1 and host.sent[0][0] == GROUP
-        assert await db.get_player_statuses(GROUP, "name:乙") == []
-        team = await db.get_wish_team_by_name(GROUP, TEAM_NAME)
-        assert [m["player_name"] for m in team["members"]] == ["甲"]
-
     async def test_real_send_skips_unknown_umo(self, ctx, stubbed_astrbot):
         """真发送通道的门槛：context 缺失或会话串未知时跳过，不发到别处去。"""
         host, db, service, config = ctx
@@ -533,4 +533,7 @@ class TestSchedulerAndEvents:
         real.umos = {GROUP: f"stub:GroupMessage:{GROUP}"}
         await real._wish_broadcast(GROUP, ["测试播报"])
         assert len(real.context.sent) == 1
-        assert real.context.sent[0][0] == f"stub:GroupMessage:{GROUP}"
+        umo, chain = real.context.sent[0]
+        assert umo == f"stub:GroupMessage:{GROUP}"
+        # 必须是 MessageChain 对象：直接传 list 会被 v4 静默丢弃（赌局踩过这个坑）
+        assert hasattr(chain, "chain"), f"播报没有包成 MessageChain：{chain!r}"

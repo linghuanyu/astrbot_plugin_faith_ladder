@@ -317,17 +317,6 @@ class TestRosterChanges:
         assert code == "not_found", "已发车队伍不接受成员自行退出"
         assert await _member_names(db, team_id) == ["甲", "乙", "丙"]
 
-    async def test_member_leave_removes_from_departed_team(self, db):
-        """退群要能从窗口未关的已发车队伍里移出（否则他占着位置别人补不进来）。"""
-        team_id, _ = await _create(db)
-        await _fill(db, team_id, ["乙", "丙"])
-
-        affected = await db.handle_member_leave(GROUP, "name:乙")
-        assert [t["team_id"] for t in affected] == [team_id]
-        assert await _member_names(db, team_id) == ["甲", "丙"]
-        assert await _statuses(db, "乙") == []
-
-
 class TestExtendAndRename:
     async def test_extend_moves_team_and_all_statuses(self, db):
         team_id, _ = await _create(db)

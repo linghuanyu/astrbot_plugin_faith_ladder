@@ -2438,6 +2438,35 @@ class DatabaseManager:
         """本群招募中的队伍（含成员）。"""
         return await self.list_wish_teams(group_id, (WISH_RECRUITING,))
 
+    async def wish_team_stats(self, group_id: str, since_date: str) -> dict:
+        """近期的运行统计原料：每支队的（状态, 容量, 人数）+ 去重参与人数。
+
+        只取原料、聚合留给服务层：这些比例（发车率、满员率）在 SQL 里算出来
+        很难核对，而队伍数量级很小，取回来在 Python 里数更清楚。
+        按 `create_date >= since_date` 过滤（北京日期，字符串可直接比大小）。
+        """
+        async with self._db.execute(
+            "SELECT t.status, t.capacity, COUNT(m.player_id) "
+            "FROM wish_teams t LEFT JOIN wish_team_members m ON m.team_id = t.id "
+            "WHERE t.group_id = ? AND t.create_date >= ? "
+            "GROUP BY t.id ORDER BY t.id",
+            (group_id, since_date),
+        ) as cursor:
+            teams = [
+                {"status": row[0], "capacity": row[1], "members": row[2]}
+                for row in await cursor.fetchall()
+            ]
+
+        async with self._db.execute(
+            "SELECT COUNT(DISTINCT m.player_id) "
+            "FROM wish_teams t JOIN wish_team_members m ON m.team_id = t.id "
+            "WHERE t.group_id = ? AND t.create_date >= ?",
+            (group_id, since_date),
+        ) as cursor:
+            players = (await cursor.fetchone())[0]
+
+        return {"teams": teams, "players": players}
+
     async def get_wish_team(self, team_id: int) -> Optional[dict]:
         """队伍 + 成员。"""
         return await self._wish_team_with_members(team_id)
@@ -2784,29 +2813,6 @@ class DatabaseManager:
                 for member in team["members"]:
                     await self._wish_revoke_status(group_id, member["player_id"], team["name"])
             return "ok", team
-
-    async def handle_member_leave(self, group_id: str, player_id: str) -> List[dict]:
-        """退群处理：把他从进行中的队伍里移出并撤销状态。
-
-        已发车队伍也要处理——他占着一个位置，别人就补不进来，而空位本该是
-        任何人都能填的。返回被影响的队伍（供播报）。
-        """
-        async with self.transaction():
-            async with self._db.execute(
-                "SELECT t.id FROM wish_teams t JOIN wish_team_members m ON m.team_id = t.id "
-                "WHERE t.group_id = ? AND m.player_id = ? "
-                "AND (t.status = ? OR (t.status = ? AND t.expire_at > ?)) ORDER BY t.id",
-                (group_id, player_id, WISH_RECRUITING, WISH_DEPARTED, _utc_now_stamp()),
-            ) as cursor:
-                ids = [r[0] for r in await cursor.fetchall()]
-
-            affected = []
-            for team_id in ids:
-                code, team = await self._wish_remove_member_core(team_id, group_id, player_id)
-                if team is not None:
-                    team["removal_code"] = code
-                    affected.append(team)
-            return affected
 
     # ── 调度与清理 ──
 

@@ -216,6 +216,42 @@ class TestPluginStartup:
         finally:
             await plugin.terminate()
 
+    async def test_wish_tick_is_wired(self, stubbed_astrbot):
+        """祈愿试炼的定时入口与每日清理必须接上调度器。
+
+        默认 `wish_groups` 为空（哪个群都不启用），但**循环与回调要存在**：漏传的话
+        提醒与超时解散会静默失效——功能看起来是好的，只是队伍永远不超时、永远不催人。
+        """
+        import astrbot_plugin_faith_ladder.main as m
+
+        plugin = m.FaithLadderPlugin(m.Context(), {})
+        try:
+            await plugin.initialize()
+            assert plugin._scheduler._wish_tick is not None
+            assert plugin._scheduler._wish_task is not None, "wish 循环应随调度器启动"
+            assert callable(plugin._scheduler._purge_old_wish_teams)
+
+            # 默认没有任何群启用 → tick 不该产生播报；顺带证明它端到端跑得通
+            assert plugin._cfg("wish_groups") == []
+            await plugin._wish_tick()
+
+            # 历史队伍清理在空库上返回 0（同时证明那段 SQL 是合法的）
+            assert await plugin.db_manager.purge_old_wish_teams(7) == 0
+        finally:
+            await plugin.terminate()
+
+    async def test_wish_service_is_wired(self, stubbed_astrbot):
+        """祈愿服务必须挂在插件上，且拿到的是同一份配置读取入口。"""
+        import astrbot_plugin_faith_ladder.main as m
+
+        plugin = m.FaithLadderPlugin(m.Context(), {"wish_groups": ["12345"]})
+        try:
+            await plugin.initialize()
+            assert plugin.wish_service is not None
+            assert plugin.wish_service.groups() == ["12345"]
+        finally:
+            await plugin.terminate()
+
 class TestQQAdminCallbacks:
     """QQAdminHandler 注入的回调必须是可 await 的（或至少被兼容处理）。
 

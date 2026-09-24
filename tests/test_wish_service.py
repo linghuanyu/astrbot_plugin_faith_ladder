@@ -122,11 +122,46 @@ class TestDateAndQuota:
 
     async def test_closed_day_blocks_create(self, ctx):
         _, svc, _, clock = ctx
-        clock.jump_to_weekday("周三")
+        clock.jump_to_weekday("周三")  # 周三开团 → 队名日期落在周六（关闭）
 
         outcome = await svc.create(GROUP, _pid("甲"), "甲")
         assert (outcome.ok, outcome.code) == (False, "closed_day")
-        assert "不安排祈愿试炼" in outcome.reply
+        assert "队名日期会落在周六" in outcome.reply
+        assert "不安排周三、周六" in outcome.reply
+        assert "下一次可开团的日子" in outcome.reply
+
+    async def test_closed_day_copy_follows_weekly_table(self, ctx):
+        """关闭日的文案必须跟着名额表走：改了表而文案不变，玩家就会照错的规则理解。"""
+        _, svc, config, clock = ctx
+        config["wish_weekly_limits"] = [1, 1, 1, 1, 1, 0, 2]  # 只关周六
+
+        assert svc.closed_weekdays_text() == "周六"
+        clock.jump_to_weekday("周三")  # 队名日期落在周六
+        outcome = await svc.create(GROUP, _pid("甲"), "甲")
+        assert "不安排周六的祈愿试炼" in outcome.reply
+        assert "周三" not in outcome.reply
+
+    def test_next_open_day_skips_closed_slots(self, ctx):
+        _, svc, _, clock = ctx
+        clock.jump_to_weekday("周三")  # 今天关（队名日期周六）
+        nxt = svc.next_open_day()
+
+        assert nxt == (clock.value + timedelta(days=1)).strftime("%Y-%m-%d")
+        assert svc.slot_limit(svc.slot_date_of(datetime.strptime(nxt, "%Y-%m-%d"))) > 0
+
+    async def test_hall_says_whether_open_today(self, ctx):
+        _, svc, _, clock = ctx
+
+        clock.jump_to_weekday("周三")
+        closed = await svc.list_open(GROUP)
+        assert "今天不能开团" in closed.reply
+        assert "不安排周三、周六" in closed.reply
+        assert "下一次" in closed.reply
+
+        clock.jump_to_weekday("周一")  # 周一开团 → 队名日期周四，允许 1 支
+        opened = await svc.list_open(GROUP)
+        assert "今天可以开团" in opened.reply
+        assert "名额：1 支，已用 0 支" in opened.reply
 
     async def test_quota_exhausted_blocks_create(self, ctx):
         db, svc, _, _ = ctx
@@ -190,6 +225,33 @@ class TestCreateAndJoin:
         assert outcome.code == "joined"
         assert "丙" in outcome.reply, "没挑还在招募的那支"
         assert "补位" not in outcome.reply
+
+    async def test_many_joins_complete_one_team_instead_of_splitting(self, ctx):
+        """多人依次加入时要把一支凑满，而不是在两支之间摊平。
+
+        这是「均衡」策略的致命处：按人最少挑会让人交替流动——两支各 1 人时来 6 个人，
+        会补成 4/6 和 3/6，两支都发不了车、双双超时。按「差得最少」挑，同样这批人
+        里前 5 个就能换来一场发车。
+        """
+        db, svc, _, _ = ctx
+        first = (await svc.create(GROUP, _pid("甲"), "甲", capacity=6)).reply
+        second = await svc.create(GROUP, _pid("乙"), "乙", capacity=6)
+        assert "09月28日祈愿试炼" in first and "09月28日祈愿试炼2" in second.reply
+        second_id = (await _team(db, "09月28日祈愿试炼2"))["team_id"]
+
+        codes = []
+        for who in ["丙", "丁", "戊", "己", "庚", "辛"]:
+            codes.append((await svc.join(GROUP, _pid(who), who)).code)
+
+        assert codes.count("departed") == 1, f"没有（或不止一支）凑满发车：{codes}"
+        assert await db.slot_usage(GROUP, svc.slot_date_of()) == 1
+
+        departed = await db.list_wish_teams(GROUP, (WISH_DEPARTED,))
+        assert len(departed) == 1
+        assert len(departed[0]["members"]) == 6, "发车那支应当正好满员"
+        # 名额被抢走后，同日另一支立刻被判「未能成行」
+        voided = await db.list_wish_teams(GROUP, (WISH_VOIDED,))
+        assert [t["team_id"] for t in voided] == [second_id]
 
     async def test_join_by_name_and_unknown(self, ctx):
         _, svc, _, _ = ctx
@@ -420,6 +482,42 @@ class TestAdminOps:
         assert outcome.code == "departed"
         assert [s["status_name"] for s in await _statuses(db, "乙")] == [TEAM_NAME]
 
+    async def test_stats_summarises_window(self, ctx):
+        """统计要能回答「开团多不多、发车成不成、卡在哪一步」。"""
+        _, svc, _, clock = ctx
+        # 第一支：发车；第二支：名额被抢 → 未能成行；第三支（换一天）：诸神解散 → 没凑够
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
+        await svc.create(GROUP, _pid("丙"), "丙", capacity=3)
+        await svc.join(GROUP, _pid("乙"), "乙")
+        clock.value += timedelta(days=1)
+        day2_name = svc.default_team_name(svc.slot_date_of())  # 换天后的队名带的是新日期
+        await svc.create(GROUP, _pid("丁"), "丁", capacity=3)
+        await svc.admin_disband(GROUP, day2_name)
+
+        outcome = await svc.admin_stats(GROUP, 7)
+        assert outcome.ok
+        assert "开团 3 次" in outcome.reply
+        assert "发车 1" in outcome.reply
+        assert "未能成行 1" in outcome.reply
+        assert "没凑够 1" in outcome.reply
+        assert "参与 4 人次，去重 4 人" in outcome.reply
+        assert "发车率 33%" in outcome.reply
+        assert "满员率 100%" in outcome.reply
+
+    async def test_stats_empty_window(self, ctx):
+        _, svc, _, _ = ctx
+        outcome = await svc.admin_stats(GROUP, 7)
+        assert "没有开过团" in outcome.reply
+
+    async def test_stats_respects_window(self, ctx):
+        """只统计窗口内开团的队伍。"""
+        _, svc, _, clock = ctx
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        clock.value += timedelta(days=10)
+
+        assert "没有开过团" in (await svc.admin_stats(GROUP, 7)).reply
+        assert "开团 1 次" in (await svc.admin_stats(GROUP, 30)).reply
+
     async def test_clear_releases_quota(self, ctx):
         db, svc, _, _ = ctx
         await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
@@ -510,27 +608,3 @@ class TestTick:
 
         assert await svc.tick() == []
         assert (await db.get_wish_team(team["team_id"]))["status"] == WISH_RECRUITING
-
-
-class TestMemberLeave:
-    async def test_leave_removes_from_departed_team(self, ctx):
-        db, svc, _, _ = ctx
-        await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
-        await svc.join(GROUP, _pid("乙"), "乙")
-
-        out = await svc.handle_member_leave(GROUP, _pid("乙"))
-        assert len(out) == 1 and out[0][0] == GROUP
-        assert await _statuses(db, "乙") == []
-        assert [m["player_name"] for m in (await _team(db))["members"]] == ["甲"]
-
-    async def test_leave_of_leader_disbands(self, ctx):
-        db, svc, _, _ = ctx
-        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
-
-        out = await svc.handle_member_leave(GROUP, _pid("甲"))
-        assert "解散" in out[0][1]
-        assert (await _team(db))["status"] == WISH_DISBANDED
-
-    async def test_leave_without_team_is_silent(self, ctx):
-        _, svc, _, _ = ctx
-        assert await svc.handle_member_leave(GROUP, _pid("甲")) == []

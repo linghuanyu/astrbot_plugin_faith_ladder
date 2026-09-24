@@ -49,6 +49,7 @@ WISH_ADMIN_USAGE = (
     "  移出 <队名> <玩家名>              把成员移出并撤销其状态\n"
     "  补位 <队名> <玩家名>              强行把人塞进队伍（满员即发车）\n"
     "  延期 <队名> <天数>                该队成员状态从当前到期时间往后加\n"
+    "  统计 [天数]                       近期开团/发车/参与与卡点（默认 7 天）\n"
     "  清空                             清空本群队伍记录并释放当天名额（需加「确认」）\n"
     "队名含空格时写在前面、玩家名放最后一段；改名两段都含空格时用 → 分隔。"
 )
@@ -388,6 +389,15 @@ class WishCommandsMixin:
                 yield event.plain_result("用法：祈愿管理 延期 <队名> <天数>")
                 return
             outcome = await service.admin_extend(group_id, team_name, numbers[0])
+        elif action in ("统计", "stats"):
+            days = 7
+            if rest:
+                try:
+                    days = int(rest.split()[0])
+                except ValueError:
+                    yield event.plain_result("用法：祈愿管理 统计 [天数]（默认 7 天）")
+                    return
+            outcome = await service.admin_stats(group_id, days)
         elif action in ("清空", "clear"):
             if rest != CONFIRM_TOKEN:
                 yield event.plain_result(
@@ -413,15 +423,3 @@ class WishCommandsMixin:
             return
         for group_id, text in await service.tick():
             await self._wish_broadcast(group_id, [text])
-
-    async def _wish_member_leave(self, group_id: str, player_id: str) -> None:
-        """成员退群：把他从进行中的队伍里移出并播报。
-
-        接入点见 commands/admin.py 的 `_group_member_change_impl`——那里独立于
-        「白名单自动同步」（后者没配待审群时会提前返回）。
-        """
-        service = getattr(self, "wish_service", None)
-        if service is None:
-            return
-        for target_group, text in await service.handle_member_leave(group_id, player_id):
-            await self._wish_broadcast(target_group, [text])

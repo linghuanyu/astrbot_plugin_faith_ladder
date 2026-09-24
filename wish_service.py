@@ -176,6 +176,41 @@ class WishService:
         day = datetime.strptime(slot_date, "%Y-%m-%d")
         return f"{day.strftime('%m月%d日')}（{WEEKDAY_LABELS[day.weekday()]}）"
 
+    def closed_slot_weekdays(self) -> List[str]:
+        """名额表里被关闭的星期（用于文案）。
+
+        从配置现算而不是写死：关的是哪几天由 `wish_weekly_limits` 决定，文案必须
+        跟着它走——否则改了名额表而文案不变，玩家会照着错的规则理解。
+        """
+        return [
+            WEEKDAY_LABELS[index]
+            for index, limit in enumerate(self.weekly_limits())
+            if limit <= 0
+        ]
+
+    def closed_weekdays_text(self) -> str:
+        """「周三、周六」这样的关闭星期列表；一个都没关时返回空串。"""
+        return "、".join(self.closed_slot_weekdays())
+
+    def next_open_day(self, now: Optional[datetime] = None, horizon: int = 14) -> Optional[str]:
+        """从明天起往后找第一个「可以开团」的日子（YYYY-MM-DD）；找不到返回 None。
+
+        每个日历日对应唯一的名额日期（= 该日 + 状态天数），所以「这一天能不能开团」
+        只取决于那一个 slot_date 的星期，不会因为名额已被别人用掉而失效——
+        作为「下一次」的答案它是准的。
+        """
+        base = now or self.now()
+        for offset in range(1, horizon + 1):
+            day = base + timedelta(days=offset)
+            if self.slot_limit(self.slot_date_of(day)) > 0:
+                return day.strftime("%Y-%m-%d")
+        return None
+
+    def next_open_hint(self, now: Optional[datetime] = None) -> str:
+        """「下一次可开团的日子」的文案片段；连找 14 天都没有（名额表全 0）时留空。"""
+        nxt = self.next_open_day(now)
+        return f"\n下一次可开团的日子：{self.format_slot(nxt)}" if nxt else ""
+
     async def slot_quota(self, group_id: str, slot_date: str) -> Tuple[int, int]:
         """该名额日期的（上限, 已用）。"""
         return self.slot_limit(slot_date), await self.db.slot_usage(group_id, slot_date)
@@ -223,6 +258,23 @@ class WishService:
             return f"{label} 不安排试炼：本群不能开团（名额 0）"
         return f"{label} 的名额：{limit} 支，已用 {used} 支"
 
+    def _open_status_line(self, slot_date: str, limit: int, used: int) -> str:
+        """大厅里那句直白的「今天能不能开团」。
+
+        玩家问的是今天，而名额挂在 3 天后的日期上——不直说就得他自己算，所以这里
+        直接把结论给出来，再附上名额细节。
+        """
+        if limit <= 0:
+            closed = self.closed_weekdays_text()
+            reason = f"本群不安排{closed}的试炼" if closed else "本群没有安排试炼的名额"
+            return f"今天不能开团（{reason}）{self.next_open_hint()}".replace("\n", "；")
+        if used >= limit:
+            return (
+                f"今天不能开团（{self.format_slot(slot_date)} 的名额已用尽）"
+                f"{self.next_open_hint()}".replace("\n", "；")
+            )
+        return f"今天可以开团（{self._quota_text(slot_date, limit, used)}）"
+
     def _depart_broadcast(self, team: dict) -> str:
         return self._line(
             "depart", team=team["name"], members=self._members_text(team),
@@ -242,6 +294,21 @@ class WishService:
             missing=team["capacity"] - len(team["members"]),
         )
 
+    @staticmethod
+    def join_preference(team: dict) -> tuple:
+        """不加队名时的挑队顺序：先招募中的队伍，再差得最少的，最后最早开团的。
+
+        为什么是「差得最少」而不是「人最少」：名额按**队伍**算、且只有发车才消耗，
+        所以这个玩法的目标是「至少有一支队伍开成」。按人最少挑会让人在两支队之间
+        交替流动——各 1 人时来 8 个人，会补成 5/6 和 5/6，**两支都发不了车、双双
+        超时**；按差得最少挑，同样这 8 个人里前 5 个就能把一支填满并发车。
+        """
+        return (
+            team["status"] != WISH_RECRUITING,
+            team["capacity"] - len(team["members"]),
+            team["team_id"],
+        )
+
     # ── 玩家侧 ──
 
     async def create(
@@ -255,15 +322,20 @@ class WishService:
 
         limit, used = await self.slot_quota(group_id, slot_date)
         if limit <= 0:
+            closed = self.closed_weekdays_text()
             return WishOutcome(
                 False, "closed_day",
-                f"{self.format_slot(slot_date)} 不安排祈愿试炼，今天不能开团。\n"
-                f"（名额按队名里的日期算，本群的名额表见配置 wish_weekly_limits）",
+                f"今天不能开团：队名日期会落在"
+                f"{WEEKDAY_LABELS[datetime.strptime(slot_date, '%Y-%m-%d').weekday()]}，"
+                f"而本群不安排{closed}的祈愿试炼。"
+                f"{self.next_open_hint(now)}\n"
+                f"（名额看的是队名里的日期，队名日期 = 开团日 + {self.status_days()} 天）",
             )
         if used >= limit:
             return WishOutcome(
                 False, "no_slot",
-                f"{self._quota_text(slot_date, limit, used)}\n名额已用尽，今天开团也发不了车。",
+                f"{self._quota_text(slot_date, limit, used)}\n"
+                f"名额已用尽，今天开团也发不了车。{self.next_open_hint(now)}",
             )
 
         if capacity is None:
@@ -310,7 +382,7 @@ class WishService:
         self, group_id: str, player_id: str, player_name: str,
         team_name: Optional[str] = None,
     ) -> WishOutcome:
-        """加入队伍：给了队名就找那一支，没给就挑最缺人的一支。"""
+        """加入队伍：给了队名就找那一支，没给就补最接近满员的那支。"""
         if team_name:
             team = await self.db.get_wish_team_by_name(group_id, team_name.strip())
             if team is None:
@@ -327,11 +399,7 @@ class WishService:
                     False, "no_candidates",
                     "本群现在没有可加入的队伍。可以自己开一支：祈愿组队",
                 )
-            # 先帮还在招募的队伍凑满，再按缺人多少、最早开团排序
-            team = min(
-                candidates,
-                key=lambda t: (t["status"] != WISH_RECRUITING, len(t["members"]), t["team_id"]),
-            )
+            team = min(candidates, key=self.join_preference)
 
         return await self._join_team(group_id, team, player_id, player_name)
 
@@ -425,6 +493,9 @@ class WishService:
     async def list_open(self, group_id: str) -> WishOutcome:
         """大厅：本群招募中的队伍 + 今日名额。"""
         teams = await self.db.get_open_wish_teams(group_id)
+        # 按「不加队名时的挑队顺序」展示：排在最前的那支就是会被优先补齐的，
+        # 否则玩家看到的第 [1] 支与实际会被填的那支不一致
+        teams = sorted(teams, key=self.join_preference)
         slot_date = self.slot_date_of()
         limit, used = await self.slot_quota(group_id, slot_date)
 
@@ -440,8 +511,9 @@ class WishService:
             lines.append(f"     成员：{self._members_text(team)}")
         lines += [
             "",
-            self._quota_text(slot_date, limit, used),
+            self._open_status_line(slot_date, limit, used),
             "参与：祈愿组队 [人数] ／ 祈愿加入 [队名] ／ 祈愿我的",
+            "（不加队名时补进最接近满员的那支，也就是排在最前面的那支）",
         ]
         return WishOutcome(True, "ok", "\n".join(lines))
 
@@ -499,7 +571,7 @@ class WishService:
         if not candidates:
             return WishOutcome(False, "no_candidates", "本群没有可补齐的队伍。可以自己开一支：祈愿组队")
 
-        team = min(candidates, key=lambda t: (len(t["members"]), t["team_id"]))
+        team = min(candidates, key=self.join_preference)
         if current is not None:
             # 自己的独苗队伍先解散，否则「一人一队」会把自己挡在门外
             await self.db.leave_wish_team(group_id, player_id)
@@ -772,6 +844,53 @@ class WishService:
             f"成员：{self._members_text(updated)}",
         )
 
+    async def admin_stats(self, group_id: str, days: int = 7) -> WishOutcome:
+        """近期运行统计：开团、发车、参与，以及卡在哪一步。
+
+        存在的理由：调参要看的是「开团多不多、发车成不成」，而这些数只有裸 SQL 能取。
+        没有这个出口，「按数据调参」就只是一句愿望。
+        """
+        days = max(1, min(int(days or 7), 365))
+        since = (self.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        data = await self.db.wish_team_stats(group_id, since)
+        teams = data["teams"]
+        if not teams:
+            return WishOutcome(
+                True, "ok",
+                f"祈愿试炼 · 近 {days} 天\n\n本群没有开过团。\n"
+                f"（先确认本群在 wish_groups 里，再看今天是不是关闭日："
+                f"「祈愿」大厅会直接告诉你）",
+            )
+
+        def by_status(name): return [t for t in teams if t["status"] == name]
+
+        departed = by_status(WISH_DEPARTED)
+        voided = by_status(WISH_VOIDED)
+        recruiting = by_status(WISH_RECRUITING)
+        unfilled = by_status(WISH_DISBANDED)   # 超时/队长退出/诸神解散——都属没凑够
+        finished = len(departed) + len(voided) + len(unfilled)
+
+        joined = sum(t["members"] for t in teams)
+        seats = sum(t["capacity"] for t in departed)
+        filled = sum(t["members"] for t in departed)
+        rate = f"{len(departed) * 100 // finished}%" if finished else "—"
+        fill = f"{filled * 100 // seats}%" if seats else "—"
+
+        lines = [
+            f"祈愿试炼 · 近 {days} 天",
+            "",
+            f"开团 {len(teams)} 次：发车 {len(departed)}、未能成行 {len(voided)}、"
+            f"没凑够 {len(unfilled)}"
+            + (f"、仍在招募 {len(recruiting)}" if recruiting else ""),
+            f"发车率 {rate}（已结束的 {finished} 支里）",
+            f"参与 {joined} 人次，去重 {data['players']} 人",
+            f"发车队伍平均满员率 {fill}",
+            "",
+            "怎么看：开团少 = 没人想玩（考虑给它一点产出）；"
+            "开团多而发车少 = 凑不齐人（调小 wish_default_capacity，或拉长 wish_disband_minutes）。",
+        ]
+        return WishOutcome(True, "ok", "\n".join(lines))
+
     async def admin_clear(self, group_id: str) -> WishOutcome:
         """清空队伍记录，并释放当天名额（逃生口）。"""
         count = await self.db.clear_wish_teams(group_id)
@@ -827,19 +946,3 @@ class WishService:
                         out.append((group_id, f"{text}\n{self._quota_text(team['slot_date'], limit, used)}"))
         return out
 
-    async def handle_member_leave(
-        self, group_id: str, player_id: str
-    ) -> List[Tuple[str, str]]:
-        """成员退群：把他从进行中的队伍里移出并撤销状态，返回 [(群号, 播报)]。"""
-        out: List[Tuple[str, str]] = []
-        for team in await self.db.handle_member_leave(group_id, player_id):
-            if team.get("status") == WISH_DISBANDED:
-                text = f"【{team['name']}】因成员退出而解散。"
-            else:
-                text = (
-                    f"【{team['name']}】有一名成员退群，名单现为 "
-                    f"{len(team['members'])}/{team['capacity']}。空位可由任何人补上："
-                    f"祈愿加入 {team['name']}"
-                )
-            out.append((group_id, text))
-        return out

@@ -365,7 +365,7 @@ class AdminCommandsMixin:
         yield event.plain_result(text)
 
     async def _group_member_change_impl(self, event: "AstrMessageEvent"):
-        """监听群成员变动事件：白名单自动同步 + 祈愿试炼的退群移出。（注册在 main.py）"""
+        """监听群成员变动事件，自动同步白名单。（注册在 main.py）"""
         try:
             # 检查是否为 aiocqhttp 的 notice 事件
             raw = getattr(event.message_obj, 'raw_message', None) or {}
@@ -373,49 +373,27 @@ class AdminCommandsMixin:
             group_id = str(raw.get('group_id', ''))
             user_id = str(raw.get('user_id', ''))
 
-            if not group_id or not user_id:
+            target_group = self._cfg("auto_whitelist_group")
+            if not target_group or group_id != target_group or not user_id:
                 return
 
             # 白名单自动同步跟着群访问控制走：插件没启用的群不该动它的成员
             if self._group_access_blocked(group_id):
                 return
 
-            # 记下会话串：待审提示与祈愿播报都要用完整 umo 才能发回这个群
+            # 记下会话串：待审提示要用完整 umo 才能发回这个群
             self._remember_umo(group_id, event)
 
             bot_id = str(event.get_self_id()) if hasattr(event, 'get_self_id') else ''
             if user_id == bot_id:
                 return
 
-            # 祈愿试炼的退群移出**独立于待审群配置**：那段逻辑只服务
-            # auto_whitelist_group，没配它的群不该因此跳过队伍的清理
-            if notice_type == 'group_decrease':
-                await self._handle_wish_member_leave(group_id, user_id)
-
-            # 白名单自动同步只对配置的待审群生效（_handle_auto_whitelist 自己不看群号，
-            # 所以这个群号判断必须留在调用侧）
-            target_group = self._cfg("auto_whitelist_group")
-            if target_group and group_id == target_group:
-                if notice_type == 'group_increase':
-                    await self._handle_auto_whitelist(user_id, "join")
-                elif notice_type == 'group_decrease':
-                    await self._handle_auto_whitelist(user_id, "leave")
+            if notice_type == 'group_increase':
+                await self._handle_auto_whitelist(user_id, "join")
+            elif notice_type == 'group_decrease':
+                await self._handle_auto_whitelist(user_id, "leave")
         except Exception as e:
-            logger.error(f"[GroupMemberChange] 处理成员变动事件失败: {e}")
-
-    async def _handle_wish_member_leave(self, group_id: str, user_id: str) -> None:
-        """退群时把该玩家从进行中的祈愿队伍里移出并播报。
-
-        事件给的是 QQ 号，所以只处理**已绑定 QQ** 的玩家；未绑定的不做名片猜测
-        （名牌可以随便改，猜错就会把别人踢出队伍），那部分仍靠超时回收。
-        """
-        if getattr(self, "wish_service", None) is None:
-            return
-        player = await self.db_manager.get_player_by_qq(group_id, user_id)
-        if player is None:
-            logger.info(f"[Wish] 退群者 {user_id} 未绑定 QQ，跳过队伍清理")
-            return
-        await self._wish_member_leave(group_id, player.player_id)
+            logger.error(f"[AutoWhitelist] 处理成员变动事件失败: {e}")
 
     async def _handle_auto_whitelist(self, user_id: str, action: str):
         """处理白名单自动同步（加入进待审 / 离开即移除）。"""
