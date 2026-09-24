@@ -141,7 +141,7 @@ class ScoreCommandsMixin:
         if success_details:
             reply_parts.append("\n".join(success_details))
         if skipped:
-            reply_parts.append(f"\n以下玩家不存在，已跳过: {', '.join(skipped)}")
+            reply_parts.append(f"\n以下玩家不在本宇宙，已跳过: {', '.join(skipped)}")
 
         # 自动将批量录入消息设置为精华消息（仅在确有写入时才标记）
         await self._try_set_essence(event)

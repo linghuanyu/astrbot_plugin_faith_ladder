@@ -167,7 +167,7 @@ class TestFormatPrayerTrigger:
     def test_positive_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         msg = format_prayer_trigger("Alice", "欺诈", "欺诈", 2, None)
-        assert "神明看到了你的祈祷" in msg
+        assert "你的恩主看到了你的祈祷" in msg
         assert "欺诈" in msg
         assert "+2" in msg
         assert "本次结果暂时不会影响实际分数" in msg
@@ -175,7 +175,7 @@ class TestFormatPrayerTrigger:
     def test_negative_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         msg = format_prayer_trigger("Alice", "记忆", "记忆", -1, None)
-        assert "神明看到了你的祈祷" in msg
+        assert "你的恩主看到了你的祈祷" in msg
         assert "记忆" in msg
         assert "-1" in msg
         assert "本次结果暂时不会影响实际分数" in msg
@@ -183,7 +183,7 @@ class TestFormatPrayerTrigger:
     def test_zero_delta(self):
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         msg = format_prayer_trigger("Alice", "秩序", "秩序", 0, None)
-        assert "神明看到了你的祈祷" in msg
+        assert "你的恩主看到了你的祈祷" in msg
         assert "秩序" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
@@ -202,7 +202,7 @@ class TestFormatPrayerTrigger:
         from astrbot_plugin_faith_ladder.message_formatter import format_prayer_trigger
         msg = format_prayer_trigger("Alice", "欺诈", "秩序", 0, None)
         assert "欺诈" in msg
-        assert "神明宽宏大量" in msg
+        assert "你的恩主宽宏大量" in msg
         assert "放过了你这次渎神" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
@@ -219,7 +219,7 @@ class TestFormatPrayerTrigger:
             "prayer_trigger_messages_positive": ["{god}开心，{delta}"],
         }
         msg = format_prayer_trigger("Alice", "欺诈", "欺诈", 1, config)
-        assert "神明看到了你的祈祷" in msg
+        assert "你的恩主看到了你的祈祷" in msg
         assert "欺诈开心，1" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
@@ -240,7 +240,7 @@ class TestFormatPrayerTrigger:
             "prayer_trigger_messages_positive": [],
         }
         msg = format_prayer_trigger("Alice", "欺诈", "欺诈", 1, config)
-        assert "神明看到了你的祈祷" in msg
+        assert "你的恩主看到了你的祈祷" in msg
         assert "欺诈" in msg
         assert "本次结果暂时不会影响实际分数" in msg
 
@@ -251,13 +251,13 @@ class TestFormatPrayerTrigger:
         for faith in VALID_FAITHS:
             # 正分（匹配）
             msg = format_prayer_trigger("Alice", faith, faith, 2, None)
-            assert "神明看到了你的祈祷" in msg, f"{faith} positive message missing"
+            assert "你的恩主看到了你的祈祷" in msg, f"{faith} positive message missing"
             # 负分（匹配）
             msg = format_prayer_trigger("Alice", faith, faith, -1, None)
-            assert "神明看到了你的祈祷" in msg, f"{faith} negative message missing"
+            assert "你的恩主看到了你的祈祷" in msg, f"{faith} negative message missing"
             # 零分（匹配）
             msg = format_prayer_trigger("Alice", faith, faith, 0, None)
-            assert "神明看到了你的祈祷" in msg, f"{faith} neutral message missing"
+            assert "你的恩主看到了你的祈祷" in msg, f"{faith} neutral message missing"
         assert "本次结果暂时不会影响实际分数" in msg
 
 

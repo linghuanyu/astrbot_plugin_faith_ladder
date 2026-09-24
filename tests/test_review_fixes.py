@@ -802,7 +802,7 @@ class TestRebindQQ:
     async def test_rebind_missing_player_reports_failure(self, db):
         ok, msg, old = await db.rebind_player_qq("g1", "ghost", "999")
         assert ok is False
-        assert "不存在" in msg
+        assert "不在本宇宙" in msg
         assert old is None
 
     async def test_rebind_success(self, db):

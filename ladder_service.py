@@ -14,11 +14,11 @@ from astrbot_plugin_faith_ladder.message_formatter import (
     format_score_result,
     format_inventory,
     format_faith_line,
-    pick_score_flavor,
-    render_milestones,
 )
+from astrbot_plugin_faith_ladder.messages import PLAYER_NOT_FOUND
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
-from astrbot_plugin_faith_ladder.progress import build_tier_marks, detect_milestones
+from astrbot_plugin_faith_ladder.progress import build_tier_marks
+from astrbot_plugin_faith_ladder.terms import patron_abandoned_oath
 from astrbot_plugin_faith_ladder.item_utils import (
     parse_item_full_name,
     format_item_display,
@@ -272,12 +272,7 @@ class LadderService:
         # Check player exists (do NOT auto-create)
         existing = await self.db.get_player(group_id, target_player_id)
         if not existing:
-            return False, f"{target_player_name}不存在这个宇宙"
-
-        # 记录变化前的名次（用于"越过了 N 个人"的刻痕）
-        rank_before = await self.db.get_player_ladder_rank(
-            group_id, existing.ladder_score, existing.pilgrimage_score
-        )
+            return False, PLAYER_NOT_FOUND.format(name=target_player_name)
 
         # Update scores
         updated = await self.db.update_scores(
@@ -287,30 +282,15 @@ class LadderService:
         )
 
         if not updated:
-            return False, f"未找到玩家: {target_player_name}"
+            return False, PLAYER_NOT_FOUND.format(name=target_player_name)
 
         # 失效排行榜缓存（积分变化后排行榜可能变化）
         self.invalidate_leaderboard_cache(group_id)
-
-        cfg = self._config()
-        flavor = None
-        if cfg_get(cfg, "score_flavor_enabled"):
-            flavor = pick_score_flavor(updated, cfg)
-
-        rank_after = await self.db.get_player_ladder_rank(
-            group_id, updated.ladder_score, updated.pilgrimage_score
-        )
-        milestones = render_milestones(detect_milestones(
-            existing.ladder_score, updated.ladder_score,
-            min_ladder_score=cfg_get(cfg, "leaderboard_min_ladder_score"),
-            rank_before=rank_before, rank_after=rank_after,
-        ))
 
         return True, format_score_result(
             target_player_name,
             ladder_delta, pilgrimage_delta,
             updated.ladder_score, updated.pilgrimage_score,
-            flavor=flavor, milestones=milestones,
         )
 
     async def set_class(
@@ -331,7 +311,7 @@ class LadderService:
         # Check player exists (do NOT auto-create)
         existing = await self.db.get_player(group_id, player_id)
         if not existing:
-            return False, f"{player_name}不存在这个宇宙"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
 
         # Set class only
         updated = await self.db.set_player_class(group_id, player_id, class_name, existing.faith)
@@ -359,7 +339,7 @@ class LadderService:
         # Check player exists
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"{player_name}不存在这个宇宙"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
 
         updated = await self.db.set_player_faith(group_id, player.player_id, faith_name)
         if not updated:
@@ -406,7 +386,7 @@ class LadderService:
         # Check player exists
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"{player_name}不存在这个宇宙"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
 
         # Check player has a faith to abandon
         if not player.faith:
@@ -424,7 +404,7 @@ class LadderService:
         if not oath_text:
             oath_text = cfg_get(config, f"oath_text_{current_faith}")
         if not oath_text:
-            oath_text = f"{player_name}背弃了{specific_faith or current_faith}之道。誓约已碎。"
+            oath_text = patron_abandoned_oath(player_name, specific_faith or current_faith)
         oath_text = oath_text.replace("{name}", player_name)
 
         # Validate new faith if provided
@@ -533,7 +513,9 @@ class LadderService:
 
         # 尝试使用信仰专属文案
         try:
-            from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
+            from astrbot_plugin_faith_ladder.faith_messages import (
+                FAITH_MESSAGES, GENERIC_GOD_MESSAGES, god_lore_line,
+            )
             import random
             # 按具体信仰取文案；FAITH_MESSAGES 的键是 16 个具体信仰，
             # 而 faith_name 是 6 个命途之一，直接用它查永远查不到，只能退回通用文案
@@ -543,7 +525,7 @@ class LadderService:
                 faith_messages = GENERIC_GOD_MESSAGES.get("register_success", [])
             if faith_messages:
                 flavor_text = random.choice(faith_messages)
-                return True, (
+                body = (
                     f"「{player_name}」踏入信仰之途\n"
                     f"职业: {class_name} \n"
                     f" {format_faith_line(faith_name, specific_faith)}\n"
@@ -551,6 +533,11 @@ class LadderService:
                     f"觐见之梯: {pilgrimage_score}\n"
                     f"{flavor_text}"
                 )
+                # 神明定称号 / 谕行（原文）。原著没给出表述的信仰为 None，不追加。
+                lore_line = god_lore_line(faith_key)
+                if lore_line:
+                    body += f"\n{lore_line}"
+                return True, body
         except Exception:
             pass
 
@@ -751,7 +738,7 @@ class LadderService:
         """赐予道具。items: [(道具名（可能含等级）, 数量), ...]，数量必须为正。"""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"玩家 {player_name} 不存在"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
         if any(quantity <= 0 for _, quantity in items):
             return False, "数量必须为正整数"
         # 形如「(B)」的输入会解析出空基础名，落库后是一个没有名字的道具
@@ -774,7 +761,7 @@ class LadderService:
         """
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"玩家 {player_name} 不存在"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
         success_details = []
         fail_details = []
         extra_notes = []  # 「全部收回」时同名其它等级的提示
@@ -843,7 +830,7 @@ class LadderService:
         """
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"玩家 {player_name} 不存在"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
         await self.db.add_status(group_id, player.player_id, status_name, days, block_actions)
         await self.db.commit()
         tail = ""
@@ -867,7 +854,7 @@ class LadderService:
         """移除指定状态。"""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"玩家 {player_name} 不存在"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
         found = await self.db.remove_status(group_id, player.player_id, status_name)
         await self.db.commit()
         if found:
@@ -878,7 +865,7 @@ class LadderService:
         """清除所有状态。"""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"玩家 {player_name} 不存在"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
         count = await self.db.clear_statuses(group_id, player.player_id)
         await self.db.commit()
         return True, f"已清除 {player_name} 的 {count} 个状态"
@@ -986,7 +973,7 @@ class LadderService:
         """清除储物空间。raw_name=None → 清空全部；指定道具名 → 清除该道具（可含等级）。"""
         player = await self.db.get_player_by_name(group_id, player_name)
         if not player:
-            return False, f"玩家 {player_name} 不存在"
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
         if raw_name is None:
             count = await self.db.clear_items(group_id, player.player_id)
             return True, f"已清空 {player_name} 的储物空间（{count} 种道具）"

@@ -50,8 +50,8 @@ from astrbot_plugin_faith_ladder.commands import (
 @register(
     "astrbot_plugin_faith_ladder",
     "custom",
-    "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.9"
+    "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
+    "3.7.10"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,

@@ -75,7 +75,7 @@ class TestAbandonOath:
         """Test abandoning oath for non-existent player."""
         success, msg = await service.abandon_oath("g1", "Ghost", None, self.CONFIG)
         assert success is False
-        assert "不存在" in msg
+        assert "在本宇宙未寻找到" in msg
 
     @pytest.mark.asyncio
     async def test_abandon_oath_invalid_faith(self, service):

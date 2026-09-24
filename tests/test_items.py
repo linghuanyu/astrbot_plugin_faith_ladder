@@ -384,7 +384,7 @@ class TestGiveAndTakeItems:
     async def test_give_items_nonexistent_player(self, service):
         success, msg = await service.give_items("g1", "Ghost", [("铁剑", 1)])
         assert success is False
-        assert "不存在" in msg
+        assert "在本宇宙未寻找到" in msg
 
     @pytest.mark.asyncio
     async def test_take_items_partial(self, service):
@@ -580,7 +580,7 @@ class TestClearItems:
     async def test_clear_nonexistent_player(self, service):
         success, msg = await service.clear_items("g1", "Ghost")
         assert success is False
-        assert "不存在" in msg
+        assert "在本宇宙未寻找到" in msg
 
 
 class TestItemsWithGrade:

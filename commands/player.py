@@ -404,7 +404,7 @@ class PlayerCommandsMixin:
                 return
             player = await self.db_manager.get_player_by_name(group_id, parts[0])
             if not player:
-                yield event.plain_result(f"玩家 {parts[0]} 不存在。")
+                yield event.plain_result(f"在本宇宙未寻找到（{parts[0]}）")
                 return
         else:
             # 路径 2：<玩家名> <新QQ号>
@@ -416,7 +416,7 @@ class PlayerCommandsMixin:
                 return
             player = await self.db_manager.get_player_by_name(group_id, parts[0])
             if not player:
-                yield event.plain_result(f"玩家 {parts[0]} 不存在。")
+                yield event.plain_result(f"在本宇宙未寻找到（{parts[0]}）")
                 return
             new_qq = parts[1]
             if not new_qq.isdigit():

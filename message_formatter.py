@@ -5,6 +5,12 @@ Message formatting utilities for the faith ladder plugin.
 from typing import List, Optional
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
+from astrbot_plugin_faith_ladder.terms import (
+    CHOSEN_ONE_MARK,
+    GODS_ROSTER,
+    patron_forgave_blasphemy,
+    patron_saw_prayer,
+)
 
 
 def tier_mark_for(player, tier_marks: dict = None) -> str:
@@ -87,7 +93,9 @@ def format_pilgrimage_leaderboard(players: List[Player], limit: int = 10, tier_m
         faith_str = _faith_display(player)
         mark = tier_marks.get(player.player_id, "")
         prefix = f"{mark} " if mark else ""
-        lines.append(f"{rank}. {prefix}{_name_with_tag(player)}")
+        # 榜首标「神选？」——原文里这句本身就是疑问句，见 terms.py
+        chosen = f"{CHOSEN_ONE_MARK} " if rank == 1 else ""
+        lines.append(f"{rank}. {prefix}{chosen}{_name_with_tag(player)}")
         lines.append(f"   {class_str} <{faith_str}>")
         lines.append(f"   觐见之梯: {player.pilgrimage_score}")
         lines.append(f"   登神之路: {player.ladder_score}")
@@ -169,6 +177,8 @@ def format_help(config: dict) -> str:
     cmd_batch = cfg_get(config, "cmd_batch_add_score")
     cmd_register = cfg_get(config, "cmd_register_player")
     cmd_class = cfg_get(config, "cmd_set_class")
+    cmd_take_oath = cfg_get(config, "cmd_take_oath")
+    cmd_abandon_oath = cfg_get(config, "cmd_abandon_oath")
     cmd_admin = cfg_get(config, "cmd_admin")
     cmd_wl = cfg_get(config, "cmd_whitelist")
     cmd_help = cfg_get(config, "cmd_help")
@@ -201,13 +211,13 @@ def format_help(config: dict) -> str:
         f"{cmd_register} <姓名> <命途> <职业> [分] [分] - 或手动指定全部参数\n"
         f"  名片支持具体职业（如 酋长/织命师），系统自动识别对应命途和普通职业\n"
         f"{cmd_class} <玩家名> <职业> - 更改玩家职业\n"
-        f"立誓 <玩家名> <命途> - 为玩家选择信仰\n"
+        f"{cmd_take_oath} <玩家名> <命途> - 为玩家选择信仰\n"
         f"  职业: {classes_str} | 命途: {faiths_str}\n"
         f"\n"
         f"[积分管理] (诸神权限)\n"
         f"{cmd_add} <玩家名> <登神之路分变化> <觐见梯变化>\n"
         f"{cmd_batch} - 粘贴结算文本批量录入积分和道具\n"
-        f"弃誓 <玩家名> [新命途] - 标记背誓者\n"
+        f"{cmd_abandon_oath} <玩家名> [新命途] - 标记背誓者\n"
         f"\n"
         f"[储物空间]\n"
         f"查询储物空间 - 查看自己的道具（自动识别，需先绑定QQ）\n"
@@ -244,7 +254,7 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[管理] (管理员权限)\n"
         f"{cmd_wl} add/remove/list\n"
-        f"同步白名单 — 同步指定群成员到诸神列表\n"
+        f"同步白名单 — 同步指定群成员到{GODS_ROSTER}\n"
         f"{cmd_admin} 重置/删除/改名/清空/清除弃誓\n"
         f"\n"
         f"初始之位：登神之路 {init_ladder} · 觐见之梯 {init_pilgrimage}\n"
@@ -269,9 +279,9 @@ def format_gift_request(
 def format_whitelist_combined(config_entries: List[dict], db_entries: List[dict]) -> str:
     """Format whitelist display: WebUI 配置项 + 运行时用指令添加的条目。"""
     if not config_entries and not db_entries:
-        return "诸神列表为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
+        return f"{GODS_ROSTER}为空。\n可通过 WebUI 配置 或 指令 /白名单 add 添加。"
 
-    lines = ["═══ 诸神列表 ═══", ""]
+    lines = [f"═══ {GODS_ROSTER} ═══", ""]
 
     if config_entries:
         lines.append("── WebUI 配置 ──")
@@ -308,69 +318,20 @@ def format_score_result(
     pilgrimage_delta: int,
     new_ladder: int,
     new_pilgrimage: int,
-    flavor: Optional[str] = None,
-    milestones: Optional[List[str]] = None,
 ) -> str:
     """Format score entry result.
 
-    数字部分保持「+16 → 1016」的箭头样式（一眼能看出变化）；
-    flavor 是上方的一句神明视角短句，milestones 是下方的刻痕（都可不传）。
+    数字保持「+16 → 1016」的箭头样式（一眼能看出变化）。
     """
     ladder_str = f"+{ladder_delta}" if ladder_delta >= 0 else str(ladder_delta)
     pilgrimage_str = f"+{pilgrimage_delta}" if pilgrimage_delta >= 0 else str(pilgrimage_delta)
 
-    lines = []
-    if flavor:
-        lines.append(flavor)
-    lines.append(f"{player_name} 的积分已更新")
-    lines.append(f"登神之路: {ladder_str} → {new_ladder}")
-    lines.append(f"觐见之梯: {pilgrimage_str} → {new_pilgrimage}")
-    if milestones:
-        lines.extend(milestones)
+    lines = [
+        f"{player_name} 的积分已更新",
+        f"登神之路: {ladder_str} → {new_ladder}",
+        f"觐见之梯: {pilgrimage_str} → {new_pilgrimage}",
+    ]
     return "\n".join(lines)
-
-
-def render_milestones(events, templates: Optional[dict] = None) -> List[str]:
-    """把 progress.detect_milestones 的事件渲染成文本行。"""
-    from astrbot_plugin_faith_ladder.messages import MILESTONE_TEMPLATES
-
-    table = templates or MILESTONE_TEMPLATES
-    lines = []
-    for kind, value in events or []:
-        template = table.get(kind)
-        if template:
-            lines.append(template.format(value=value))
-    return lines
-
-
-def pick_score_flavor(player, config: Optional[dict] = None) -> Optional[str]:
-    """挑一句"神明视角"的分数短句。
-
-    优先级：配置里的按信仰池 → 配置里的通用池 → 内置按信仰池 → 内置通用池。
-    配置池为空列表时视为"没配"，回落到内置（与 prayer_trigger_messages 的约定一致）。
-    """
-    import random
-
-    from astrbot_plugin_faith_ladder.faith_messages import GENERIC_SCORE_FLAVOR, SCORE_FLAVOR
-
-    config = config or {}
-    specific = getattr(player, "specific_faith", None)
-    path = getattr(player, "faith", None)
-
-    candidates = []
-    for key in (f"score_flavor_messages_{specific}" if specific else None,
-                f"score_flavor_messages_{path}" if path else None,
-                "score_flavor_messages"):
-        if not key:
-            continue
-        pool = cfg_get(config, key) or []
-        if pool:
-            candidates = pool
-            break
-
-    if not candidates:
-        candidates = SCORE_FLAVOR.get(specific) or SCORE_FLAVOR.get(path) or GENERIC_SCORE_FLAVOR
-    return random.choice(candidates) if candidates else None
 
 
 def format_inventory(player_name: str, items: list) -> str:
@@ -433,10 +394,10 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
 
         template = random.choice(messages)
         result = template.format(**template_vars)
-        msg = f"神明看到了你的祈祷\n{result}"
+        msg = f"{patron_saw_prayer()}\n{result}"
     else:
         if delta == 0:
-            msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚……\n但神明宽宏大量，放过了你这次渎神"
+            msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚……\n{patron_forgave_blasphemy()}"
         else:
             messages = cfg_get(config, "prayer_trigger_messages_mismatch")
             if not messages:

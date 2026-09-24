@@ -76,7 +76,7 @@ class GiftCommandsMixin:
         # 查找接收方
         receiver_player = await self.db_manager.get_player_by_name(group_id, receiver_name)
         if not receiver_player:
-            yield event.plain_result(f"玩家 {receiver_name} 不存在。")
+            yield event.plain_result(f"在本宇宙未寻找到（{receiver_name}）")
             return
 
         if sender_player.player_id == receiver_player.player_id:

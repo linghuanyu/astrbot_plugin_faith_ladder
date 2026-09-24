@@ -48,7 +48,7 @@ class TestLadderService:
         service = LadderService(db_manager)
         success, msg = await service.add_score("g1", "u1", "Alice", 100, 50, "admin")
         assert success is False
-        assert "不存在" in msg
+        assert "在本宇宙未寻找到" in msg
 
     async def test_add_score_existing_player(self, db_manager):
         """Test adding score to an existing player."""
@@ -87,7 +87,7 @@ class TestLadderService:
 
         success, msg = await service.set_class("g1", "u1", "NewPlayer", "战士")
         assert success is False
-        assert "不存在" in msg
+        assert "在本宇宙未寻找到" in msg
 
 
 class TestLeaderboardScoreThreshold:
@@ -251,6 +251,24 @@ class TestLeaderboardCacheTtl:
 
         await service.register_player("g1", "Alice", "生命", "战士", 1200, 100, "admin")
         assert "Alice" in await service.get_leaderboard_text("g1", 10, 0)
+
+    async def test_register_reply_carries_god_lore_line(self, db_manager):
+        """录入回复追加一行神明定称号 / 谕行（原文）；原著没写的信仰不加。"""
+        service = LadderService(db_manager)
+        ok, msg = await service.register_player(
+            "g1", "Alice", "文明", "牧师", 1000, 100, "admin", specific_faith="秩序"
+        )
+        assert ok is True
+        assert "文明的序幕" in msg
+
+    async def test_register_reply_skips_lore_for_faiths_without_source(self, db_manager):
+        """沉默在原著里没有可引用的定语/谕行——宁可不发，也不杜撰。"""
+        service = LadderService(db_manager)
+        ok, msg = await service.register_player(
+            "g1", "Bob", "混沌", "战士", 1000, 100, "admin", specific_faith="沉默"
+        )
+        assert ok is True
+        assert "命途的" not in msg
 
     async def test_class_change_is_visible_immediately_with_long_ttl(self, db_manager):
         service = LadderService(db_manager, ttl_getter=lambda: 3600)

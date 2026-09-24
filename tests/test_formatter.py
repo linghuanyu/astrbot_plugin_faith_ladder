@@ -6,6 +6,7 @@ import pytest
 from astrbot_plugin_faith_ladder.models import Player
 from astrbot_plugin_faith_ladder.message_formatter import (
     format_leaderboard,
+    format_pilgrimage_leaderboard,
     format_player_card,
     format_help,
     format_score_result,
@@ -62,6 +63,29 @@ class TestFormatLeaderboard:
         result = format_leaderboard([player], 10)
         assert "[未设定]" in result
         assert "<未设定>" in result
+
+
+class TestPilgrimageChosenMark:
+    """觐见之梯榜首的「神选？」标记（原文用词，带问号是原著那句本身就是疑问句）。"""
+
+    def test_top_player_is_marked(self):
+        players = [
+            Player(player_id="u1", group_id="g1", player_name="Alice", pilgrimage_score=200),
+            Player(player_id="u2", group_id="g1", player_name="Bob", pilgrimage_score=100),
+        ]
+        result = format_pilgrimage_leaderboard(players, 10)
+        assert "1. 神选？ Alice" in result
+        # 只有榜首带这个标记
+        assert "2. Bob" in result
+        assert "神选？ Bob" not in result
+
+    def test_ladder_leaderboard_is_not_marked(self):
+        """标记只属于觐见之梯，登神之路榜首不加。"""
+        players = [Player(player_id="u1", group_id="g1", player_name="Alice", ladder_score=200)]
+        assert "神选？" not in format_leaderboard(players, 10)
+
+    def test_empty_leaderboard_unaffected(self):
+        assert format_pilgrimage_leaderboard([], 10) == "暂无排名数据。"
 
 
 class TestFormatPlayerCard:
@@ -190,6 +214,26 @@ class TestFormatScoreResult:
         assert "-20" in result
         assert "70" in result
         assert "80" in result
+
+
+class TestFormatHelpOathCommands:
+    """帮助里的立誓/弃誓指令名必须来自配置。
+
+    此前这两行写死「立誓」「弃誓」，而 schema 里明明有 cmd_take_oath / cmd_abandon_oath——
+    群主改了指令名后，帮助文案与实际可用的指令对不上。
+    """
+
+    def test_uses_configured_names(self):
+        text = format_help({"cmd_take_oath": "oath", "cmd_abandon_oath": "break"})
+        assert "oath <玩家名>" in text
+        assert "break <玩家名>" in text
+        assert "立誓 <玩家名>" not in text
+        assert "弃誓 <玩家名>" not in text
+
+    def test_defaults_when_config_missing(self):
+        text = format_help({})
+        assert "立誓 <玩家名>" in text
+        assert "弃誓 <玩家名>" in text
 
 
 class TestFormatHelpInitScores:

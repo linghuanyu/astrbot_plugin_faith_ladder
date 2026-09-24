@@ -18,8 +18,8 @@ import random
 WAGER_MESSAGES = {
     "诞育": {
         "announce": [
-            "{seconds} 息之内，{action}的人，我会看着你们孕育出什么。",
-            "【诞育】把一枚种子放在桌上：{seconds} 息，{action}。",
+            "{seconds} 秒内，{action}的人，我会看着你们孕育出什么。",
+            "【诞育】把一枚种子放在桌上：{seconds} 秒，{action}。",
         ],
         "win": ["【诞育】把那份新生的东西交到 {winner} 手里：{reward}", "{winner} 得到了它，像是被重新生了一次。（{reward}）"],
         "lose": ["【诞育】看着你们，摇了摇头：「你们还没长好。」", "种子落在地上，摔碎了。【诞育】没有伸手。"],
@@ -28,8 +28,8 @@ WAGER_MESSAGES = {
     },
     "繁荣": {
         "announce": [
-            "{seconds} 息，{action}的人。繁荣一向奖励动作快的。",
-            "【繁荣】把筹码堆在桌上：「{seconds} 息，{action}，过时不候。」",
+            "{seconds} 秒，{action}的人。繁荣一向奖励动作快的。",
+            "【繁荣】把筹码堆在桌上：「{seconds} 秒，{action}，过时不候。」",
         ],
         "win": ["【繁荣】把一堆东西推给 {winner}：{reward}", "丰收归了 {winner}，其余人只分到风。（{reward}）"],
         "lose": ["【繁荣】摊手：「盘子里什么都没有。」", "你们抢了半天，抢到的是【繁荣】的笑声。"],
@@ -38,8 +38,8 @@ WAGER_MESSAGES = {
     },
     "死亡": {
         "announce": [
-            "{seconds} 息。{action}的人，我会记住你们的名字。",
-            "【死亡】坐下来：「{seconds} 息，{action}。我很有耐心。」",
+            "{seconds} 秒。{action}的人，我会记住你们的名字。",
+            "【死亡】坐下来：「{seconds} 秒，{action}。我很有耐心。」",
         ],
         "win": ["【死亡】放过了 {winner}，并且留下一份东西：{reward}", "{winner} 活着走开了，手里还多了点东西。（{reward}）"],
         "lose": ["【死亡】只是点了点头：「今天不是你们。」", "祂数完了，一个也没少——你们什么都没得到。"],
@@ -48,8 +48,8 @@ WAGER_MESSAGES = {
     },
     "污堕": {
         "announce": [
-            "{seconds} 息，{action}的人，让我看看你愿意往下走多深。",
-            "【污堕】在低处招手：「{seconds} 息，{action}。」",
+            "{seconds} 秒，{action}的人，让我看看你愿意往下走多深。",
+            "【污堕】在低处招手：「{seconds} 秒，{action}。」",
         ],
         "win": ["【污堕】把一部分自己分给了 {winner}：{reward}", "{winner} 拿到了它，指缝里渗出黑色。（{reward}）"],
         "lose": ["【污堕】收回了手：「不够。」", "你们往下看的时候，它已经在别处了。"],
@@ -58,8 +58,8 @@ WAGER_MESSAGES = {
     },
     "腐朽": {
         "announce": [
-            "{seconds} 息，{action}的人。旧的会先烂掉，这是我给的公平。",
-            "【腐朽】把手按在桌上：「{seconds} 息，{action}。」",
+            "{seconds} 秒，{action}的人。旧的会先烂掉，这是我给的公平。",
+            "【腐朽】把手按在桌上：「{seconds} 秒，{action}。」",
         ],
         "win": ["【腐朽】把烂掉的那部分变成了 {winner} 的养分：{reward}", "{winner} 从残骸里捡到了东西。（{reward}）"],
         "lose": ["【腐朽】淡淡地说：「烂完了。」", "你们身上的东西，连同机会一起旧了。"],
@@ -68,8 +68,8 @@ WAGER_MESSAGES = {
     },
     "湮灭": {
         "announce": [
-            "{seconds} 息，{action}。我抹掉的东西不会回来。",
-            "【湮灭】擦掉桌角的一小块世界：「{seconds} 息，{action}。」",
+            "{seconds} 秒，{action}。我抹掉的东西不会回来。",
+            "【湮灭】擦掉桌角的一小块世界：「{seconds} 秒，{action}。」",
         ],
         "win": ["【湮灭】把挡在 {winner} 前面的东西抹掉了：{reward}", "{winner} 面前的阻碍消失了，位置空了出来。（{reward}）"],
         "lose": ["【湮灭】什么也没说。桌上的东西已经不见了。", "你们要找的东西，刚刚被擦掉了。"],
@@ -78,8 +78,8 @@ WAGER_MESSAGES = {
     },
     "秩序": {
         "announce": [
-            "{seconds} 息，{action}者入局。契约既立，不容反悔。",
-            "【秩序】把契书摊开：「{seconds} 息。{action}。写名字。」",
+            "{seconds} 秒，{action}者入局。契约既立，不容反悔。",
+            "【秩序】把契书摊开：「{seconds} 秒。{action}。写名字。」",
         ],
         "win": ["【秩序】在契书上落了款：「守约者得赏。」（{reward}）", "{winner} 依约取走了属于他的那份：{reward}"],
         "lose": ["【秩序】合上契书：「依约，你不该得到任何东西。」", "条款写得清清楚楚，你们看漏了最后一行。"],
@@ -88,8 +88,8 @@ WAGER_MESSAGES = {
     },
     "真理": {
         "announce": [
-            "{seconds} 息，{action}的人，我可以让你看见一点什么。",
-            "【真理】把书翻到一半：「{seconds} 息，{action}。」",
+            "{seconds} 秒，{action}的人，我可以让你看见一点什么。",
+            "【真理】把书翻到一半：「{seconds} 秒，{action}。」",
         ],
         "win": ["【真理】把那一页摊给 {winner} 看：{reward}", "{winner} 看见了不该看见的一角，并且拿到了它。（{reward}）"],
         "lose": ["【真理】把书合上了：「你们还没准备好。」", "答案就在那里，但你们问错了问题。"],
@@ -98,8 +98,8 @@ WAGER_MESSAGES = {
     },
     "战争": {
         "announce": [
-            "{seconds} 息，{action}的人。战场上，犹豫就是输。",
-            "【战争】把武器拍在桌上：「{seconds} 息，{action}。」",
+            "{seconds} 秒，{action}的人。战场上，犹豫就是输。",
+            "【战争】把武器拍在桌上：「{seconds} 秒，{action}。」",
         ],
         "win": ["【战争】把战利品丢给 {winner}：{reward}", "{winner} 站到了最后，也因此拿到了东西。（{reward}）"],
         "lose": ["【战争】环视一圈：「没有一个能打的。」", "你们全都冲着空气挥了刀。"],
@@ -108,8 +108,8 @@ WAGER_MESSAGES = {
     },
     "混乱": {
         "announce": [
-            "{seconds} 息，{action}——规则？什么规则。",
-            "【混乱】把棋盘抖了一下：「{seconds} 息，{action}，随便你们。」",
+            "{seconds} 秒，{action}——规则？什么规则。",
+            "【混乱】把棋盘抖了一下：「{seconds} 秒，{action}，随便你们。」",
         ],
         "win": ["【混乱】随手把东西扔给 {winner}：{reward}", "没人知道为什么是 {winner}，包括 {winner} 自己。（{reward}）"],
         "lose": ["【混乱】大笑：「本来就没打算给谁。」", "结果掉在了没人看的地方。"],
@@ -118,8 +118,8 @@ WAGER_MESSAGES = {
     },
     "痴愚": {
         "announce": [
-            "{seconds} 息，{action}的人——我只是想看看会发生什么。",
-            "【痴愚】笑出了声：「{seconds} 息，{action}，快。」",
+            "{seconds} 秒，{action}的人——我只是想看看会发生什么。",
+            "【痴愚】笑出了声：「{seconds} 秒，{action}，快。」",
         ],
         "win": ["【痴愚】笑得直不起腰，随手把东西塞给 {winner}：{reward}", "{winner} 得到奖励的原因，是它觉得这样很好笑。（{reward}）"],
         "lose": ["【痴愚】笑够了：「不好玩。」", "你们认真了，这才是最可笑的地方。"],
@@ -128,8 +128,8 @@ WAGER_MESSAGES = {
     },
     "沉默": {
         "announce": [
-            "【沉默】没有出声。但所有人都明白了：{seconds} 息内，{action}。",
-            "什么都没有说。{seconds} 息，{action}——你可以当它没说过。",
+            "【沉默】没有出声。但所有人都明白了：{seconds} 秒内，{action}。",
+            "什么都没有说。{seconds} 秒，{action}——你可以当它没说过。",
         ],
         "win": ["祂看了 {winner} 一眼。那一眼就是赏赐。（{reward}）", "{winner} 什么也没听见，但手里多了一样东西。（{reward}）"],
         "lose": ["祂移开了视线。", "沉默继续沉默，你们什么也没等到。"],
@@ -138,8 +138,8 @@ WAGER_MESSAGES = {
     },
     "记忆": {
         "announce": [
-            "{seconds} 息，{action}的人。我会记住这件事。",
-            "【记忆】把册子翻开：「{seconds} 息，{action}。」",
+            "{seconds} 秒，{action}的人。我会记住这件事。",
+            "【记忆】把册子翻开：「{seconds} 秒，{action}。」",
         ],
         "win": ["【记忆】把这一笔记在 {winner} 名下，还附了点东西：{reward}", "{winner} 被记住了，而且带着证据。（{reward}）"],
         "lose": ["【记忆】把那一页撕掉了：「这件事没发生过。」", "你们的名字不在册子上。"],
@@ -148,8 +148,8 @@ WAGER_MESSAGES = {
     },
     "时间": {
         "announce": [
-            "{seconds} 息。{action}的人——时间不等人，我也不等。",
-            "【时间】敲了敲桌面：「{seconds} 息，{action}。」",
+            "{seconds} 秒。{action}的人——时间不等人，我也不等。",
+            "【时间】敲了敲桌面：「{seconds} 秒，{action}。」",
         ],
         "win": ["【时间】为你多留了一会儿：{reward}", "{winner} 赶上了，也因此得到了一点时间之外的东西。（{reward}）"],
         "lose": ["【时间】淡淡地说：「你们慢了一步。」", "机会在你们犹豫的时候已经过去了。"],
@@ -158,8 +158,8 @@ WAGER_MESSAGES = {
     },
     "欺诈": {
         "announce": [
-            "{seconds} 息内，{action}的人——我给他一点甜头。当然，我说的是不是真话，你得自己赌。",
-            "【欺诈】眯起眼睛：「{seconds} 息，{action}。我最喜欢看你们认真下注的样子。」",
+            "{seconds} 秒内，{action}的人——我给他一点甜头。当然，我说的是不是真话，你得自己赌。",
+            "【欺诈】眯起眼睛：「{seconds} 秒，{action}。我最喜欢看你们认真下注的样子。」",
         ],
         "win": ["「骗你的。」【欺诈】说，「不过这次……赏你 {reward}。」", "{winner} 拿到了东西，还在怀疑是不是真的。（{reward}）"],
         "lose": ["【欺诈】耸耸肩：「我早说过我在骗你。」", "你们下了注，它收走了桌子。"],
@@ -168,8 +168,8 @@ WAGER_MESSAGES = {
     },
     "命运": {
         "announce": [
-            "骰子已经离手：{seconds} 息，{action}。",
-            "【命运】把骰子推到你面前：「{seconds} 息，{action}。我不出手。」",
+            "骰子已经离手：{seconds} 秒，{action}。",
+            "【命运】把骰子推到你面前：「{seconds} 秒，{action}。我不出手。」",
         ],
         "win": ["命运偏爱你这一次。（{reward}）", "骰子落定在 {winner} 这边。（{reward}）"],
         "lose": ["骰子落定，不在你们这边。", "【命运】没有解释为什么。"],
@@ -180,8 +180,8 @@ WAGER_MESSAGES = {
 
 GENERIC_WAGER_MESSAGES = {
     "announce": [
-        "{god}把目光投了下来：{seconds} 息内，{action}的人。",
-        "棋盘上落下一枚棋子：{seconds} 息，{action}。",
+        "{god}把目光投了下来：{seconds} 秒内，{action}的人。",
+        "棋盘上落下一枚棋子：{seconds} 秒，{action}。",
     ],
     "win": ["{god}认下了这一局，把东西给了 {winner}：{reward}", "{winner} 得到了 {god} 的赏赐。"],
     "lose": ["{god}什么也没给，只是看着你们。", "这一局，神明没有认账。"],

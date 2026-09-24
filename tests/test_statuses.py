@@ -180,7 +180,7 @@ class TestGiveAndTakeStatuses:
     async def test_add_status_nonexistent_player(self, service):
         success, msg = await service.add_status("g1", "Ghost", "虚弱", 3)
         assert success is False
-        assert "不存在" in msg
+        assert "在本宇宙未寻找到" in msg
 
     @pytest.mark.asyncio
     async def test_remove_status(self, service):

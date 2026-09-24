@@ -84,7 +84,7 @@ class AdminCommandsMixin:
                 self.ladder_service.invalidate_leaderboard_cache(group_id)
                 yield event.plain_result(f"已将玩家 {target_name} 数据在本宇宙删除。")
             else:
-                yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
+                yield event.plain_result(f"在本宇宙未寻找到（{target_name}）")
             return
 
         # rename: whitelist or admin
@@ -116,12 +116,12 @@ class AdminCommandsMixin:
             target_name = parts[1]
             target_player = await self.db_manager.get_player_by_name(group_id, target_name)
             if not target_player:
-                yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
+                yield event.plain_result(f"在本宇宙未寻找到（{target_name}）")
                 return
             updated = await self.db_manager.clear_oathbreaker(group_id, target_player.player_id)
             if not updated:
                 # 玩家在查询与更新之间被删除时会走到这里，不能报成功
-                yield event.plain_result(f"清除 {target_name} 的弃誓者标记失败：该玩家已不存在。")
+                yield event.plain_result(f"清除 {target_name} 的弃誓者标记失败：该玩家已不在本宇宙。")
                 return
             self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已清除 {target_name} 的弃誓者标记。")
@@ -136,7 +136,7 @@ class AdminCommandsMixin:
             target_name = parts[1]
             target_player = await self.db_manager.get_player_by_name(group_id, target_name)
             if not target_player:
-                yield event.plain_result(f"本宇宙未找到玩家: {target_name}")
+                yield event.plain_result(f"在本宇宙未寻找到（{target_name}）")
                 return
             init_ladder = self._cfg("init_ladder_score")
             init_pilgrimage = self._cfg("init_pilgrimage_score")
@@ -147,7 +147,7 @@ class AdminCommandsMixin:
                 user_id, "管理员重置"
             )
             if not updated:
-                yield event.plain_result(f"重置 {target_name} 失败：该玩家已不存在。")
+                yield event.plain_result(f"重置 {target_name} 失败：该玩家已不在本宇宙。")
                 return
             self.ladder_service.invalidate_leaderboard_cache(group_id)
             yield event.plain_result(f"已重置玩家 {target_name} 的积分（天梯: {init_ladder}, 觐见: {init_pilgrimage}）。")

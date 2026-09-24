@@ -3,6 +3,8 @@
 每个信仰包含匹配/不匹配时的随机文案池。
 """
 
+from astrbot_plugin_faith_ladder.terms import PATRON
+
 PRAYER_MESSAGES = {
     "诞育": {
         "positive": [
@@ -330,9 +332,10 @@ PRAYER_CRIT_MESSAGES = {
 }
 
 # 连续祷词天数的提示：(达到的天数, 文案)，取满足条件的最大档
+# 这几句说的是「玩家自己那位神」注意到了他，所以用「恩主」（边界见 terms.py）
 PRAYER_STREAK_LINES = [
-    (2, "—— 连续第 {days} 天，神明似乎留意到了什么。"),
-    (7, "—— 连续 {days} 天，神明开始记得你了。"),
+    (2, "—— 连续第 {days} 天，你的" + PATRON + "似乎留意到了什么。"),
+    (7, "—— 连续 {days} 天，你的" + PATRON + "开始记得你了。"),
     (30, "—— 连续 {days} 天。棋盘上，你已经不只是一个过客。"),
 ]
 

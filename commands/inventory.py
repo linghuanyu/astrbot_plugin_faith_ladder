@@ -94,7 +94,7 @@ class InventoryCommandsMixin:
         # 获取玩家储物空间
         player = await self.db_manager.get_player_by_name(group_id, player_name)
         if not player:
-            yield event.plain_result(f"玩家 {player_name} 不存在")
+            yield event.plain_result(f"在本宇宙未寻找到（{player_name}）")
             return
 
         inventory = await self.db_manager.get_player_items(group_id, player.player_id)

@@ -756,7 +756,7 @@ class DatabaseManager:
             return False, f"QQ {new_qq} 已被其他玩家绑定，请先让其换绑或解绑。", old_qq
         if cursor.rowcount <= 0:
             await self.rollback()
-            return False, "玩家不存在，未做任何修改。", old_qq
+            return False, "该玩家不在本宇宙，未做任何修改。", old_qq
         await self._db.commit()
         return True, "换绑成功", old_qq
 
@@ -1024,7 +1024,7 @@ class DatabaseManager:
         ) as cursor:
             row = await cursor.fetchone()
         if not row:
-            return False, f"未找到玩家: {old_name}"
+            return False, f"在本宇宙未寻找到（{old_name}）"
 
         # 改名与去重在同一条语句里完成：目标名已被占用时 EXISTS 为真，UPDATE 不命中任何行
         cursor = await self._db.execute(

@@ -7,7 +7,8 @@
 PERMISSION_DENIED = {"god_only": "此等权柄，唯诸神方可执掌。"}
 
 # ========== 玩家不存在 ==========
-PLAYER_NOT_FOUND = "{name}未引起寰宇诸神的注意。"
+# 全库「找不到玩家」只用这一种说法，避免同一个意思出现五种写法
+PLAYER_NOT_FOUND = "在本宇宙未寻找到（{name}）"
 
 # ========== 输入错误 ==========
 SCORE_NOT_INT = "分数须为整数。"
@@ -15,7 +16,7 @@ INVALID_ITEM_FORMAT = "未识别有效道具。格式：道具名*数量"
 
 # ========== 批量操作 ==========
 BATCH_ALL_SUCCESS = "结算完成，{count} 人积分已变更。"
-BATCH_PARTIAL_SKIP = "结算完成：{success} 人积分已变更，{skip} 人不在命册，已略过。"
+BATCH_PARTIAL_SKIP = "结算完成：{success} 人积分已变更，{skip} 人不在本宇宙，已略过。"
 
 # ========== 冷却消息 ==========
 # 统一放在这里，避免同一条提示在不同指令里各写一遍、改一处漏一处
@@ -43,12 +44,3 @@ def feature_disabled_message(feature_key: str) -> str:
 
 # ========== 状态阻断 ==========
 STATUS_BLOCKED_MSG = "你正处于「{status}」状态，暂时无法{action}。"
-
-# ========== 试炼刻痕（里程碑） ==========
-# kind → 模板；kind 见 progress.py 的 KIND_* 常量
-MILESTONE_TEMPLATES = {
-    "hundred": "—— 第 {value} 道刻痕。",
-    "thousand": "—— 阶梯轰鸣：你已走过第 {value} 个千阶。",
-    "threshold": "—— 你的名字第一次被刻上棋盘。",
-    "rank": "—— 你越过了 {value} 个人。",
-}

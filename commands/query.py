@@ -113,7 +113,7 @@ class QueryCommandsMixin:
             if cards_text:
                 result_parts.append(cards_text)
             if not_found:
-                result_parts.append(f"\n以下玩家不存在: {', '.join(not_found)}")
+                result_parts.append(f"\n以下玩家不在本宇宙: {', '.join(not_found)}")
             yield event.plain_result("\n".join(result_parts))
             return
 
@@ -183,7 +183,7 @@ class QueryCommandsMixin:
         if results:
             parts.append("\n\n".join(results))
         if not_found:
-            parts.append(f"\n以下玩家不存在: {', '.join(not_found)}")
+            parts.append(f"\n以下玩家不在本宇宙: {', '.join(not_found)}")
 
         text = "\n".join(parts) if parts else "未查询到任何玩家。"
 

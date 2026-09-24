@@ -131,7 +131,7 @@ class PermissionService:
         added = await self.db.add_to_whitelist("user", user_id, added_by, faith=faith)
         if added:
             faith_str = f"（信仰：{faith}）" if faith else ""
-            return True, f"已添加 {user_id} 到诸神列表{faith_str}。"
+            return True, f"已将 {user_id} 列入诸神列表{faith_str}。"
         else:
             return False, f"{user_id} 已是诸神之一。"
 
