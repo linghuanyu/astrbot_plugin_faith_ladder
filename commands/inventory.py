@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
 from astrbot_plugin_faith_ladder.item_utils import extract_item_quantity, format_item_display
+from astrbot_plugin_faith_ladder.text_utils import split_rename_pair
 from astrbot_plugin_faith_ladder.commands.gate import ACTION_LABELS, parse_block_actions
 from astrbot_plugin_faith_ladder.messages import INVALID_ITEM_FORMAT, PERMISSION_DENIED
 
@@ -310,4 +311,41 @@ class InventoryCommandsMixin:
 
         player_name = args.strip()
         success, message = await self.ladder_service.clear_statuses(group_id, player_name)
+        yield event.plain_result(message)
+
+    async def _rename_status_impl(self, event: "AstrMessageEvent"):
+        """重命名状态。（注册在 main.py）"""
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
+        group_id = self._get_group_id(event)
+
+        if not await self._check_perm(event):
+            yield event.plain_result(PERMISSION_DENIED["god_only"])
+            return
+
+        usage = (
+            "用法：重命名状态 <玩家名> <旧状态名> <新状态名>\n"
+            "示例：重命名状态 张三 虚弱 强健\n"
+            "      状态名含空格时用 → 分隔：重命名状态 张三 旧 名 → 新 名\n"
+            "目标名已存在时合并为一条：到期时间取更晚的，阻断项保留原有的。"
+        )
+
+        args = self._get_args(event, "重命名状态")
+        parts = args.split(None, 1) if args else []
+        if len(parts) < 2:
+            yield event.plain_result(usage)
+            return
+
+        pair = split_rename_pair(parts[1])
+        if pair is None:
+            yield event.plain_result(usage)
+            return
+
+        player_name, (old_name, new_name) = parts[0], pair
+        success, message = await self.ladder_service.rename_status(
+            group_id, player_name, old_name, new_name
+        )
         yield event.plain_result(message)

@@ -33,6 +33,7 @@ ACTION_FEATURE: Dict[str, str] = {
     "prayer": "feature_prayer_enabled",
     "scoreboard": "feature_scoreboard_enabled",
     "qq_admin": "feature_qq_admin_enabled",
+    "wish": "feature_wish_enabled",
 }
 
 # 可被「状态」阻断的动作 → 中文标签（用于「添加状态 … 阻断=祷词,赠送」与卡片展示）
@@ -41,6 +42,7 @@ ACTION_LABELS: Dict[str, str] = {
     "gift_send": "赠送",
     "gift_accept": "接受赠送",
     "query": "查询",
+    "wish": "祈愿",
 }
 
 LABEL_ACTIONS: Dict[str, str] = {label: action for action, label in ACTION_LABELS.items()}

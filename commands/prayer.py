@@ -271,7 +271,8 @@ class PrayerCommandsMixin:
         cmd_keys = [
             "cmd_ladder", "cmd_pilgrimage", "cmd_query", "cmd_add_score",
             "cmd_set_class", "cmd_register_player", "cmd_admin", "cmd_whitelist",
-            "cmd_help", "cmd_batch_add_score", "cmd_abandon_oath", "cmd_take_oath"
+            "cmd_help", "cmd_batch_add_score", "cmd_abandon_oath", "cmd_take_oath",
+            "cmd_wish", "cmd_wish_admin"
         ]
         self._command_prefixes = {
             self._cfg(key) for key in cmd_keys if self._cfg(key)

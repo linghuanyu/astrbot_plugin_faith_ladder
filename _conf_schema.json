@@ -240,6 +240,147 @@
     "type": "list",
     "default": []
   },
+  "feature_wish_enabled": {
+    "description": "启用祈愿试炼（组队：祈愿 / 祈愿组队 / 祈愿加入 / 祈愿退出 / 祈愿我的 / 祈愿随机 / 祈愿管理）",
+    "hint": "关闭后这一组指令回复「功能已被管理员关闭」。",
+    "type": "bool",
+    "default": true
+  },
+  "cmd_wish": {
+    "description": "祈愿大厅指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
+    "type": "string",
+    "default": "祈愿"
+  },
+  "cmd_wish_admin": {
+    "description": "祈愿管理指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
+    "type": "string",
+    "default": "祈愿管理"
+  },
+  "wish_groups": {
+    "description": "启用祈愿试炼的群号列表（留空则不在任何群启用）",
+    "hint": "与祷词触发群、赌局群列表相互独立；未列出的群里这些指令会回复「本群未开启」。",
+    "type": "list",
+    "default": [],
+    "items": {
+      "type": "string"
+    }
+  },
+  "wish_default_capacity": {
+    "description": "祈愿组队未指定人数时的默认队伍人数",
+    "hint": "玩家唯一能定的是人数（队名由系统生成）。小群把它调小，否则永远凑不满。",
+    "type": "int",
+    "default": 6
+  },
+  "wish_max_capacity": {
+    "description": "单支队伍的人数上限",
+    "hint": "祈愿组队 [人数] 超过这个值会被拒绝；最小按 2 人处理（一人成不了试炼）。",
+    "type": "int",
+    "default": 12
+  },
+  "wish_name_max_length": {
+    "description": "队名最大长度（字符）",
+    "hint": "队名由系统生成（如「09月28日祈愿试炼」，同日第 2 支会加序号），只有诸神能用「祈愿管理 重命名」改动，改名时超过该长度会被拒绝。",
+    "type": "int",
+    "default": 16
+  },
+  "wish_status_days": {
+    "description": "发车后成员状态（以队名命名）的持续天数",
+    "hint": "同时决定名额归属日期 = 开团日 + 该天数，所以改它会让星期名额规则整体平移。",
+    "type": "int",
+    "default": 3
+  },
+  "wish_status_keep": {
+    "description": "同一玩家最多保留几条队伍状态（超出的按到期时间从早到晚裁掉）",
+    "hint": "防止查询里的状态列表被历次组队无限撑长；诸神手工加的状态不受此限制。",
+    "type": "int",
+    "default": 3
+  },
+  "wish_list_limit": {
+    "description": "本群同时允许的招募中队伍数（同时是大厅展示上限）",
+    "hint": "达到上限后开团会被拒绝（不会出现「大厅里看不见的队伍」）。默认容量 6 时覆盖 12 人。",
+    "type": "int",
+    "default": 2
+  },
+  "wish_daily_create_limit": {
+    "description": "每人每天开团次数上限（0 = 不限）",
+    "hint": "按北京日期计数；被前置检查（名额不足、已有队伍、群内队伍已满）拒绝的开团不消耗次数。",
+    "type": "int",
+    "default": 1
+  },
+  "wish_daily_group_create_limit": {
+    "description": "本群每天开团次数上限（0 = 不限）",
+    "hint": "开团会向群里播报，这条是播报噪音的兜底；成功发车数另受 wish_weekly_limits 限制。",
+    "type": "int",
+    "default": 4
+  },
+  "wish_weekly_limits": {
+    "description": "名额表：周一…周日各允许成功发车的队伍数（0 = 该日期不安排试炼）",
+    "hint": "索引按「队名里那个日期」的星期取，而队名日期 = 开团日 + wish_status_days，所以默认 [1,1,0,1,1,0,2] 的实际效果是「周三与周日不能开团、周四 2 支、其余 1 支」，每周最多 6 次发车。",
+    "type": "list",
+    "default": [1, 1, 0, 1, 1, 0, 2]
+  },
+  "wish_reminder_minutes": {
+    "description": "招募中队伍的缺人提醒间隔（分钟，0 = 不提醒）",
+    "hint": "只对招募中的队伍生效；提醒由调度器每 30 秒检查一次，同一窗口只会提醒一次。",
+    "type": "int",
+    "default": 15
+  },
+  "wish_disband_minutes": {
+    "description": "招募等待上限（分钟，0 = 不自动解散）",
+    "hint": "超时未满员的队伍自动解散并播报（空队不播报）。解散按开团时间扫库，插件重启后照样生效。",
+    "type": "int",
+    "default": 45
+  },
+  "wish_history_retention_days": {
+    "description": "已结束队伍记录的保留天数",
+    "hint": "每天清理一次；「祈愿管理 已解散」只能看到保留期内的记录，招募中的队伍不受影响。",
+    "type": "int",
+    "default": 7
+  },
+  "wish_cooldown_seconds": {
+    "description": "祈愿加入 / 退出 / 随机的冷却时间（秒）",
+    "hint": "开团另有每日次数限制，不走这条冷却。填 0 表示不限制。",
+    "type": "int",
+    "default": 3
+  },
+  "wish_messages_open": {
+    "description": "祈愿试炼 · 开团播报文案池（留空使用内置）",
+    "hint": "可用占位符 {team} {leader} {count} {capacity} {missing}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wish_messages_remind": {
+    "description": "祈愿试炼 · 缺人提醒文案池（留空使用内置）",
+    "hint": "可用占位符 {team} {count} {capacity} {missing} {minutes}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wish_messages_depart": {
+    "description": "祈愿试炼 · 发车播报文案池（留空使用内置）",
+    "hint": "可用占位符 {team} {members} {days} {leader}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wish_messages_voided": {
+    "description": "祈愿试炼 · 名额被占、未能成行的播报文案池（留空使用内置）",
+    "hint": "可用占位符 {team} {members} {slot}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wish_messages_timeout": {
+    "description": "祈愿试炼 · 超时解散的播报文案池（留空使用内置）",
+    "hint": "可用占位符 {team} {count} {capacity}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
+  "wish_messages_swap": {
+    "description": "祈愿试炼 · 诸神换人的播报文案池（留空使用内置）",
+    "hint": "可用占位符 {team} {out} {in}；填了就替换整个内置池。",
+    "type": "list",
+    "default": []
+  },
   "auto_backup_enabled": {
     "description": "启用自动备份",
     "hint": "每天首次运行时把数据库备份到插件数据目录的 backups/ 下。",

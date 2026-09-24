@@ -30,6 +30,7 @@ from astrbot_plugin_faith_ladder import card_utils
 from astrbot_plugin_faith_ladder.text_utils import strip_mentions
 from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
 from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
+from astrbot_plugin_faith_ladder.wish_service import WishService
 from astrbot_plugin_faith_ladder.commands import (
     QueryCommandsMixin,
     ScoreboardCommandsMixin,
@@ -39,6 +40,7 @@ from astrbot_plugin_faith_ladder.commands import (
     GiftCommandsMixin,
     AdminCommandsMixin,
     PrayerCommandsMixin,
+    WishCommandsMixin,
     SharedSendMixin,
     ConfigMixin,
     GateMixin,
@@ -50,8 +52,8 @@ from astrbot_plugin_faith_ladder.commands import (
 @register(
     "astrbot_plugin_faith_ladder",
     "custom",
-    "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.8.0"
+    "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、祈愿试炼组队、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
+    "3.9.0"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -61,6 +63,7 @@ class FaithLadderPlugin(
     GiftCommandsMixin,
     AdminCommandsMixin,
     PrayerCommandsMixin,
+    WishCommandsMixin,
     QueryCommandsMixin,
     SharedSendMixin,
     ConfigMixin,
@@ -101,6 +104,11 @@ class FaithLadderPlugin(
                 self.permission_service = PermissionService(self.db_manager)
 
         self._scheduler = None
+        # 祈愿试炼（组队）：队名/名额/日期口径都在服务里，这里只注入 DB 与配置读取器
+        self.wish_service = WishService(
+            self.db_manager,
+            get_config=lambda: dict(self.config),
+        )
         self._qq_admin = QQAdminHandler(
             check_perm_fn=self.permission_service.check_score_permission,
             # 群管指令本质是群务：超管或该群的群主/群管理员都可以执行。
@@ -218,14 +226,16 @@ class FaithLadderPlugin(
             purge_score_history=self.db_manager.purge_old_score_history,
             purge_daily_tables=self.db_manager.purge_daily_tables,
             purge_expired_statuses=self.db_manager.purge_expired_statuses,
+            purge_old_wish_teams=self.db_manager.purge_old_wish_teams,
             cleanup_expired_gifts=self.ladder_service.cleanup_expired_gifts,
             notify_gift_timeout=send_to_group,
             backup_db=self.db_manager.backup_to,
             wager_tick=self._wager_tick,
+            wish_tick=self._wish_tick,
         )
         await self._scheduler.start()
 
-        # 注册群成员变动监听（白名单自动同步）
+        # 注册群成员变动监听（白名单自动同步 + 祈愿试炼的退群移出）
         # 注意：不同 AstrBot 版本的 Context 不一定提供 register_event_handler。
         # 缺失时此前是静默跳过（连日志都没有），表现为「自动白名单看似开着却从不同步」，
         # 因此这里显式告警，方便判断该功能是否真的生效。
@@ -791,12 +801,63 @@ class FaithLadderPlugin(
         async for result in self._clear_status_impl(event):
             yield result
 
+    @filter.command("重命名状态")
+    async def cmd_rename_status(self, event: AstrMessageEvent):
+        """重命名状态。格式: 重命名状态 <玩家名> <旧状态名> <新状态名>"""
+        async for result in self._rename_status_impl(event):
+            yield result
+
     # === 神明的赌局 ===
 
     @filter.command("赌局", alias={"wager", "神明赌局"})
     async def cmd_wager(self, event: AstrMessageEvent):
         """手动抛下一场「神明的赌局」（需开启 wager_enabled；诸神/管理员）"""
         async for result in self._wager_open_impl(event):
+            yield result
+
+    # === 祈愿试炼（组队）===
+    # 队名由系统生成（玩家不能自定义），满员自动发车，全员获得以队名命名的状态。
+
+    @filter.command("祈愿", alias={"祈愿大厅"})
+    async def cmd_wish(self, event: AstrMessageEvent):
+        """祈愿大厅：本群招募中的队伍与当天的名额。"""
+        async for result in self._wish_impl(event):
+            yield result
+
+    @filter.command("祈愿组队")
+    async def cmd_wish_create(self, event: AstrMessageEvent):
+        """开一支祈愿试炼的队伍（自动入座）。格式: 祈愿组队 [人数]"""
+        async for result in self._wish_create_impl(event):
+            yield result
+
+    @filter.command("祈愿加入")
+    async def cmd_wish_join(self, event: AstrMessageEvent):
+        """加入队伍。格式: 祈愿加入 [队名]（省略队名则进最缺人的一支）"""
+        async for result in self._wish_join_impl(event):
+            yield result
+
+    @filter.command("祈愿退出")
+    async def cmd_wish_leave(self, event: AstrMessageEvent):
+        """退出自己的队伍（队长退出即解散）。"""
+        async for result in self._wish_leave_impl(event):
+            yield result
+
+    @filter.command("祈愿我的")
+    async def cmd_wish_mine(self, event: AstrMessageEvent):
+        """查看我的队伍与成员。"""
+        async for result in self._wish_mine_impl(event):
+            yield result
+
+    @filter.command("祈愿随机")
+    async def cmd_wish_random(self, event: AstrMessageEvent):
+        """随机匹配：把自己补进最缺人的一支队伍。"""
+        async for result in self._wish_random_impl(event):
+            yield result
+
+    @filter.command("祈愿管理")
+    async def cmd_wish_admin(self, event: AstrMessageEvent):
+        """祈愿试炼的诸神治理。格式: 祈愿管理 <操作> [参数]"""
+        async for result in self._wish_admin_impl(event):
             yield result
 
     # === 赠送道具 ===

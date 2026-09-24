@@ -22,10 +22,12 @@ class SchedulerService:
         purge_score_history: Optional[Callable[[int], Awaitable[int]]] = None,
         purge_daily_tables: Optional[Callable[[int], Awaitable[int]]] = None,
         purge_expired_statuses: Optional[Callable[[], Awaitable[int]]] = None,
+        purge_old_wish_teams: Optional[Callable[[int], Awaitable[int]]] = None,
         cleanup_expired_gifts: Optional[Callable[..., Awaitable[int]]] = None,
         notify_gift_timeout: Optional[Callable[[str, str], Awaitable[None]]] = None,
         backup_db: Optional[Callable[[Path], Awaitable[None]]] = None,
         wager_tick: Optional[Callable[[], Awaitable[None]]] = None,
+        wish_tick: Optional[Callable[[], Awaitable[None]]] = None,
     ):
         """注入各类回调与配置读取器；真正的定时任务在 start() 中创建。
 
@@ -37,14 +39,17 @@ class SchedulerService:
         self._purge_score_history = purge_score_history
         self._purge_daily_tables = purge_daily_tables
         self._purge_expired_statuses = purge_expired_statuses
+        self._purge_old_wish_teams = purge_old_wish_teams
         self._cleanup_expired_gifts = cleanup_expired_gifts
         self._notify_gift_timeout = notify_gift_timeout
         self._backup_db = backup_db
         self._wager_tick = wager_tick
+        self._wish_tick = wish_tick
         self._get_config = get_config
         self._backup_task: Optional[asyncio.Task] = None
         self._gift_cleanup_task: Optional[asyncio.Task] = None
         self._wager_task: Optional[asyncio.Task] = None
+        self._wish_task: Optional[asyncio.Task] = None
         self._running = False
 
     async def start(self):
@@ -54,12 +59,14 @@ class SchedulerService:
         self._gift_cleanup_task = asyncio.create_task(self._gift_cleanup_loop())
         if self._wager_tick is not None:
             self._wager_task = asyncio.create_task(self._wager_loop())
+        if self._wish_tick is not None:
+            self._wish_task = asyncio.create_task(self._wish_loop())
         logger.info("SchedulerService: tasks started")
 
     async def stop(self):
         """Stop all scheduler tasks gracefully."""
         self._running = False
-        for task in (self._backup_task, self._gift_cleanup_task, self._wager_task):
+        for task in (self._backup_task, self._gift_cleanup_task, self._wager_task, self._wish_task):
             if task:
                 task.cancel()
                 try:
@@ -123,6 +130,16 @@ class SchedulerService:
                     except Exception as e:
                         logger.error(f"Status purge error: {e}")
 
+                # Purge finished wish teams (history retention)
+                if self._purge_old_wish_teams:
+                    retention = cfg_get(config, "wish_history_retention_days")
+                    try:
+                        deleted = await self._purge_old_wish_teams(retention)
+                        if deleted > 0:
+                            logger.info(f"Purged {deleted} old wish teams (>{retention} days)")
+                    except Exception as e:
+                        logger.error(f"Wish team purge error: {e}")
+
                 # 执行成功才记日期：中途失败会在下个周期（10 分钟后）重试，
                 # 而不是把当天的备份与清理整个跳过。
                 # 备份失败同样不记：否则「自动备份开着」会安静地变成
@@ -152,6 +169,22 @@ class SchedulerService:
             except Exception as e:
                 logger.error(f"Wager tick error: {e}")
             await asyncio.sleep(5)
+
+    async def _wish_loop(self):
+        """每 30 秒看一眼祈愿试炼：缺人提醒、超时解散。
+
+        提醒是分钟级的、超时上限默认 45 分钟，30 秒的粒度足够；判断与文案都在插件侧
+        （`WishCommandsMixin._wish_tick`），调度器只负责"按时叫醒它"。
+        """
+        while self._running:
+            try:
+                if self._wish_tick:
+                    await self._wish_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Wish tick error: {e}")
+            await asyncio.sleep(30)
 
     async def _gift_cleanup_loop(self):
         """Loop that cleans up expired pending gifts every 60 seconds."""

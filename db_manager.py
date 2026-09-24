@@ -31,6 +31,31 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 MIGRATION_ITEM_NAMES = "item_names_star_suffix"
 MIGRATION_ITEM_GRADE = "player_items_grade_split"
 
+# player_statuses.source 的取值：祈愿组队写进去的状态。
+# NULL 表示诸神手工添加——两者在表里同名同形，只能靠这一列分辨。
+STATUS_SOURCE_WISH = "wish"
+
+# wish_teams.status 的取值。departed 在 expire_at 之前仍是「活的」：
+# 名单可增删，成员状态随之同步（见 db_manager 的祈愿试炼一节）。
+WISH_RECRUITING = "recruiting"   # 招募中
+WISH_DEPARTED = "departed"       # 已发车
+WISH_DISBANDED = "disbanded"     # 已解散
+WISH_VOIDED = "voided"           # 名额已满，未能成行
+
+# 队名自动加序号的尝试上限。实际用不到这么多：同一名额日期的队伍数同时受
+# 「群内招募中上限」与「该日期名额」限制，加序号只是为了绕开诸神改过的名字。
+WISH_NAME_ATTEMPTS = 20
+
+
+def _utc_now_stamp() -> str:
+    """当前 UTC 时间戳字符串（与 expire_at / CURRENT_TIMESTAMP 同一格式）。"""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _utc_stamp_after(days: float) -> str:
+    """days 天之后的 UTC 时间戳字符串。"""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
 from astrbot_plugin_faith_ladder.models import Player, FAITH_TO_PATH
 
 try:
@@ -138,6 +163,7 @@ class DatabaseManager:
                 status_name TEXT NOT NULL,
                 expire_at TIMESTAMP NOT NULL,
                 block_actions TEXT DEFAULT NULL,
+                source TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, player_id, status_name)
             );
@@ -200,6 +226,67 @@ class DatabaseManager:
                 name TEXT PRIMARY KEY,
                 applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- 祈愿试炼（组队）。详见本文件末尾「祈愿试炼」一节。
+            --
+            -- slot_date  = 开团日 + 状态天数（北京日期），是「名额」与「每人每 slot
+            --              只能参与一次」的归属键；
+            -- create_date = 开团日（北京日期），只管两项每日开团次数上限。
+            -- 两者只差几天却都叫「日期」，读写时务必不要混用。
+            -- expire_at  = 发车时定下的到期时间，是**全队成员状态的唯一事实来源**
+            --              （不是各自 now+days，否则补位进来的人会比队友晚到期）。
+            CREATE TABLE IF NOT EXISTS wish_teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                capacity INTEGER NOT NULL CHECK (capacity > 1),
+                leader_id TEXT NOT NULL,
+                leader_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'recruiting',
+                slot_date TEXT NOT NULL,
+                create_date TEXT NOT NULL,
+                expire_at TIMESTAMP DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                departed_at TIMESTAMP DEFAULT NULL,
+                last_reminded_at TIMESTAMP DEFAULT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wish_teams_group_status
+                ON wish_teams(group_id, status);
+            CREATE INDEX IF NOT EXISTS idx_wish_teams_slot
+                ON wish_teams(group_id, slot_date, status);
+            -- 队名群内**全局唯一**（不是只在招募中唯一）：队名同时是状态名和
+            -- `祈愿加入` / `祈愿管理` 的定位键，而已发车的队伍在 3 天窗口内仍可被
+            -- 加入与管理。若只约束招募中，就会出现「一个名字对应两支可操作的队」，
+            -- 定位直接歧义。
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_wish_teams_name
+                ON wish_teams(group_id, name);
+
+            CREATE TABLE IF NOT EXISTS wish_team_members (
+                team_id INTEGER NOT NULL,
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                player_name TEXT NOT NULL,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (team_id, player_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_wish_members_player
+                ON wish_team_members(group_id, player_id);
+
+            -- 每人每天开团次数（主键去重：插入成功即占到一个名额）
+            CREATE TABLE IF NOT EXISTS wish_daily_creates (
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                create_date TEXT NOT NULL,
+                PRIMARY KEY (group_id, player_id, create_date)
+            );
+
+            -- 本群每天开团次数（靠 UPDATE ... WHERE count < ? 的 rowcount 认领）
+            CREATE TABLE IF NOT EXISTS wish_daily_group_creates (
+                group_id TEXT NOT NULL,
+                create_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (group_id, create_date)
+            );
         """)
         await self._db.commit()
 
@@ -240,6 +327,9 @@ class DatabaseManager:
         # Migrate: add block_actions column to player_statuses（状态阻断）
         await self._migrate_status_block_actions()
 
+        # Migrate: add source column to player_statuses（状态来源，祈愿组队用）
+        await self._migrate_status_source()
+
     # === 一次性数据迁移记账 ===
 
     async def _migration_done(self, name: str) -> bool:
@@ -275,6 +365,24 @@ class DatabaseManager:
             )
             await self._db.commit()
             logger.info("[Migration] Added block_actions column to player_statuses")
+
+    async def _migrate_status_source(self):
+        """给 player_statuses 加 source 列（状态来源：'wish' = 祈愿组队写入，NULL = 诸神添加）。
+
+        为什么要记来源：祈愿试炼的成员状态与诸神手工加的状态在表里长得一模一样
+        （状态名就是队名），而「每名玩家最多保留 N 条队伍状态」「队伍名单变化时
+        撤销对应状态」都需要准确认出哪些行是队伍写进去的。靠名字或前缀识别都不
+        可靠——诸神可以给队伍改名，也可以手写一个同名状态。
+        """
+        async with self._db.execute("PRAGMA table_info(player_statuses)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if "source" not in columns:
+            await self._db.execute(
+                "ALTER TABLE player_statuses ADD COLUMN source TEXT DEFAULT NULL"
+            )
+            await self._db.commit()
+            logger.info("[Migration] Added source column to player_statuses")
 
     async def _migrate_oathbreaker(self):
         """Add oathbreaker column to players table if it doesn't exist."""
@@ -1356,9 +1464,9 @@ class DatabaseManager:
         return cursor.rowcount
 
     async def purge_daily_tables(self, retention_days: int = 90) -> int:
-        """删除超过 retention_days 的每日状态记录（赠送接受次数、祷词触发）。
+        """删除超过 retention_days 的每日状态记录（赠送接受次数、祷词触发、开团次数）。
 
-        这两张表按「北京日期」存 `YYYY-MM-DD` 字符串，可直接按字典序比较。
+        这些表按「北京日期」存 `YYYY-MM-DD` 字符串，可直接按字典序比较。
         此前从未清理过：每次接受道具一行、每人每天一行，随使用量无限增长。
         同样由调度器每日调用，故自行 commit。
         """
@@ -1369,6 +1477,14 @@ class DatabaseManager:
         deleted = cursor.rowcount
         cursor = await self._db.execute(
             "DELETE FROM prayer_daily_hits WHERE hit_date < ?", (cutoff,)
+        )
+        deleted += cursor.rowcount
+        cursor = await self._db.execute(
+            "DELETE FROM wish_daily_creates WHERE create_date < ?", (cutoff,)
+        )
+        deleted += cursor.rowcount
+        cursor = await self._db.execute(
+            "DELETE FROM wish_daily_group_creates WHERE create_date < ?", (cutoff,)
         )
         deleted += cursor.rowcount
         await self._db.commit()
@@ -1532,6 +1648,7 @@ class DatabaseManager:
     async def add_status(
         self, group_id: str, player_id: str, status_name: str, days: int,
         block_actions: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> None:
         """添加状态。从当前时间开始持续 days 天。
 
@@ -1540,27 +1657,33 @@ class DatabaseManager:
 
         block_actions：None = 保持原有阻断项不变（续期时不顺带清掉）；
         字符串 = 覆盖（空串表示清除阻断）。存的是逗号分隔的动作 id。
+
+        source：只在**插入新行**时写入，命中已有行时不参与更新。来源是"这条状态
+        归谁管"，续期不该改变它——诸神给一条队伍状态续期，不该把它从祈愿组队手里
+        收走，反向同理。（祈愿组队自己挂状态用的是 set_wish_status_until。）
         """
         if days <= 0:
             return
         from datetime import datetime, timedelta, timezone
         expire_at = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        if block_actions is None:
-            await self._db.execute(
-                "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
-                "expire_at = excluded.expire_at",
-                (group_id, player_id, status_name, expire_at)
-            )
-        else:
-            await self._db.execute(
-                "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at, block_actions) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
-                "expire_at = excluded.expire_at, block_actions = excluded.block_actions",
-                (group_id, player_id, status_name, expire_at, block_actions)
-            )
+
+        columns = ["group_id", "player_id", "status_name", "expire_at"]
+        values = [group_id, player_id, status_name, expire_at]
+        updates = ["expire_at = excluded.expire_at"]
+        if block_actions is not None:
+            columns.append("block_actions")
+            values.append(block_actions)
+            updates.append("block_actions = excluded.block_actions")
+        if source is not None:
+            columns.append("source")
+            values.append(source)
+
+        await self._db.execute(
+            f"INSERT INTO player_statuses ({', '.join(columns)}) "
+            f"VALUES ({', '.join('?' * len(values))}) "
+            f"ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET {', '.join(updates)}",
+            tuple(values),
+        )
 
     async def remove_status(self, group_id: str, player_id: str, status_name: str) -> bool:
         """移除指定状态。返回是否成功找到。"""
@@ -1577,6 +1700,90 @@ class DatabaseManager:
             (group_id, player_id)
         )
         return cursor.rowcount
+
+    async def _select_status_expiry(
+        self, group_id: str, player_id: str, status_name: str, source_filter: Optional[str] = None
+    ) -> Optional[str]:
+        """取某条状态的 expire_at；不存在返回 None。可按来源过滤。"""
+        sql = (
+            "SELECT expire_at FROM player_statuses "
+            "WHERE group_id = ? AND player_id = ? AND status_name = ?"
+        )
+        params = [group_id, player_id, status_name]
+        if source_filter is not None:
+            sql += " AND source = ?"
+            params.append(source_filter)
+        async with self._db.execute(sql, tuple(params)) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def _rename_status_core(
+        self,
+        group_id: str,
+        player_id: str,
+        old_name: str,
+        new_name: str,
+        source_filter: Optional[str] = None,
+    ) -> str:
+        """改状态名的内核。返回 `not_found` / `ok` / `merged`。不提交。
+
+        为什么必须**先查后改**：status_name 是主键的一部分。SQLite 允许 UPDATE
+        主键列，但结果一旦与另一行撞主键，整条语句直接失败——所以得先知道目标名
+        是否存在。
+
+        合并规则：目标行的 expire_at 抬到两者中更晚的一个，block_actions 与 source
+        保留**目标行原有的**。到期取更晚是为了不让改名缩短惩罚；阻断项同理——它属于
+        那条惩罚本身，不该因为改名而被清掉。
+
+        source_filter：只改「旧名那一行」的来源（队伍改名时用它锁定 `wish` 状态，
+        免得把诸神手写的同名状态搬走）。**目标名的查重不带过滤**——目标行是谁的
+        都算撞名，必须走合并，否则原地改名会撞主键。
+        """
+        if not old_name or not new_name:
+            return "not_found"
+
+        old_expiry = await self._select_status_expiry(
+            group_id, player_id, old_name, source_filter
+        )
+        if old_expiry is None:
+            return "not_found"
+
+        new_expiry = await self._select_status_expiry(group_id, player_id, new_name)
+        if old_name == new_name or new_expiry is None:
+            # 原地改名（old == new 时这条 UPDATE 是空操作，省一次判断分支）
+            sql = (
+                "UPDATE player_statuses SET status_name = ? "
+                "WHERE group_id = ? AND player_id = ? AND status_name = ?"
+            )
+            params = [new_name, group_id, player_id, old_name]
+            if source_filter is not None:
+                sql += " AND source = ?"
+                params.append(source_filter)
+            await self._db.execute(sql, tuple(params))
+            return "ok"
+
+        await self._db.execute(
+            "UPDATE player_statuses SET expire_at = ? "
+            "WHERE group_id = ? AND player_id = ? AND status_name = ?",
+            (max(old_expiry, new_expiry), group_id, player_id, new_name),
+        )
+        sql = "DELETE FROM player_statuses WHERE group_id = ? AND player_id = ? AND status_name = ?"
+        params = [group_id, player_id, old_name]
+        if source_filter is not None:
+            sql += " AND source = ?"
+            params.append(source_filter)
+        await self._db.execute(sql, tuple(params))
+        return "merged"
+
+    async def rename_status(
+        self, group_id: str, player_id: str, old_name: str, new_name: str
+    ) -> str:
+        """把一条状态改名，保留 expire_at / block_actions / source。返回结果码。
+
+        结果码：`not_found`（旧名不存在）/ `ok`（原地改名）/ `merged`（目标名已存在，
+        两条并为一条）。调用方负责 commit（与 add_status / remove_status 一致）。
+        """
+        return await self._rename_status_core(group_id, player_id, old_name, new_name)
 
     async def get_all_players_in_group(self, group_id: str) -> List[Player]:
         """获取群内所有玩家（用于批量计算排名）。"""
@@ -1595,7 +1802,7 @@ class DatabaseManager:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         placeholders = ','.join('?' * len(player_ids))
         query = (
-            f"SELECT player_id, status_name, expire_at, block_actions FROM player_statuses "
+            f"SELECT player_id, status_name, expire_at, block_actions, source FROM player_statuses "
             f"WHERE group_id = ? AND player_id IN ({placeholders}) AND expire_at > ? "
             f"ORDER BY player_id, expire_at"
         )
@@ -1603,11 +1810,11 @@ class DatabaseManager:
             rows = await cursor.fetchall()
         # 按 player_id 分组
         result_map = {}
-        for pid, sname, exp, block_actions in rows:
+        for pid, sname, exp, block_actions, source in rows:
             remaining = self._calc_remaining_days(exp)
             result_map.setdefault(pid, []).append({
                 "status_name": sname, "expire_at": exp, "remaining_days": remaining,
-                "block_actions": block_actions,
+                "block_actions": block_actions, "source": source,
             })
         return [(pid, result_map.get(pid, [])) for pid in player_ids]
 
@@ -1623,11 +1830,15 @@ class DatabaseManager:
         return max(0, delta.days + (1 if delta.seconds > 0 else 0))
 
     async def get_player_statuses(self, group_id: str, player_id: str) -> list:
-        """获取玩家未过期的状态列表。返回 [{"status_name": str, "expire_at": str, "remaining_days": int}, ...]"""
+        """获取玩家未过期的状态列表。
+
+        返回 [{"status_name", "expire_at", "remaining_days", "block_actions", "source"}, ...]
+        source 为 'wish' 表示这条状态由祈愿组队写入（见 STATUS_SOURCE_WISH）。
+        """
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         async with self._db.execute(
-            "SELECT status_name, expire_at, block_actions FROM player_statuses "
+            "SELECT status_name, expire_at, block_actions, source FROM player_statuses "
             "WHERE group_id = ? AND player_id = ? AND expire_at > ? "
             "ORDER BY expire_at",
             (group_id, player_id, now)
@@ -1639,6 +1850,7 @@ class DatabaseManager:
                 "expire_at": r[1],
                 "remaining_days": self._calc_remaining_days(r[1]),
                 "block_actions": r[2],
+                "source": r[3],
             }
             for r in rows
         ]
@@ -1931,6 +2143,772 @@ class DatabaseManager:
             await self.rollback()
             logger.error(f"[Gift] 记录接受道具次数失败: {e}")
             return False
+
+
+    # === 祈愿试炼（组队）===
+    #
+    # 模型：队伍发车后在 expire_at 之前是「活的」——名单可增删，成员状态随之同步。
+    # 状态名 = 队名，到期时间 = **队伍的 expire_at**（不是各自 now + days），所以
+    # 队伍的 expire_at 是全队状态的唯一事实来源：发车、补位、换人三条授予路径都必须
+    # 写它，任何一处误用 now + days 都会让队友之间的到期时间漂开，「队名 = 同一场
+    # 试炼」就不成立了。
+    #
+    # 每个对外方法都是一次完整操作：内部开一个 transaction()，把名单改动与状态改动
+    # 一起提交，不允许留下「名单改了、状态没跟上」的中间态。
+
+    _WISH_TEAM_COLUMNS = (
+        "id, group_id, name, capacity, leader_id, leader_name, status, "
+        "slot_date, create_date, expire_at, created_at, departed_at, last_reminded_at"
+    )
+
+    # ── 内部辅助（只在 transaction() 内调用，不自行提交）──
+
+    @staticmethod
+    def _row_to_wish_team(row) -> dict:
+        return {
+            "team_id": row[0], "group_id": row[1], "name": row[2], "capacity": row[3],
+            "leader_id": row[4], "leader_name": row[5], "status": row[6],
+            "slot_date": row[7], "create_date": row[8], "expire_at": row[9],
+            "created_at": row[10], "departed_at": row[11], "last_reminded_at": row[12],
+        }
+
+    async def _wish_team_row(self, team_id: int) -> Optional[dict]:
+        async with self._db.execute(
+            f"SELECT {self._WISH_TEAM_COLUMNS} FROM wish_teams WHERE id = ?", (team_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_wish_team(row) if row else None
+
+    async def _wish_members(self, team_id: int) -> List[dict]:
+        """队员，按加入顺序。
+
+        排序键必须带 rowid：`joined_at` 是 TIMESTAMP，只有秒级精度，而一支队伍
+        通常在几秒内凑齐——同一秒加入的人若只按 player_id 兜底，顺序就退化成
+        字符比较；「队长交接到最早加入的剩余成员」会因此挑错人。rowid 随插入
+        递增，是这里唯一靠得住的顺序依据。
+        """
+        async with self._db.execute(
+            "SELECT player_id, player_name FROM wish_team_members "
+            "WHERE team_id = ? ORDER BY joined_at, rowid",
+            (team_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [{"player_id": r[0], "player_name": r[1]} for r in rows]
+
+    async def _wish_team_with_members(self, team_id: int) -> Optional[dict]:
+        team = await self._wish_team_row(team_id)
+        if team is None:
+            return None
+        team["members"] = await self._wish_members(team_id)
+        return team
+
+    async def _wish_is_member(self, team_id: int, player_id: str) -> bool:
+        async with self._db.execute(
+            "SELECT 1 FROM wish_team_members WHERE team_id = ? AND player_id = ?",
+            (team_id, player_id),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def _wish_status_expiry(
+        self, group_id: str, player_id: str, status_name: str
+    ) -> Optional[str]:
+        """该玩家名下这个状态名是否还有效（未过期）；有则返回 expire_at。
+
+        不按来源过滤：诸神手写的同名状态同样会挡住加入（见「同名状态下不能加入」）。
+        """
+        async with self._db.execute(
+            "SELECT expire_at FROM player_statuses "
+            "WHERE group_id = ? AND player_id = ? AND status_name = ? AND expire_at > ?",
+            (group_id, player_id, status_name, _utc_now_stamp()),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    @staticmethod
+    def _wish_window_open(team: dict) -> bool:
+        """已发车队伍的 3 天窗口是否还开着（窗口内名单可增删）。"""
+        expire_at = team.get("expire_at")
+        return bool(expire_at) and expire_at > _utc_now_stamp()
+
+    async def _wish_active_team_for_player(
+        self, group_id: str, player_id: str, exclude_team_id: Optional[int] = None
+    ) -> Optional[dict]:
+        """该玩家在本群进行中的队伍：招募中，或已发车但窗口未关。"""
+        sql = (
+            "SELECT t.id FROM wish_teams t JOIN wish_team_members m ON m.team_id = t.id "
+            "WHERE t.group_id = ? AND m.player_id = ? "
+            "AND (t.status = ? OR (t.status = ? AND t.expire_at > ?))"
+        )
+        params: list = [group_id, player_id, WISH_RECRUITING, WISH_DEPARTED, _utc_now_stamp()]
+        if exclude_team_id is not None:
+            sql += " AND t.id != ?"
+            params.append(exclude_team_id)
+        sql += " ORDER BY t.id LIMIT 1"
+        async with self._db.execute(sql, tuple(params)) as cursor:
+            row = await cursor.fetchone()
+        return await self._wish_team_row(row[0]) if row else None
+
+    async def _wish_participated_in_slot(
+        self, group_id: str, player_id: str, slot_date: str
+    ) -> bool:
+        """该玩家是否已在名额日期为 slot_date 的队伍里发过车。
+
+        「同一玩家同一 slot_date 只能参与一次」——周四那支日期有 2 个名额，两支队伍的
+        默认队名不同，靠同名状态检查拦不住同一个人先后吃掉两个名额。
+        被诸神移出（状态已撤销）之后可以再参加：名额按队伍算，人不再占着它。
+        """
+        async with self._db.execute(
+            "SELECT 1 FROM wish_teams t JOIN wish_team_members m ON m.team_id = t.id "
+            "WHERE t.group_id = ? AND m.player_id = ? AND t.slot_date = ? AND t.status = ? "
+            "LIMIT 1",
+            (group_id, player_id, slot_date, WISH_DEPARTED),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def _wish_grant_status(
+        self, group_id: str, player_id: str, team_name: str, expire_at: str
+    ) -> None:
+        """按队伍的到期时间挂状态，**绝不缩短**已有的更晚状态。
+
+        不走 add_status：后者是 now + days，会给补位进来的人算出一个比队友晚的
+        到期时间，也会把一条更晚的同名状态写短。block_actions 与 source 都不在更新
+        列表里——阻断项不属于队伍状态，来源更不该被覆盖。
+        """
+        await self._db.execute(
+            "INSERT INTO player_statuses (group_id, player_id, status_name, expire_at, source) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(group_id, player_id, status_name) DO UPDATE SET "
+            "expire_at = max(expire_at, excluded.expire_at)",
+            (group_id, player_id, team_name, expire_at, STATUS_SOURCE_WISH),
+        )
+
+    async def _wish_revoke_status(self, group_id: str, player_id: str, status_name: str) -> int:
+        """撤销队伍写进去的那条状态。
+
+        只认 source='wish'：诸神手写的同名状态不归队伍管，名单变化不该动它。
+        """
+        cursor = await self._db.execute(
+            "DELETE FROM player_statuses WHERE group_id = ? AND player_id = ? "
+            "AND status_name = ? AND source = ?",
+            (group_id, player_id, status_name, STATUS_SOURCE_WISH),
+        )
+        return cursor.rowcount
+
+    async def _wish_trim_statuses(self, group_id: str, player_id: str, keep: int) -> int:
+        """同一玩家最多保留 keep 条队伍状态，超出的按到期时间从早到晚删掉。"""
+        if keep <= 0:
+            return 0
+        async with self._db.execute(
+            "SELECT status_name FROM player_statuses "
+            "WHERE group_id = ? AND player_id = ? AND source = ? "
+            "ORDER BY expire_at DESC, status_name",
+            (group_id, player_id, STATUS_SOURCE_WISH),
+        ) as cursor:
+            names = [r[0] for r in await cursor.fetchall()]
+        excess = names[keep:]
+        if not excess:
+            return 0
+        placeholders = ", ".join("?" * len(excess))
+        cursor = await self._db.execute(
+            f"DELETE FROM player_statuses WHERE group_id = ? AND player_id = ? AND source = ? "
+            f"AND status_name IN ({placeholders})",
+            (group_id, player_id, STATUS_SOURCE_WISH, *excess),
+        )
+        return cursor.rowcount
+
+    async def _wish_sync_statuses(self, team: dict, keep: int) -> None:
+        """把全队成员的状态同步到队伍的 expire_at（发车与延期共用一条路径）。"""
+        for member in await self._wish_members(team["team_id"]):
+            await self._wish_grant_status(
+                team["group_id"], member["player_id"], team["name"], team["expire_at"]
+            )
+            await self._wish_trim_statuses(team["group_id"], member["player_id"], keep)
+
+    async def _wish_mark(self, team_id: int, status: str, expect: str) -> bool:
+        """条件更新队伍状态，凭 rowcount 认领（并发下只有一个调用者能成功）。"""
+        cursor = await self._db.execute(
+            "UPDATE wish_teams SET status = ? WHERE id = ? AND status = ?",
+            (status, team_id, expect),
+        )
+        return cursor.rowcount > 0
+
+    async def _wish_promote_leader(self, team_id: int, team: dict) -> None:
+        """队长不在了就把最早加入的剩余成员升为队长（队伍必须有人能解散）。"""
+        remaining = await self._wish_members(team_id)
+        if not remaining:
+            return
+        new_leader = remaining[0]
+        await self._db.execute(
+            "UPDATE wish_teams SET leader_id = ?, leader_name = ? WHERE id = ?",
+            (new_leader["player_id"], new_leader["player_name"], team_id),
+        )
+
+    async def _wish_remove_member_core(
+        self, team_id: int, group_id: str, player_id: str
+    ) -> Tuple[str, Optional[dict]]:
+        """移出成员 + 撤销其状态 + 队长交接 + 空队收尾。调用方负责事务。"""
+        team = await self._wish_team_row(team_id)
+        if team is None or team["group_id"] != group_id:
+            return "not_found", None
+        if not await self._wish_is_member(team_id, player_id):
+            return "not_member", team
+
+        await self._db.execute(
+            "DELETE FROM wish_team_members WHERE team_id = ? AND player_id = ?",
+            (team_id, player_id),
+        )
+        # 招募中的成员本来没有状态，这条 DELETE 是幂等的空操作；已发车的成员则
+        # 必须撤——名单驱动，人走了状态就该走
+        await self._wish_revoke_status(group_id, player_id, team["name"])
+
+        if not await self._wish_members(team_id):
+            await self._wish_mark(team_id, WISH_DISBANDED, team["status"])
+        elif team["leader_id"] == player_id:
+            await self._wish_promote_leader(team_id, team)
+        return "ok", await self._wish_team_with_members(team_id)
+
+    async def _wish_insert_team_with_unique_name(
+        self, group_id: str, base_name: str, capacity: int, leader_id: str,
+        leader_name: str, slot_date: str, create_date: str,
+    ) -> Optional[int]:
+        """插队伍行；队名已占用时按序号往后试（队名群内全局唯一）。"""
+        for index in range(WISH_NAME_ATTEMPTS):
+            name = base_name if index == 0 else f"{base_name}{index + 1}"
+            try:
+                cursor = await self._db.execute(
+                    "INSERT INTO wish_teams "
+                    "(group_id, name, capacity, leader_id, leader_name, slot_date, create_date, "
+                    " last_reminded_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (group_id, name, capacity, leader_id, leader_name, slot_date, create_date),
+                )
+                return cursor.lastrowid
+            except aiosqlite.IntegrityError:
+                continue
+        return None
+
+    # ── 查询 ──
+
+    async def slot_usage(self, group_id: str, slot_date: str) -> int:
+        """该名额日期已经发车的队伍数（名额计数的事实来源）。"""
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM wish_teams WHERE group_id = ? AND slot_date = ? AND status = ?",
+            (group_id, slot_date, WISH_DEPARTED),
+        ) as cursor:
+            return (await cursor.fetchone())[0]
+
+    async def list_wish_teams(
+        self, group_id: str, statuses, limit: Optional[int] = None
+    ) -> List[dict]:
+        """按状态列出队列（含成员）。limit 只截断返回条数，不影响任何计数。"""
+        statuses = tuple(statuses)
+        if not statuses:
+            return []
+        placeholders = ", ".join("?" * len(statuses))
+        sql = (
+            f"SELECT {self._WISH_TEAM_COLUMNS} FROM wish_teams "
+            f"WHERE group_id = ? AND status IN ({placeholders}) ORDER BY id"
+        )
+        params: list = [group_id, *statuses]
+        if limit is not None and limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with self._db.execute(sql, tuple(params)) as cursor:
+            teams = [self._row_to_wish_team(r) for r in await cursor.fetchall()]
+        if not teams:
+            return []
+
+        # 成员一次取回，避免每支队查一遍（列表会被大厅/管理列表反复调用）
+        ids = [t["team_id"] for t in teams]
+        id_placeholders = ", ".join("?" * len(ids))
+        async with self._db.execute(
+            f"SELECT team_id, player_id, player_name FROM wish_team_members "
+            f"WHERE team_id IN ({id_placeholders}) ORDER BY team_id, joined_at, rowid",
+            tuple(ids),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        by_team: dict = {team_id: [] for team_id in ids}
+        for team_id, player_id, player_name in rows:
+            by_team[team_id].append({"player_id": player_id, "player_name": player_name})
+        for team in teams:
+            team["members"] = by_team[team["team_id"]]
+        return teams
+
+    async def get_open_wish_teams(self, group_id: str) -> List[dict]:
+        """本群招募中的队伍（含成员）。"""
+        return await self.list_wish_teams(group_id, (WISH_RECRUITING,))
+
+    async def get_wish_team(self, team_id: int) -> Optional[dict]:
+        """队伍 + 成员。"""
+        return await self._wish_team_with_members(team_id)
+
+    async def get_wish_team_by_name(self, group_id: str, name: str) -> Optional[dict]:
+        """按队名定位（队名群内全局唯一，所以不会有歧义）。"""
+        async with self._db.execute(
+            "SELECT id FROM wish_teams WHERE group_id = ? AND name = ?", (group_id, name)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return await self._wish_team_with_members(row[0]) if row else None
+
+    async def get_player_active_wish_team(
+        self, group_id: str, player_id: str
+    ) -> Optional[dict]:
+        """该玩家进行中的队伍（招募中，或窗口未关的已发车队伍）+ 成员。"""
+        team = await self._wish_active_team_for_player(group_id, player_id)
+        return await self._wish_team_with_members(team["team_id"]) if team else None
+
+    # ── 玩家侧写入 ──
+
+    async def create_wish_team(
+        self, group_id: str, base_name: str, capacity: int, leader_id: str,
+        leader_name: str, slot_date: str, create_date: str,
+        recruiting_limit: int, per_player_limit: int, per_group_limit: int,
+    ) -> Tuple[Optional[int], str]:
+        """开一支招募中的队伍并让开团者自动入座。返回 (team_id, 结果码)。
+
+        结果码：`ok` / `already_in_team` / `too_many_teams` / `daily_limit` /
+        `group_daily_limit` / `name_taken`。
+
+        检查顺序固定，且**任何前置检查失败都不消耗当天名额**：占名额是最后一步，
+        否则「本群已有队伍在招募」会白吃掉开团者当天唯一的一次机会。
+        """
+        async with self.transaction():
+            if await self._wish_active_team_for_player(group_id, leader_id):
+                return None, "already_in_team"
+
+            if recruiting_limit > 0:
+                async with self._db.execute(
+                    "SELECT COUNT(*) FROM wish_teams WHERE group_id = ? AND status = ?",
+                    (group_id, WISH_RECRUITING),
+                ) as cursor:
+                    if (await cursor.fetchone())[0] >= recruiting_limit:
+                        return None, "too_many_teams"
+
+            if per_player_limit > 0:
+                try:
+                    await self._db.execute(
+                        "INSERT INTO wish_daily_creates (group_id, player_id, create_date) "
+                        "VALUES (?, ?, ?)",
+                        (group_id, leader_id, create_date),
+                    )
+                except aiosqlite.IntegrityError:
+                    return None, "daily_limit"
+
+            if per_group_limit > 0:
+                # 先试 +1（行已存在且未满），再试插入（行还不存在）；
+                # 两者都失败说明已达上限
+                cursor = await self._db.execute(
+                    "UPDATE wish_daily_group_creates SET count = count + 1 "
+                    "WHERE group_id = ? AND create_date = ? AND count < ?",
+                    (group_id, create_date, per_group_limit),
+                )
+                if cursor.rowcount == 0:
+                    try:
+                        await self._db.execute(
+                            "INSERT INTO wish_daily_group_creates "
+                            "(group_id, create_date, count) VALUES (?, ?, 1)",
+                            (group_id, create_date),
+                        )
+                    except aiosqlite.IntegrityError:
+                        return None, "group_daily_limit"
+
+            team_id = await self._wish_insert_team_with_unique_name(
+                group_id, base_name, capacity, leader_id, leader_name, slot_date, create_date
+            )
+            if team_id is None:
+                return None, "name_taken"
+
+            await self._db.execute(
+                "INSERT INTO wish_team_members (team_id, group_id, player_id, player_name) "
+                "VALUES (?, ?, ?, ?)",
+                (team_id, group_id, leader_id, leader_name),
+            )
+            return team_id, "ok"
+
+    async def join_wish_team(
+        self, team_id: int, group_id: str, player_id: str, player_name: str,
+        slot_limit: int, status_days: int, keep_statuses: int,
+    ) -> Tuple[str, Optional[dict]]:
+        """加入招募中的队伍，或补位已发车队伍的空位。返回 (结果码, 队伍含成员)。
+
+        结果码：
+          `joined`            加入招募中的队伍（还没满员）
+          `departed`          这次加入正好满员且抢到名额 → 已给全员挂状态
+          `replenished`       补位到已发车队伍 → 已给本人按队伍到期时间挂状态
+          `already_member`    已经是成员（重复点「祈愿加入」不该报错）
+          `not_found` / `window_closed` / `voided` / `disbanded` / `full` /
+          `name_conflict` / `already_in_slot` / `already_in_other_team` / `no_slot`
+        """
+        async with self.transaction():
+            team = await self._wish_team_row(team_id)
+            if team is None or team["group_id"] != group_id:
+                return "not_found", None
+
+            status = team["status"]
+            if status == WISH_DEPARTED:
+                if not self._wish_window_open(team):
+                    return "window_closed", await self._wish_team_with_members(team_id)
+            elif status != WISH_RECRUITING:
+                return status, await self._wish_team_with_members(team_id)
+
+            if await self._wish_is_member(team_id, player_id):
+                return "already_member", await self._wish_team_with_members(team_id)
+
+            if await self._wish_status_expiry(group_id, player_id, team["name"]):
+                return "name_conflict", None
+            if await self._wish_participated_in_slot(group_id, player_id, team["slot_date"]):
+                return "already_in_slot", None
+            if await self._wish_active_team_for_player(
+                group_id, player_id, exclude_team_id=team_id
+            ):
+                return "already_in_other_team", None
+
+            members = await self._wish_members(team_id)
+            if len(members) >= team["capacity"]:
+                return "full", await self._wish_team_with_members(team_id)
+
+            if status == WISH_RECRUITING and slot_limit > 0:
+                # 名额已用尽时直接劝退，别让人白等 45 分钟
+                if await self.slot_usage(group_id, team["slot_date"]) >= slot_limit:
+                    return "no_slot", await self._wish_team_with_members(team_id)
+
+            await self._db.execute(
+                "INSERT INTO wish_team_members (team_id, group_id, player_id, player_name) "
+                "VALUES (?, ?, ?, ?)",
+                (team_id, group_id, player_id, player_name),
+            )
+
+            if status == WISH_DEPARTED:
+                # 补位：按队伍的到期时间挂上，与队友同一天到期
+                await self._wish_grant_status(
+                    group_id, player_id, team["name"], team["expire_at"]
+                )
+                await self._wish_trim_statuses(group_id, player_id, keep_statuses)
+                return "replenished", await self._wish_team_with_members(team_id)
+
+            if len(members) + 1 < team["capacity"]:
+                return "joined", await self._wish_team_with_members(team_id)
+
+            # 正好满员 → 定下队伍的到期时间，并给全队挂状态
+            expire_at = _utc_stamp_after(status_days)
+            await self._db.execute(
+                "UPDATE wish_teams SET status = ?, departed_at = ?, expire_at = ? WHERE id = ?",
+                (WISH_DEPARTED, _utc_now_stamp(), expire_at, team_id),
+            )
+            team["status"] = WISH_DEPARTED
+            team["expire_at"] = expire_at
+            await self._wish_sync_statuses(team, keep_statuses)
+            return "departed", await self._wish_team_with_members(team_id)
+
+    async def leave_wish_team(
+        self, group_id: str, player_id: str
+    ) -> Tuple[str, Optional[dict]]:
+        """退出自己所在的招募中队伍。
+
+        队长退出 = 解散（队伍不能没有队长）；已发车队伍不接受成员自行退出——
+        3 天窗口内的名单变更走诸神的移出/换人。
+        结果码：`disbanded` / `left` / `not_found`。
+        """
+        async with self.transaction():
+            team = await self._wish_active_team_for_player(group_id, player_id)
+            if team is None or team["status"] != WISH_RECRUITING:
+                return "not_found", None
+
+            if team["leader_id"] == player_id:
+                await self._wish_mark(team["team_id"], WISH_DISBANDED, WISH_RECRUITING)
+                return "disbanded", await self._wish_team_with_members(team["team_id"])
+
+            code, updated = await self._wish_remove_member_core(
+                team["team_id"], group_id, player_id
+            )
+            return ("left" if code == "ok" else code), updated
+
+    # ── 诸神侧写入 ──
+
+    async def remove_wish_team_member(
+        self, team_id: int, group_id: str, player_id: str
+    ) -> Tuple[str, Optional[dict]]:
+        """把成员移出队伍（不受队长限制），并撤销他因这支队拿到的状态。
+
+        移出的是队长则把最早加入的剩余成员升为队长；队伍空了则解散。
+        结果码：`ok` / `not_found` / `not_member`。
+        """
+        async with self.transaction():
+            return await self._wish_remove_member_core(team_id, group_id, player_id)
+
+    async def swap_wish_team_member(
+        self, team_id: int, group_id: str, out_player_id: str, in_player_id: str,
+        in_player_name: str, keep_statuses: int,
+    ) -> Tuple[str, Optional[dict]]:
+        """诸神换人：把 in 换进来、out 换出去，并把「房间状态」转移过去。
+
+        转移 = 撤销 out 名下那条队伍状态 + 按**队伍的 expire_at** 给 in 挂上同样的
+        状态名与到期时间。以名单为准：即使 out 身上已经没有那条状态（比如被
+        「移除状态」清过），照样换人。
+        结果码：`ok` / `not_found` / `same_player` / `not_member` / `already_member` /
+        `in_has_team` / `in_in_slot` / `in_name_conflict`。
+        """
+        async with self.transaction():
+            team = await self._wish_team_row(team_id)
+            if team is None or team["group_id"] != group_id:
+                return "not_found", None
+            if out_player_id == in_player_id:
+                return "same_player", None
+            if not await self._wish_is_member(team_id, out_player_id):
+                return "not_member", await self._wish_team_with_members(team_id)
+            if await self._wish_is_member(team_id, in_player_id):
+                return "already_member", await self._wish_team_with_members(team_id)
+            if await self._wish_active_team_for_player(group_id, in_player_id):
+                return "in_has_team", None
+            if await self._wish_participated_in_slot(group_id, in_player_id, team["slot_date"]):
+                return "in_in_slot", None
+            if await self._wish_status_expiry(group_id, in_player_id, team["name"]):
+                return "in_name_conflict", None
+
+            await self._db.execute(
+                "DELETE FROM wish_team_members WHERE team_id = ? AND player_id = ?",
+                (team_id, out_player_id),
+            )
+            await self._db.execute(
+                "INSERT INTO wish_team_members (team_id, group_id, player_id, player_name) "
+                "VALUES (?, ?, ?, ?)",
+                (team_id, group_id, in_player_id, in_player_name),
+            )
+            await self._wish_revoke_status(group_id, out_player_id, team["name"])
+            if team["leader_id"] == out_player_id:
+                await self._db.execute(
+                    "UPDATE wish_teams SET leader_id = ?, leader_name = ? WHERE id = ?",
+                    (in_player_id, in_player_name, team_id),
+                )
+            if team["status"] == WISH_DEPARTED and self._wish_window_open(team):
+                await self._wish_grant_status(
+                    group_id, in_player_id, team["name"], team["expire_at"]
+                )
+                await self._wish_trim_statuses(group_id, in_player_id, keep_statuses)
+            return "ok", await self._wish_team_with_members(team_id)
+
+    async def extend_wish_team_expiry(
+        self, team_id: int, group_id: str, days: int, keep_statuses: int
+    ) -> Tuple[str, Optional[dict]]:
+        """整队延期：改队伍的 expire_at，再把全队状态同步到新值。
+
+        改的是**队伍**的到期时间，不是每人各自 +N 天——名单可变之后各自加会让队友
+        之间的到期时间漂开。只延不缩：days <= 0 直接拒绝。
+        结果码：`ok` / `not_found` / `invalid_days` / `not_departed`。
+        """
+        if days <= 0:
+            return "invalid_days", None
+        async with self.transaction():
+            team = await self._wish_team_row(team_id)
+            if team is None or team["group_id"] != group_id:
+                return "not_found", None
+            if team["status"] != WISH_DEPARTED or not team["expire_at"]:
+                return "not_departed", await self._wish_team_with_members(team_id)
+
+            new_expiry = (
+                datetime.strptime(team["expire_at"], "%Y-%m-%d %H:%M:%S")
+                + timedelta(days=days)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            await self._db.execute(
+                "UPDATE wish_teams SET expire_at = ? WHERE id = ?", (new_expiry, team_id)
+            )
+            team["expire_at"] = new_expiry
+            await self._wish_sync_statuses(team, keep_statuses)
+            return "ok", await self._wish_team_with_members(team_id)
+
+    async def rename_wish_team(
+        self, team_id: int, group_id: str, new_name: str
+    ) -> Tuple[str, dict]:
+        """给队伍改名（诸神是唯一的命名途径），已发车的队伍连带改成员状态名。
+
+        状态名 = 队名，所以改名必须同步到成员身上，否则会留下「队名换了、状态还挂
+        旧名」的错位。改的是状态名本身（保留 expire_at / block_actions / source），
+        不是删了重挂——重挂会洗掉剩余期限。改名不动 slot_date，所以不影响名额与
+        星期规则（名额按 slot_date 算，从不解析队名）。
+        结果码：`ok` / `not_found` / `name_taken` / `empty_name`。
+        返回的详情：{"renamed": n, "merged": m, "skipped": k}。
+        """
+        detail = {"renamed": 0, "merged": 0, "skipped": 0}
+        new_name = (new_name or "").strip()
+        if not new_name:
+            return "empty_name", detail
+
+        async with self.transaction():
+            team = await self._wish_team_row(team_id)
+            if team is None or team["group_id"] != group_id:
+                return "not_found", detail
+            old_name = team["name"]
+            if old_name == new_name:
+                return "ok", detail
+
+            try:
+                await self._db.execute(
+                    "UPDATE wish_teams SET name = ? WHERE id = ?", (new_name, team_id)
+                )
+            except aiosqlite.IntegrityError:
+                return "name_taken", detail
+
+            for member in await self._wish_members(team_id):
+                result = await self._rename_status_core(
+                    group_id, member["player_id"], old_name, new_name,
+                    source_filter=STATUS_SOURCE_WISH,
+                )
+                if result == "not_found":
+                    detail["skipped"] += 1
+                elif result == "merged":
+                    detail["merged"] += 1
+                    detail["renamed"] += 1
+                else:
+                    detail["renamed"] += 1
+            return "ok", detail
+
+    async def disband_wish_team(
+        self, team_id: int, group_id: str
+    ) -> Tuple[str, Optional[dict]]:
+        """解散队伍；已发车的队伍连带撤销全队状态。
+
+        为什么撤状态：名单驱动——队伍没了，名单上的人就不该再挂着这支队的状态。
+        （只解散招募中的队伍时没有状态可撤。）
+        结果码：`ok` / `not_found` / `not_active`。
+        """
+        async with self.transaction():
+            team = await self._wish_team_with_members(team_id)
+            if team is None or team["group_id"] != group_id:
+                return "not_found", None
+            if not await self._wish_mark(team_id, WISH_DISBANDED, team["status"]):
+                return "not_active", team
+
+            was_departed = team["status"] == WISH_DEPARTED
+            team["status"] = WISH_DISBANDED
+            if was_departed:
+                for member in team["members"]:
+                    await self._wish_revoke_status(group_id, member["player_id"], team["name"])
+            return "ok", team
+
+    async def handle_member_leave(self, group_id: str, player_id: str) -> List[dict]:
+        """退群处理：把他从进行中的队伍里移出并撤销状态。
+
+        已发车队伍也要处理——他占着一个位置，别人就补不进来，而空位本该是
+        任何人都能填的。返回被影响的队伍（供播报）。
+        """
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT t.id FROM wish_teams t JOIN wish_team_members m ON m.team_id = t.id "
+                "WHERE t.group_id = ? AND m.player_id = ? "
+                "AND (t.status = ? OR (t.status = ? AND t.expire_at > ?)) ORDER BY t.id",
+                (group_id, player_id, WISH_RECRUITING, WISH_DEPARTED, _utc_now_stamp()),
+            ) as cursor:
+                ids = [r[0] for r in await cursor.fetchall()]
+
+            affected = []
+            for team_id in ids:
+                code, team = await self._wish_remove_member_core(team_id, group_id, player_id)
+                if team is not None:
+                    team["removal_code"] = code
+                    affected.append(team)
+            return affected
+
+    # ── 调度与清理 ──
+
+    async def claim_wish_reminder(self, team_id: int, cutoff: str) -> bool:
+        """认领这次提醒，凭 rowcount 判定（写法同 paika 的 claim_reminder）。
+
+        条件更新 + rowcount 意味着并发 tick 下同一支队伍在一个提醒窗口内只会被提醒
+        一次；last_reminded_at 落在表里，插件重启后间隔照常算。
+        """
+        cursor = await self._db.execute(
+            "UPDATE wish_teams SET last_reminded_at = ? WHERE id = ? AND status = ? "
+            "AND (last_reminded_at IS NULL OR last_reminded_at <= ?)",
+            (_utc_now_stamp(), team_id, WISH_RECRUITING, cutoff),
+        )
+        await self._db.commit()
+        return cursor.rowcount == 1
+
+    async def disband_stale_wish_teams(self, cutoff: str) -> List[dict]:
+        """解散超时未发车的队伍，返回被解散的队伍与成员（供播报）。
+
+        按 created_at 扫库而不是内存计时：插件离线期间到期的队伍，下次启动的第一次
+        tick 就会清掉，不会永久卡在招募中。
+        """
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT id FROM wish_teams WHERE status = ? AND created_at <= ? ORDER BY id",
+                (WISH_RECRUITING, cutoff),
+            ) as cursor:
+                ids = [r[0] for r in await cursor.fetchall()]
+
+            affected = []
+            for team_id in ids:
+                if not await self._wish_mark(team_id, WISH_DISBANDED, WISH_RECRUITING):
+                    continue  # 已被别处解散
+                team = await self._wish_team_with_members(team_id)
+                if team:
+                    affected.append(team)
+            return affected
+
+    async def void_sibling_teams(self, group_id: str, slot_date: str) -> List[dict]:
+        """把同一名额日期里其余还在招募的队伍判为「未能成行」。
+
+        某队发车后该日期名额若已用尽，剩下的队伍即使凑满也发不了车；让它们挂着等
+        45 分钟超时（成员还蒙在鼓里）比直接宣判更糟。返回被宣判的队伍（供播报）。
+        """
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT id FROM wish_teams WHERE group_id = ? AND slot_date = ? AND status = ?",
+                (group_id, slot_date, WISH_RECRUITING),
+            ) as cursor:
+                ids = [r[0] for r in await cursor.fetchall()]
+
+            affected = []
+            for team_id in ids:
+                if not await self._wish_mark(team_id, WISH_VOIDED, WISH_RECRUITING):
+                    continue
+                team = await self._wish_team_with_members(team_id)
+                if team:
+                    affected.append(team)
+            return affected
+
+    async def purge_old_wish_teams(self, days: int) -> int:
+        """删除超过保留期的历史队伍记录（招募中的不删）。返回删除的队伍数。
+
+        只删记录：成员的队伍状态有自己的到期时间，早该自然过期了。
+        """
+        cutoff = _utc_stamp_after(-max(1, int(days)))
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT id FROM wish_teams WHERE status != ? AND created_at <= ?",
+                (WISH_RECRUITING, cutoff),
+            ) as cursor:
+                ids = [r[0] for r in await cursor.fetchall()]
+            if not ids:
+                return 0
+            placeholders = ", ".join("?" * len(ids))
+            await self._db.execute(
+                f"DELETE FROM wish_team_members WHERE team_id IN ({placeholders})",
+                tuple(ids),
+            )
+            await self._db.execute(
+                f"DELETE FROM wish_teams WHERE id IN ({placeholders})", tuple(ids)
+            )
+            return len(ids)
+
+    async def clear_wish_teams(self, group_id: str) -> int:
+        """清空本群的队伍与成员记录。返回删除的队伍数。
+
+        副作用是真接得到的：名额由 slot_usage（数 departed 行）算出，所以删掉当天
+        已发车的行就等于**释放当天名额**——「清空」作为「今天重来」的逃生口不需要
+        额外逻辑。已经发出去的状态不在这里撤销（要撤用「移除状态」）。
+        """
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT COUNT(*) FROM wish_teams WHERE group_id = ?", (group_id,)
+            ) as cursor:
+                count = (await cursor.fetchone())[0]
+            await self._db.execute(
+                "DELETE FROM wish_team_members WHERE group_id = ?", (group_id,)
+            )
+            await self._db.execute("DELETE FROM wish_teams WHERE group_id = ?", (group_id,))
+            return count
 
 
 def _serialized(fn):

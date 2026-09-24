@@ -33,6 +33,7 @@ FEATURE_LABELS = {
     "feature_prayer_enabled": "祷词",
     "feature_scoreboard_enabled": "排行榜",
     "feature_qq_admin_enabled": "群管指令",
+    "feature_wish_enabled": "祈愿试炼",
 }
 
 FEATURE_DISABLED_MSG = "「{label}」功能已被管理员关闭。"

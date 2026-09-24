@@ -882,6 +882,31 @@ class LadderService:
         await self.db.commit()
         return True, f"已清除 {player_name} 的 {count} 个状态"
 
+    async def rename_status(
+        self, group_id: str, player_name: str, old_name: str, new_name: str
+    ) -> Tuple[bool, str]:
+        """把玩家的某个状态改名。
+
+        目标名已存在时合并（到期时间取更晚的，阻断项与来源保留目标行原有的）——
+        诸神显式要求改名就该被执行，但不能因此缩短一条惩罚、也不能把队伍状态
+        从祈愿组队手里转到诸神名下。
+        """
+        player = await self.db.get_player_by_name(group_id, player_name)
+        if not player:
+            return False, PLAYER_NOT_FOUND.format(name=player_name)
+
+        result = await self.db.rename_status(group_id, player.player_id, old_name, new_name)
+        if result == "not_found":
+            return False, f"{player_name} 没有状态 [{old_name}]"
+        await self.db.commit()
+
+        if result == "merged":
+            return True, (
+                f"已把 {player_name} 的状态 [{old_name}] 改名为「{new_name}」，"
+                f"并与原有的同名状态合并（到期时间取更晚的，阻断项保留原有的）"
+            )
+        return True, f"已把 {player_name} 的状态 [{old_name}] 改名为「{new_name}」"
+
     # === 赠送道具 ===
 
     @staticmethod

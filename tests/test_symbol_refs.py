@@ -24,6 +24,7 @@ SERVICES = {
     "cooldown_manager": ("cooldown.py", "CooldownManager"),
     "_qq_admin": ("qq_admin_handle.py", "QQAdminHandler"),
     "_scheduler": ("scheduler_service.py", "SchedulerService"),
+    "wish_service": ("wish_service.py", "WishService"),
 }
 
 # 由框架注入、不在插件类里赋值的属性

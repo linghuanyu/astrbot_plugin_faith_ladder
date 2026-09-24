@@ -164,7 +164,9 @@ class TestBlockActionsMigration:
         db = DatabaseManager(tmp_path)
         await db.initialize()
 
-        # 模拟老库：重建一张没有该列的表
+        # 模拟老库：重建一张没有这两列的表。source 是 block_actions 之后才加的，
+        # 所以真实的那个年代的老库两列都缺；而 get_player_statuses 现在也要读
+        # source，升级路径必须两列都补上才能读写正常
         await db._db.execute("DROP TABLE player_statuses")
         await db._db.execute(
             "CREATE TABLE player_statuses ("
@@ -174,7 +176,9 @@ class TestBlockActionsMigration:
         )
         await db._db.commit()
 
+        # 与 initialize() 里的迁移顺序一致
         await db._migrate_status_block_actions()
+        await db._migrate_status_source()
 
         async with db._db.execute("PRAGMA table_info(player_statuses)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
