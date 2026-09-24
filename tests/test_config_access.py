@@ -160,6 +160,13 @@ class TestNoBareConfigGet:
 class TestConfigKeysExistInSchema:
     """静态守卫：字面量键必须存在于 schema（漏键会让默认值悄悄消失）。"""
 
+    # 例外必须写明理由，且只允许"故意读 schema 外的键"这类用法
+    ALLOWED_MISSING = {
+        # 3.8.0 已从 schema 物理删除（配置项作废），main.py 仍读它是为了在启动时
+        # 告警"这里填过的内容不会生效"；cfg_get 对 schema 外的键原样返回配置值。
+        "whitelist",
+    }
+
     CFG_CALL = re.compile(r'(?:self\._cfg|cfg_get\([^,)]+,)\s*\(\s*"([^"]+)"|(?:self\._cfg|cfg_get\([^,)]+,)\s*"([^"]+)"')
 
     def test_all_literal_keys_declared(self):
@@ -170,9 +177,29 @@ class TestConfigKeysExistInSchema:
                 continue
             src = path.read_text(encoding="utf-8")
             for m in re.finditer(r'self\._cfg\("([^"]+)"\)', src):
-                if m.group(1) not in keys:
+                if m.group(1) not in keys and m.group(1) not in self.ALLOWED_MISSING:
                     offenders.append(f"{path.relative_to(ROOT)} self._cfg(\"{m.group(1)}\")")
             for m in re.finditer(r'cfg_get\([^,)]+,\s*"([^"]+)"', src):
-                if m.group(1) not in keys:
+                if m.group(1) not in keys and m.group(1) not in self.ALLOWED_MISSING:
                     offenders.append(f"{path.relative_to(ROOT)} cfg_get(..., \"{m.group(1)}\")")
         assert offenders == [], "这些配置键不在 _conf_schema.json 里：\n" + "\n".join(offenders)
+
+    def test_allowlist_entries_are_still_read(self):
+        """例外表不许留死条目：读点删掉后必须同步删掉例外，否则例外会越攒越多。
+
+        只认「读取调用」这一种形态：`"whitelist"` 还作为 `group_access_mode`
+        的取值出现在 gate 分支里，按裸字面量匹配会把那个当成读点，例外就删不掉了。
+        """
+        for key in self.ALLOWED_MISSING:
+            pattern = re.compile(
+                r'self\._cfg\("%s"\)|cfg_get\([^,)]+,\s*"%s"' % (re.escape(key), re.escape(key))
+            )
+            found = [
+                str(path.relative_to(ROOT))
+                for path in PRODUCTION_FILES
+                if pattern.search(path.read_text(encoding="utf-8"))
+            ]
+            assert found, (
+                f"{key} 已不再被任何生产代码读取（读点可能在 {found} 之外），"
+                f"请从 ALLOWED_MISSING 里删掉"
+            )

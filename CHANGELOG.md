@@ -3,7 +3,7 @@
 ## [3.8.0] - 2026-09-24
 
 ### 破坏性变更
-- **WebUI 的 `whitelist` 配置项废弃** — 诸神白名单现在只存在数据库里（由 `白名单` 指令与群同步写入）。删掉这一层的理由：只有部署者一个人会填，而部署者本身就是超管，纯属冗余。**配置里已填的条目不迁移、也不再生效**，升级后请用 `白名单 add <QQ> [信仰]` 重新录入，或让成员入群后走待审。schema 键保留一版并在启动时告警，下一版物理删除
+- **WebUI 的 `whitelist` 配置项废弃** — 诸神白名单现在只存在数据库里（由 `白名单` 指令与群同步写入）。删掉这一层的理由：只有部署者一个人会填，而部署者本身就是超管，纯属冗余。**配置里已填的条目不迁移、也不再生效**，升级后请用 `白名单 add <QQ> [信仰]` 重新录入，或让成员入群后走待审。schema 键已在本版**物理删除**（WebUI 不再显示）；旧配置里残留的值不再生效，启动时会打一条告警说明
 - **群主/群管理员降为诸神级** — 此前 `_is_plugin_admin` 把 `config.admin_ids` 与 QQ 群角色混成一个判定，还被直接当作管理员闸门使用。后果是任何一个群的群主都能**全局**增删白名单、清空本群数据、重置全员积分。现在管理类闸门只认 `admin_ids`：
   - 失去：`白名单` 全部子命令、`同步白名单`、`天梯榜管理` 的 `重置/全部重置/清空/清除弃誓/迁移储物空间`
   - 保留（诸神级）：录入积分、批量录入、查询、天梯榜/觐见榜、`天梯榜管理 删除/改名`、道具与赠送，以及 8 条群管指令
@@ -25,6 +25,7 @@
 - `admin_ids` 的 hint 如实说明它是唯一管理权限来源；`commands/query.py` 手写的权限判定收敛到 `_check_perm`
 
 ### 新增
+- **诸神赞美** — 白名单里**且有信仰**的诸神，发出命中自己信仰的祷词时，神明回一句「赞美【信仰】」。不计分、不写记录、不限频率；判定严格只认诸神名单（超管与群主/群管理员不在此列）。文案为插件自拟，原著无对应整句
 - 待审名单复用 `whitelist.entry_type` 列承载 `'pending'`——所有授权路径都写死 `entry_type = 'user'`，待审天然不授权，**无需新表、无需迁移**
 - DB：`get_pending_whitelist` / `approve_pending` / `approve_all_pending` / `reject_pending` / `add_pending` / `add_many_pending` / `remove_many_from_whitelist` / `remove_whitelist_entry_everywhere`
 
@@ -32,12 +33,14 @@
 - **需要动手**：WebUI 里 `whitelist` 配过人的话，他们升级后会立刻失去诸神权限，请先用 `白名单 add` 补回，或确认他们已在 DB 名单里
 - 群主/群管理员若此前在替你管白名单或清空数据，升级后会收到权限拒绝，请把他们加进 `admin_ids`
 - 配了 `auto_whitelist_group` 的话，升级后入群与「同步白名单」都只进待审，需要你去 `白名单 待审` 放行；这会积压，别让它成为没人看的队列
-- 本版不动 `whitelist` 表结构，无迁移；`whitelist` 配置键下一版物理删除
+- 本版不动 `whitelist` 表结构，无迁移；`whitelist` 配置键已从 `_conf_schema.json` 物理删除。因 `cfg_get` 对 schema 外的键是"读到即原样返回"，残留旧值时启动告警仍会触发；WebUI 里这一项会消失
 
 ### 测试
 - 新增 `tests/test_permission_boundary.py`（群角色权限边界、缓存竞态与上限、群访问名单脏条目、help 过闸门）与 `tests/test_whitelist_flow.py`（入群待审 → 审核 → 退群撤销全流程、待审写守卫、同步批量与清理、5 人阈值边界与预览不落库）
+- 新增 `tests/test_god_praise.py`（诸神赞美：命中自己信仰才回、无信仰与超管不触发、闸门优先、16 条祷词非空且互不重复）
 - 改写受影响的既有用例：`test_permission.py`、`test_review_fixes.py`、`test_config_access.py`、`test_config_hotreload.py`（配置热生效改用 `admin_ids` 验证）
-- 总计 739 通过
+- `test_config_access.py` 的「字面量键必须在 schema 里」守卫加例外表：`whitelist` 已从 schema 删除，但 `main.py` 仍要读它才能在启动时告警「配置里填的不会生效」；另加一条检查防止例外表留死条目
+- 总计 752 通过
 
 ## [3.7.10] - 2026-09-24
 

@@ -59,37 +59,6 @@
     "type": "string",
     "default": "批量录入"
   },
-  "whitelist": {
-    "description": "【已废弃】此配置项不再生效，请勿使用",
-    "hint": "已废弃：诸神白名单现在只存在数据库里，请用「白名单 add <QQ> [信仰]」指令管理。这里填的内容会被忽略（不会迁移）。",
-    "type": "list",
-    "default": [],
-    "items": {
-      "type": "object",
-      "items": {
-        "type": {
-          "description": "类型（仅支持 user）",
-          "type": "string",
-          "default": "user"
-        },
-        "id": {
-          "description": "用户ID（QQ号）",
-          "type": "string",
-          "default": ""
-        },
-        "note": {
-          "description": "备注说明",
-          "type": "string",
-          "default": ""
-        },
-        "faith": {
-          "description": "对应具体信仰（可选，留空则为普通诸神。如：沉默、湮灭、欺诈等16信仰）",
-          "type": "string",
-          "default": ""
-        }
-      }
-    }
-  },
   "admin_ids": {
     "description": "管理员用户ID列表（唯一的插件管理权限来源）",
     "hint": "填 QQ 号，多个用英文逗号分隔。管理员拥有全部权限。注意：群主/群管理员不是管理员，他们只有诸神级权限（不能用白名单、不能清空/重置）。",
