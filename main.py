@@ -57,7 +57,7 @@ from astrbot_plugin_faith_ladder.commands import (
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、QQ群管指令，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.7.6"
+    "3.7.7"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -555,9 +555,10 @@ class FaithLadderPlugin(
     @filter.command("录入玩家", alias={"register", "添加玩家"})
     async def cmd_register_player(self, event: AstrMessageEvent):
         """录入新玩家。格式:
-        录入玩家 @用户 [姓名] [信仰] [职业] [登神之路分] [觐见分]
+        录入玩家 @用户 [姓名] [命途] [职业] [登神之路分] [觐见分]
           - @用户时自动从名片提取信仰/职业/姓名，显式参数可覆盖
-        录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]
+          - 命途/职业也可写具体信仰名（繁荣）或具体职业名（渔夫）
+        录入玩家 <姓名> <命途> <职业> [登神之路分] [觐见分]
           - 传统方式，手动指定所有参数
         """
         async for result in self._register_player_impl(event):

@@ -55,9 +55,12 @@ def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, Specific
     （6 个之一，如"生命"）。
 
     具体信仰有三个来源，按出现顺序取第一个命中的：
-    1. 开头的【标签】本身是具体信仰（如【繁荣】）
+    1. 【标签】本身是具体信仰（如【繁荣】）；标签不在开头也会全文找
     2. 具体职业名（specific_classes.json 中每个具体职业都对应一个信仰）
     3. 名片中直接出现的具体信仰词
+
+    标签里写命途（如【生命】）只补全命途，不算具体信仰——与正文里出现
+    命途词的处理保持一致；否则名片写着命途却解析不出来。
 
     sorted_specific_classes 需按职业名长度降序排列（调用方负责），
     以保证"魔术师"先于更短的职业名匹配到。
@@ -77,11 +80,25 @@ def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, Specific
         tag = match.group(1).strip()
         remaining = match.group(2).strip()
     else:
-        remaining = text
+        # 标签不在开头（如 "Lv.9【生命】战士 张三"）：全文找一个，
+        # 与 extract_specific_faith 的结论保持一致（同一个名片不该两个答案）；
+        # 顺便把标签从待分类文本里摘掉，免得 "Lv.9【生命】战士" 整段被当成玩家名
+        found = BRACKET_TAG_RE.search(text)
+        if found:
+            tag = found.group(1).strip()
+            remaining = BRACKET_TAG_RE.sub(" ", text).strip()
+        else:
+            remaining = text
 
-    if tag and tag in VALID_FAITHS:
-        result["specific_faith"] = tag
-        result["faith"] = FAITH_TO_PATH.get(tag)
+    if tag:
+        if tag in VALID_FAITHS:
+            result["specific_faith"] = tag
+            result["faith"] = FAITH_TO_PATH.get(tag)
+        elif tag in VALID_PATHS:
+            # 命途写在标签里也要认：同一个词写在正文里本就能识别（见下方 words 循环），
+            # 只认 16 个具体信仰会让「【生命】战士 张三」解析不出命途，
+            # 录入时直接报"缺少必要参数: 命途"
+            result["faith"] = tag
 
     # 2. 非数字词
     words = [w for w in remaining.split() if not w.isdigit()]

@@ -122,6 +122,30 @@ class TestParseCardInfo:
             assert r["faith"] == FAITH_TO_PATH[faith], faith
             assert r["faith"] in VALID_PATHS, faith
 
+    def test_path_in_tag_only_sets_faith(self, sorted_classes):
+        """命途写在标签里也要认：同一个词写在正文里本就能识别。"""
+        r = parse("【生命】战士 张三", sorted_classes)
+        assert r["faith"] == "生命"
+        assert r["specific_faith"] is None
+        assert r["class_"] == "战士"
+        assert r["player_name"] == "张三"
+
+    def test_tag_not_at_start(self, sorted_classes):
+        """标签不在开头（如加了前缀）时也要认，并把它从玩家名里摘掉。"""
+        r = parse("Lv.9【生命】战士 张三", sorted_classes)
+        assert r["faith"] == "生命"
+        assert r["class_"] == "战士"
+        assert "【" not in (r["player_name"] or "")
+        assert "生命" not in (r["player_name"] or "")
+
+    def test_real_card_chaos_hunter(self, sorted_classes):
+        """报障名片：混乱·猎人的具体职业叫「渔夫」，它不能抢走玩家名。"""
+        r = parse("【混乱】子琅 渔夫 1000 100", sorted_classes)
+        assert r["specific_faith"] == "混乱"
+        assert r["faith"] == "混沌"
+        assert r["class_"] == "猎人"
+        assert r["player_name"] == "子琅"
+
 
 class TestExtractSpecificFaith:
     def test_from_tag(self):

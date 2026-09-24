@@ -18,7 +18,14 @@ from astrbot_plugin_faith_ladder.text_utils import CQ_CODE_RE, AT_MENTION_RE
 from astrbot_plugin_faith_ladder.messages import (
     OATH_COOLDOWN_MSG, PERMISSION_DENIED, PLAYER_NOT_FOUND,
 )
-from astrbot_plugin_faith_ladder.models import VALID_CLASSES, VALID_PATHS
+from astrbot_plugin_faith_ladder.models import (
+    FAITH_TO_PATH, VALID_CLASSES, VALID_FAITHS, VALID_PATHS,
+)
+try:
+    from astrbot.api import logger
+except ImportError:  # 无 AstrBot 环境（如跑测试）时退回标准库日志
+    import logging
+    logger = logging.getLogger(__name__)
 
 
 class PlayerCommandsMixin:
@@ -48,6 +55,7 @@ class PlayerCommandsMixin:
         auto_class = None
         auto_name = None
         auto_specific_faith = None
+        card_read_error = None
 
         if at_user_id:
             # 获取 @ 用户的群名片
@@ -62,8 +70,13 @@ class PlayerCommandsMixin:
                     auto_class = parsed["class_"]
                     auto_name = parsed["player_name"]
                     auto_specific_faith = parsed["specific_faith"]
-            except Exception:
-                pass
+            except Exception as e:
+                # 不再静默：取不到名片时下面只会报"缺少必要参数"，看不出真正原因
+                # （机器人没有查看群成员的权限、对方已退群、适配器接口异常）
+                card_read_error = e
+                logger.warning(
+                    f"[Register] 读取群成员信息失败 group={group_id} qq={at_user_id}: {e}"
+                )
 
         # 从参数文本中提取显式值
         # 先剥掉参数里的 @ 提及（aiocqhttp 会把 "@昵称(QQ)" 拼进 message_str），
@@ -73,6 +86,7 @@ class PlayerCommandsMixin:
         explicit_name = None
         explicit_faith = None
         explicit_class = None
+        explicit_specific_faith = None
         scores = []
 
         clean_args = AT_MENTION_RE.sub('', args).strip()
@@ -80,8 +94,14 @@ class PlayerCommandsMixin:
 
         parts = clean_args.split() if clean_args else []
 
-        # 分类参数：数字→分数，VALID_PATHS→命途，VALID_CLASSES→职业，其他→姓名
-        other_words = []
+        # 分类参数：数字→分数，具体职业名→职业（并带出信仰/命途），
+        # 具体信仰→信仰（推出命途），命途→命途，基础职业→职业，其余→玩家名候选。
+        #
+        # 具体职业名与信仰名必须先于「玩家名」判定：名片上写的是具体职业
+        # （混乱·猎人 → 渔夫），诸神照抄进参数时，此前会落进名字候选，
+        # 又因为显式名优先于名片解析，被 @ 的人会静默录成一个叫「渔夫」的玩家
+        # （职业/命途由名片补全，校验还能全过）。
+        name_candidates = []
 
         for p in parts:
             try:
@@ -90,21 +110,35 @@ class PlayerCommandsMixin:
                 continue
             except ValueError:
                 pass
-            if p in VALID_PATHS:
+            specific = self._specific_classes.get(p)
+            if specific:
+                # (具体信仰, 命途, 基础职业)
+                explicit_class = specific[2]
+                if explicit_specific_faith is None:
+                    explicit_specific_faith = specific[0]
+                if explicit_faith is None:
+                    explicit_faith = specific[1]
+            elif p in VALID_FAITHS:
+                if explicit_specific_faith is None:
+                    explicit_specific_faith = p
+                if explicit_faith is None:
+                    explicit_faith = FAITH_TO_PATH.get(p)
+            elif p in VALID_PATHS:
                 explicit_faith = p
             elif p in VALID_CLASSES:
                 explicit_class = p
             else:
-                other_words.append(p)
+                name_candidates.append(p)
 
         # 非数字/信仰/职业的词，第一个作为玩家名
-        if other_words:
-            explicit_name = other_words[0]
+        if name_candidates:
+            explicit_name = name_candidates[0]
 
         # 合并：显式 > 自动提取
         player_name = explicit_name or auto_name
         faith_name = explicit_faith or auto_faith
         class_name = explicit_class or auto_class
+        specific_faith = explicit_specific_faith or auto_specific_faith
 
         # 校验必填项
         errors = []
@@ -118,11 +152,23 @@ class PlayerCommandsMixin:
         if errors:
             auto_info = ""
             if at_user_id:
-                auto_info = f"\n从名片自动提取: 姓名={auto_name or '?'}, 信仰={auto_faith or '?'}, 职业={auto_class or '?'}"
+                if card_read_error is not None:
+                    auto_info = (
+                        f"\n未能读取被 @ 用户的群名片（{card_read_error}）："
+                        "可能是机器人没有查看群成员的权限，或对方已不在群内。"
+                        "请在参数里直接写姓名与命途。"
+                    )
+                else:
+                    auto_info = (
+                        f"\n从名片自动提取: 姓名={auto_name or '?'}, "
+                        f"信仰={auto_specific_faith or auto_faith or '?'}, "
+                        f"职业={auto_class or '?'}"
+                    )
             yield event.plain_result(
                 f"缺少必要参数: {', '.join(errors)}\n"
-                f"用法：录入玩家 @用户 [姓名] [信仰] [职业] [登神之路分] [觐见分]\n"
-                f"  或: 录入玩家 <姓名> <信仰> <职业> [登神之路分] [觐见分]{auto_info}"
+                f"用法：录入玩家 @用户 [姓名] [命途] [职业] [登神之路分] [觐见分]\n"
+                f"  或: 录入玩家 <姓名> <命途> <职业> [登神之路分] [觐见分]\n"
+                f"命途与职业也可写成具体信仰名（如 繁荣）或具体职业名（如 渔夫）{auto_info}"
             )
             return
 
@@ -162,8 +208,8 @@ class PlayerCommandsMixin:
             group_id, player_name, faith_name, class_name,
             ladder_score, pilgrimage_score, user_id,
             qq_id=qq_to_bind,
-            # 具体信仰来自名片解析（@ 路径才有）；显式参数只能给命途
-            specific_faith=auto_specific_faith,
+            # 具体信仰：参数里写了具体职业名/信仰名就用它，否则用名片解析出的
+            specific_faith=specific_faith,
         )
 
         # 回复统一：注册结果（玩家名/职业/信仰/分数/信仰文案）两条路径都要给出，
