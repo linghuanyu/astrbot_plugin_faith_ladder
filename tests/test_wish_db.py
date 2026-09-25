@@ -28,7 +28,7 @@ CREATE_DAY = "2026-09-25"
 TEAM_NAME = "09月28日祈愿试炼"
 
 # 默认限额：群内同时 2 支招募中、每人每天 1 次、本群每天 4 次
-LIMITS = dict(recruiting_limit=2, per_player_limit=1, per_group_limit=4)
+LIMITS = dict(recruiting_limit=2)
 
 
 @pytest_asyncio.fixture
@@ -39,11 +39,10 @@ async def db(temp_data_dir):
     await dbm.close()
 
 
-async def _create(db, leader="甲", capacity=3, name=TEAM_NAME,
-                  recruiting_limit=2, per_player_limit=1, per_group_limit=4):
+async def _create(db, leader="甲", capacity=3, name=TEAM_NAME, recruiting_limit=2):
     return await db.create_wish_team(
         GROUP, name, capacity, f"name:{leader}", leader, SLOT, CREATE_DAY,
-        recruiting_limit, per_player_limit, per_group_limit,
+        recruiting_limit,
     )
 
 
@@ -101,36 +100,32 @@ class TestCreate:
         _, code = await _create(db, leader="丙", name="第三支")
         assert code == "too_many_teams"
 
-    async def test_player_daily_limit(self, db):
-        await _create(db, leader="甲")
-        await db.leave_wish_team(GROUP, "name:甲")
+    async def test_create_is_not_rationed_by_count(self, db):
+        """v3.9.2 起「上限」只由成功发车产生：同一个人可以反复发起。
 
-        _, code = await _create(db, leader="甲", name="再开一次")
-        assert code == "daily_limit"
+        这正是旧版会失败的用例——原来「每人每天 1 次」，解散后再发起会被 `daily_limit`
+        挡住（而且被本群上限拒绝时还会白白扣掉那次机会）。现在发起不限次。
+        """
+        first, code = await _create(db, leader="甲")
+        assert code == "ok"
+        leave_code, _team = await db.leave_wish_team(GROUP, "name:甲")
+        assert leave_code == "disbanded"
 
-    async def test_group_daily_limit(self, db):
-        for i, leader in enumerate(["甲", "乙", "丙", "丁"]):
-            await _create(db, leader=leader, name=f"第{i}支", recruiting_limit=99)
-        # 上面已用掉本群当天的 4 次；第 5 个人即使群内没有招募中的队也会被拦
-        for leader in ["甲", "乙", "丙", "丁"]:
-            await db.leave_wish_team(GROUP, f"name:{leader}")
+        second, code = await _create(db, leader="甲", name="再发起一次")
+        assert code == "ok", "解散后再次发起被拒了——「按次数」的限制没有真的删掉"
+        assert second != first
 
-        _, code = await _create(db, leader="戊", name="第五支", recruiting_limit=99)
-        assert code == "group_daily_limit"
-
-    async def test_rejected_create_does_not_consume_quota(self, db):
-        """前置检查失败不该白吃掉当天唯一的一次开团机会。"""
+    async def test_rejected_create_leaves_no_trace(self, db):
+        """被前置检查拒绝的发起什么都不该留下（名额、队伍、成员都没有）。"""
         await _create(db, leader="甲")
         await _create(db, leader="乙")  # 群内招募中已达上限 2
 
         _, code = await _create(db, leader="丙", name="第三支")
         assert code == "too_many_teams"
-
-        # 丙的名额没被消耗：让丙先有一支能开的队
+        # 被拒后解散一支，丙立刻就能发起（没有任何次数被记下）
         await db.leave_wish_team(GROUP, "name:甲")
         team_id, code = await _create(db, leader="丙", name="第三支")
-        assert code == "ok", "被前置检查拒绝的开团吃掉了当天名额"
-        assert team_id is not None
+        assert code == "ok" and team_id is not None
 
 
 class TestJoinAndDepart:
@@ -422,7 +417,7 @@ class TestSlotAndCleanup:
         assert await _statuses(db, "甲"), "超时清理不该碰已发车队伍的状态"
 
     async def test_fresh_team_is_not_claimable(self, db):
-        """开团时把 last_reminded_at 记成创建时间——否则开团播报之后 30 秒
+        """发起时把 last_reminded_at 记成创建时间——否则发起播报之后 30 秒
         又会冒出一条提醒（调度器每 30 秒 tick 一次）。
         """
         team_id, _ = await _create(db)

@@ -38,11 +38,10 @@ async def db(temp_data_dir):
     await dbm.close()
 
 
-async def _create(db, leader, name=NAME, capacity=3, recruiting_limit=9,
-                  per_player_limit=1, per_group_limit=9):
+async def _create(db, leader, name=NAME, capacity=3, recruiting_limit=9):
     return await db.create_wish_team(
         GROUP, name, capacity, f"name:{leader}", leader, SLOT, CREATE_DAY,
-        recruiting_limit, per_player_limit, per_group_limit,
+        recruiting_limit,
     )
 
 
@@ -133,24 +132,21 @@ class TestCapacity:
         assert await _roster(db, team_id) == sorted(["甲", "乙"])
 
 
-class TestDailyLimits:
-    async def test_concurrent_creates_respect_group_limit(self, db):
+class TestConcurrentCreates:
+    async def test_concurrent_creates_never_exceed_recruiting_limit(self, db):
+        """并发发起撑不破「同时招募中」的上限（这是现在唯一的前置闸门）。
+
+        v3.9.2 起没有「按次数」的配额了，所以这里断言的是并发下数量不超标，
+        而不是「第 N 次被拒」。
+        """
         leaders = ["甲", "乙", "丙", "丁", "戊"]
         results = await asyncio.gather(
-            *[_create(db, who, name=f"{who}的队", per_group_limit=2) for who in leaders]
+            *[_create(db, who, name=f"{who}的队", recruiting_limit=2) for who in leaders]
         )
         codes = [code for _, code in results]
-        assert codes.count("ok") == 2, f"本群每天 2 次的上限被突破：{codes}"
-        assert codes.count("group_daily_limit") == 3
+        assert codes.count("ok") == 2, f"同时招募中的上限被突破：{codes}"
+        assert codes.count("too_many_teams") == 3
         assert len(await db.get_open_wish_teams(GROUP)) == 2
-
-    async def test_concurrent_creates_respect_player_limit(self, db):
-        results = await asyncio.gather(
-            *[_create(db, "甲", name=f"第{i}支") for i in range(3)]
-        )
-        codes = [code for _, code in results]
-        assert codes.count("ok") == 1
-        assert codes.count("daily_limit") + codes.count("already_in_team") == 2
 
 
 class TestRosterRace:
@@ -179,7 +175,7 @@ class TestRosterRace:
 class TestReminder:
     async def test_only_one_reminder_claim_wins(self, db):
         team_id, _ = await _create(db, "甲")
-        # 开团时 last_reminded_at = 创建时间，所以先把提醒窗口推成「早就到点」
+        # 发起时 last_reminded_at = 创建时间，所以先把提醒窗口推成「早就到点」
         await db._db.execute(
             "UPDATE wish_teams SET last_reminded_at = '2000-01-01 00:00:00' WHERE id = ?",
             (team_id,),

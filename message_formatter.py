@@ -249,7 +249,7 @@ def format_help(config: dict) -> str:
         f"祈愿我的 - 查看我的队伍与成员\n"
         f"祈愿随机 - 把自己补进最缺人的一支队伍\n"
         f"  满员自动发车：全员获得以队名命名的状态，持续 {cfg_get(config, 'wish_status_days')} 天\n"
-        f"  名额按队名里的日期算（开团日 +{cfg_get(config, 'wish_status_days')} 天），一周的名额表见配置 wish_weekly_limits\n"
+        f"  名额按队名里的日期算（发起日 +{cfg_get(config, 'wish_status_days')} 天），一周的名额表见配置 wish_weekly_limits\n"
         f"{cfg_get(config, 'cmd_wish_admin')} 列表/已解散/名单/换人/解散/重命名/移出/补位/延期/清空 (诸神)\n"
         f"\n"
         f"[沉浸感] (诸神权限)\n"

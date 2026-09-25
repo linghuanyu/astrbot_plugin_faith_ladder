@@ -69,7 +69,7 @@ except ImportError as e:
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、祈愿试炼组队、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.9.0"
+    "3.9.2"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -842,7 +842,7 @@ class FaithLadderPlugin(
 
     @filter.command("祈愿组队")
     async def cmd_wish_create(self, event: AstrMessageEvent):
-        """开一支祈愿试炼的队伍（自动入座）。格式: 祈愿组队 [人数]"""
+        """发起一场祈愿试炼（自动入座）。格式: 祈愿组队 [人数]"""
         async for result in self._wish_create_impl(event):
             yield result
 

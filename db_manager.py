@@ -253,9 +253,9 @@ class DatabaseManager:
 
             -- 祈愿试炼（组队）。详见本文件末尾「祈愿试炼」一节。
             --
-            -- slot_date  = 开团日 + 状态天数（北京日期），是「名额」与「每人每 slot
+            -- slot_date  = 发起日 + 状态天数（北京日期），是「名额」与「每人每 slot
             --              只能参与一次」的归属键；
-            -- create_date = 开团日（北京日期），只管两项每日开团次数上限。
+            -- create_date = 发起日（北京日期），只用于「按日统计」与记录。
             -- 两者只差几天却都叫「日期」，读写时务必不要混用。
             -- expire_at  = 发车时定下的到期时间，是**全队成员状态的唯一事实来源**
             --              （不是各自 now+days，否则补位进来的人会比队友晚到期）。
@@ -296,20 +296,15 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_wish_members_player
                 ON wish_team_members(group_id, player_id);
 
-            -- 每人每天开团次数（主键去重：插入成功即占到一个名额）
-            CREATE TABLE IF NOT EXISTS wish_daily_creates (
+            -- 「仅今天加开」的名额加成：按 (群, 队名日期) 记一条，只有诸神能写。
+            -- 名额 = 星期表 + extra；只写「今天发起对应的那个队名日期」，所以次日
+            -- 自动失效是天然的（明天的队名日期是另一个日期），不需要过期逻辑。
+            CREATE TABLE IF NOT EXISTS wish_slot_bonus (
                 group_id TEXT NOT NULL,
-                player_id TEXT NOT NULL,
-                create_date TEXT NOT NULL,
-                PRIMARY KEY (group_id, player_id, create_date)
-            );
-
-            -- 本群每天开团次数（靠 UPDATE ... WHERE count < ? 的 rowcount 认领）
-            CREATE TABLE IF NOT EXISTS wish_daily_group_creates (
-                group_id TEXT NOT NULL,
-                create_date TEXT NOT NULL,
-                count INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (group_id, create_date)
+                slot_date TEXT NOT NULL,
+                extra INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, slot_date)
             );
         """)
         await self._db.commit()
@@ -354,6 +349,23 @@ class DatabaseManager:
             ("player_statuses", "source", "TEXT DEFAULT NULL"),
         ):
             await self._ensure_column(_table, _column, _ddl)
+
+        # 弃用表的清理见下面的 `_drop_legacy_wish_daily_tables`
+        await self._drop_legacy_wish_daily_tables()
+
+    async def _drop_legacy_wish_daily_tables(self) -> None:
+        """删掉 v3.9.2 弃用的两张「按发起次数」的每日计数表。
+
+        v3.9.2 起上限只由成功发车产生（见 CHANGELOG），不再按发起次数计数，这两张表
+        失去意义。数据本身没有价值：只有被删掉的那段代码在读写它们，而且每天清理一次。
+        留着只会让后来者以为那两个计数还在生效，所以物理删除。
+
+        `DROP TABLE IF EXISTS` 是幂等的 O(1) 操作，**不记账**（记账只服务昂贵的全表
+        扫描，理由同 `_migrate_items_grade_pk`）。
+        """
+        for table in ("wish_daily_creates", "wish_daily_group_creates"):
+            await self._db.execute(f"DROP TABLE IF EXISTS {table}")
+        await self._db.commit()
 
     # === 一次性数据迁移记账 ===
 
@@ -1459,7 +1471,7 @@ class DatabaseManager:
         return cursor.rowcount
 
     async def purge_daily_tables(self, retention_days: int = 90) -> int:
-        """删除超过 retention_days 的每日状态记录（赠送接受次数、祷词触发、开团次数）。
+        """删除超过 retention_days 的每日状态记录（赠送接受次数、祷词触发）。
 
         这些表按「北京日期」存 `YYYY-MM-DD` 字符串，可直接按字典序比较。
         此前从未清理过：每次接受道具一行、每人每天一行，随使用量无限增长。
@@ -1472,14 +1484,6 @@ class DatabaseManager:
         deleted = cursor.rowcount
         cursor = await self._db.execute(
             "DELETE FROM prayer_daily_hits WHERE hit_date < ?", (cutoff,)
-        )
-        deleted += cursor.rowcount
-        cursor = await self._db.execute(
-            "DELETE FROM wish_daily_creates WHERE create_date < ?", (cutoff,)
-        )
-        deleted += cursor.rowcount
-        cursor = await self._db.execute(
-            "DELETE FROM wish_daily_group_creates WHERE create_date < ?", (cutoff,)
         )
         deleted += cursor.rowcount
         await self._db.commit()
@@ -2425,6 +2429,53 @@ class DatabaseManager:
         ) as cursor:
             return (await cursor.fetchone())[0]
 
+    async def get_slot_bonus(self, group_id: str, slot_date: str) -> int:
+        """该名额日期当前的「加开」值（没有记录则 0）。
+
+        加开只由诸神指令写入，且只写「今天发起对应的那个队名日期」，所以次日自动
+        失效是天然的——明天的队名日期是另一个日期，这条记录不会再被读到。
+        """
+        async with self._db.execute(
+            "SELECT extra FROM wish_slot_bonus WHERE group_id = ? AND slot_date = ?",
+            (group_id, slot_date),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def add_slot_bonus(
+        self, group_id: str, slot_date: str, delta: int, cap: int
+    ) -> Tuple[str, int]:
+        """累加该日期的加开值。返回 (结果码, 累加后的值)。
+
+        - `delta == 0` 表示清除（记账行删掉，名额回到只看星期表）
+        - 结果码 `capped` 表示累加后会超过 `cap`（防手滑），此时**不动**已有值
+        """
+        async with self.transaction():
+            async with self._db.execute(
+                "SELECT extra FROM wish_slot_bonus WHERE group_id = ? AND slot_date = ?",
+                (group_id, slot_date),
+            ) as cursor:
+                row = await cursor.fetchone()
+            current = int(row[0]) if row else 0
+
+            target = 0 if delta == 0 else max(0, current + delta)
+            if target > cap:
+                return "capped", current
+
+            if target == 0:
+                await self._db.execute(
+                    "DELETE FROM wish_slot_bonus WHERE group_id = ? AND slot_date = ?",
+                    (group_id, slot_date),
+                )
+            else:
+                await self._db.execute(
+                    "INSERT INTO wish_slot_bonus (group_id, slot_date, extra) VALUES (?, ?, ?) "
+                    "ON CONFLICT(group_id, slot_date) DO UPDATE SET "
+                    "extra = excluded.extra, updated_at = CURRENT_TIMESTAMP",
+                    (group_id, slot_date, target),
+                )
+            return "ok", target
+
     async def list_wish_teams(
         self, group_id: str, statuses, limit: Optional[int] = None
     ) -> List[dict]:
@@ -2518,16 +2569,15 @@ class DatabaseManager:
 
     async def create_wish_team(
         self, group_id: str, base_name: str, capacity: int, leader_id: str,
-        leader_name: str, slot_date: str, create_date: str,
-        recruiting_limit: int, per_player_limit: int, per_group_limit: int,
+        leader_name: str, slot_date: str, create_date: str, recruiting_limit: int,
     ) -> Tuple[Optional[int], str]:
-        """开一支招募中的队伍并让开团者自动入座。返回 (team_id, 结果码)。
+        """发起一支招募中的队伍并让发起者自动入座。返回 (team_id, 结果码)。
 
-        结果码：`ok` / `already_in_team` / `too_many_teams` / `daily_limit` /
-        `group_daily_limit` / `name_taken`。
+        结果码：`ok` / `already_in_team` / `too_many_teams` / `name_taken`。
 
-        检查顺序固定，且**任何前置检查失败都不消耗当天名额**：占名额是最后一步，
-        否则「本群已有队伍在招募」会白吃掉开团者当天唯一的一次机会。
+        **这里没有任何「按次数」的配额**：v3.9.2 起上限只由成功发车产生（名额由
+        `slot_usage` 数已发车的队伍），所以发起本身不限次、被拒也不留痕。
+        仅剩的两个前置检查（已有队伍、本群招募位已满）都是只读的，不会留下副作用。
         """
         async with self.transaction():
             if await self._wish_active_team_for_player(group_id, leader_id):
@@ -2540,34 +2590,6 @@ class DatabaseManager:
                 ) as cursor:
                     if (await cursor.fetchone())[0] >= recruiting_limit:
                         return None, "too_many_teams"
-
-            if per_player_limit > 0:
-                try:
-                    await self._db.execute(
-                        "INSERT INTO wish_daily_creates (group_id, player_id, create_date) "
-                        "VALUES (?, ?, ?)",
-                        (group_id, leader_id, create_date),
-                    )
-                except aiosqlite.IntegrityError:
-                    return None, "daily_limit"
-
-            if per_group_limit > 0:
-                # 先试 +1（行已存在且未满），再试插入（行还不存在）；
-                # 两者都失败说明已达上限
-                cursor = await self._db.execute(
-                    "UPDATE wish_daily_group_creates SET count = count + 1 "
-                    "WHERE group_id = ? AND create_date = ? AND count < ?",
-                    (group_id, create_date, per_group_limit),
-                )
-                if cursor.rowcount == 0:
-                    try:
-                        await self._db.execute(
-                            "INSERT INTO wish_daily_group_creates "
-                            "(group_id, create_date, count) VALUES (?, ?, 1)",
-                            (group_id, create_date),
-                        )
-                    except aiosqlite.IntegrityError:
-                        return None, "group_daily_limit"
 
             team_id = await self._wish_insert_team_with_unique_name(
                 group_id, base_name, capacity, leader_id, leader_name, slot_date, create_date
@@ -2594,7 +2616,8 @@ class DatabaseManager:
           `replenished`       补位到已发车队伍 → 已给本人按队伍到期时间挂状态
           `already_member`    已经是成员（重复点「祈愿加入」不该报错）
           `not_found` / `window_closed` / `voided` / `disbanded` / `full` /
-          `name_conflict` / `already_in_slot` / `already_in_other_team` / `no_slot`
+          `name_conflict` / `already_in_slot` / `already_in_other_team` /
+          `no_slot`（名额已用尽）/ `closed_day`（该日期不安排试炼）
         """
         async with self.transaction():
             team = await self._wish_team_row(team_id)
@@ -2624,8 +2647,14 @@ class DatabaseManager:
             if len(members) >= team["capacity"]:
                 return "full", await self._wish_team_with_members(team_id)
 
-            if status == WISH_RECRUITING and slot_limit > 0:
-                # 名额已用尽时直接劝退，别让人白等 45 分钟
+            if status == WISH_RECRUITING:
+                # 名额为 0（该日期不安排试炼）与名额已用尽都要在这里劝退，别让人白等
+                # 45 分钟。**零名额必须单独判**：此前写成 `slot_limit > 0` 才检查，
+                # 于是零名额时整段检查被跳过、队伍照样加满并发车——一支队就这样在一个
+                # 「不办试炼」的日期上成了行（那一支的 `slot_limit` 通常来自运行期改小
+                # 名额表，开出来之后才变成 0）。
+                if slot_limit <= 0:
+                    return "closed_day", await self._wish_team_with_members(team_id)
                 if await self.slot_usage(group_id, team["slot_date"]) >= slot_limit:
                     return "no_slot", await self._wish_team_with_members(team_id)
 
@@ -2903,12 +2932,21 @@ class DatabaseManager:
             return affected
 
     async def purge_old_wish_teams(self, days: int) -> int:
-        """删除超过保留期的历史队伍记录（招募中的不删）。返回删除的队伍数。
+        """删除超过保留期的历史队伍记录（招募中的不删），顺带清掉过期的加开记录。
 
-        只删记录：成员的队伍状态有自己的到期时间，早该自然过期了。
+        只删队伍记录：成员的队伍状态有自己的到期时间，早该自然过期了。
+        加开行按队名日期存，过期日期那行不会再被读到（加开只对「今天发起对应的日期」
+        生效），但会一直占着表——按同一保留期一起清。
+        返回删除的队伍数（加开行不计入）。**加开清理必须排在早退之前**，否则没有历史
+        队伍时永远轮不到它。
         """
-        cutoff = _utc_stamp_after(-max(1, int(days)))
+        days = max(1, int(days))
+        cutoff = _utc_stamp_after(-days)
+        date_cutoff = (datetime.now(BEIJING_TZ) - timedelta(days=days)).strftime("%Y-%m-%d")
         async with self.transaction():
+            await self._db.execute(
+                "DELETE FROM wish_slot_bonus WHERE slot_date < ?", (date_cutoff,)
+            )
             async with self._db.execute(
                 "SELECT id FROM wish_teams WHERE status != ? AND created_at <= ?",
                 (WISH_RECRUITING, cutoff),

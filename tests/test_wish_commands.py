@@ -4,7 +4,7 @@
 用真 `DatabaseManager` + 真 `WishService` 跑通「指令 → 服务 → 库」的完整链路，
 只把框架相关的部分替身掉（事件、发送通道、权限、冷却）。
 
-时钟必须钉死：名额按「开团日 + 状态天数」的星期算，不固定住就可能在关闭日
+时钟必须钉死：名额按「发起日 + 状态天数」的星期算，不固定住就可能在关闭日
 （周三/周日）跑测试，`祈愿组队` 会直接被拒——那种失败与代码对错无关。
 """
 
@@ -163,7 +163,7 @@ async def _create_team(host, capacity=2, who=None) -> str:
 
     默认 2 人（schema 默认是 6）：这些用例要的多是「一加入就满员发车」，
     容量留大反而测不到发车分支。
-    who 用来换开团者：每人每天只能开一次团，同一个宿主连开第二次会被 daily_limit 拒。
+    who 用来换发起者：同一个宿主连开第二次会撞上 already_in_team（他还在自己那支队里）。
     """
     if who is not None:
         host.player = _Player(f"name:{who}", who)
@@ -207,7 +207,7 @@ class TestPlayerCommands:
         await _collect(host._wish_create_impl(event))
 
         assert TEAM_NAME in event.results[0]
-        assert len(host.sent) == 1, "开团没有向群里播报"
+        assert len(host.sent) == 1, "发起没有向群里播报"
         assert "甲" in host.sent[0][1]
         assert await db.get_wish_team_by_name(GROUP, TEAM_NAME) is not None
 
@@ -285,7 +285,7 @@ class TestPlayerCommands:
     async def test_join_full_departs_with_broadcasts(self, ctx):
         host, db, _, _ = ctx
         await _create_team(host)  # 甲，容量 2
-        host.sent.clear()  # 开团那一条不算
+        host.sent.clear()  # 发起那一条不算
         host.player = _Player("name:乙", "乙")
 
         event = _Event("祈愿加入")
@@ -456,11 +456,23 @@ class TestAdminCommand:
 
         event = _Event("祈愿管理 统计")
         await _collect(host._wish_admin_impl(event))
-        assert "开团 1 次" in event.results[0]
+        assert "发起 1 次" in event.results[0]
 
         bad = _Event("祈愿管理 统计 七天")
         await _collect(host._wish_admin_impl(bad))
         assert "用法：祈愿管理 统计" in bad.results[0]
+
+    async def test_bonus_command(self, ctx):
+        """祈愿管理 加开：默认 +1、可给数值、写错给用法。"""
+        host, _, service, _ = ctx
+        event = _Event("祈愿管理 加开 2")
+        await _collect(host._wish_admin_impl(event))
+        assert "加开 2 场" in event.results[0]
+        assert await service.slot_bonus(GROUP, service.slot_date_of()) == 2
+
+        bad = _Event("祈愿管理 加开 两场")
+        await _collect(host._wish_admin_impl(bad))
+        assert "用法：祈愿管理 加开" in bad.results[0]
 
     async def test_clear_needs_confirm(self, ctx):
         host, db, _, _ = ctx
@@ -492,7 +504,7 @@ class TestSchedulerAndEvents:
     async def test_tick_broadcasts_reminder(self, ctx):
         host, db, _, _ = ctx
         await _create_team(host)
-        host.sent.clear()  # 开团那一条不算，只看 tick 发出来的
+        host.sent.clear()  # 发起那一条不算，只看 tick 发出来的
         team = await db.get_wish_team_by_name(GROUP, TEAM_NAME)
         await db._db.execute(
             "UPDATE wish_teams SET last_reminded_at = '2000-01-01 00:00:00' WHERE id = ?",

@@ -49,7 +49,8 @@ WISH_ADMIN_USAGE = (
     "  移出 <队名> <玩家名>              把成员移出并撤销其状态\n"
     "  补位 <队名> <玩家名>              强行把人塞进队伍（满员即发车）\n"
     "  延期 <队名> <天数>                该队成员状态从当前到期时间往后加\n"
-    "  统计 [天数]                       近期开团/发车/参与与卡点（默认 7 天）\n"
+    "  加开 [n]                          给今天对应的试炼日期临时加 n 个名额（默认 1；0 清除）\n"
+    "  统计 [天数]                       近期发起/发车/参与与卡点（默认 7 天）\n"
     "  清空                             清空本群队伍记录并释放当天名额（需加「确认」）\n"
     "队名含空格时写在前面、玩家名放最后一段；改名两段都含空格时用 → 分隔。"
 )
@@ -389,6 +390,18 @@ class WishCommandsMixin:
                 yield event.plain_result("用法：祈愿管理 延期 <队名> <天数>")
                 return
             outcome = await service.admin_extend(group_id, team_name, numbers[0])
+        elif action in ("加开", "bonus"):
+            delta = 1
+            if rest:
+                try:
+                    delta = int(rest.split()[0])
+                except ValueError:
+                    yield event.plain_result(
+                        "用法：祈愿管理 加开 [n]\n"
+                        "（默认加 1 场；填 0 清除加开；填负数就是减少）"
+                    )
+                    return
+            outcome = await service.admin_bonus(group_id, delta)
         elif action in ("统计", "stats"):
             days = 7
             if rest:

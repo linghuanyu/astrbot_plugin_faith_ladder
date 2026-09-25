@@ -3,9 +3,9 @@
 
 除常规流程外，这里专门钉两条最容易「改着改着就没人发现」的东西：
 
-1. **星期名额表是按队名日期（= 开团日 + 状态天数）反推的**。默认 `[1,1,0,1,1,0,2]`
-   的实际效果是「周三与周日不能开团、周四 2 支、其余 1 支，每周最多 6 次发车」。
-   谁要是把口径改成「按开团当天」，这条会立刻红。
+1. **星期名额表是按队名日期（= 发起日 + 状态天数）反推的**。默认 `[1,1,0,1,1,0,2]`
+   的实际效果是「周三与周日不能发起、周四 2 支、其余 1 支，每周最多 6 次发车」。
+   谁要是把口径改成「按发起当天」，这条会立刻红。
 2. **名单的两种输出**：不给分数只列名字；给分数必须产出真能被
    `parse_batch_scores` 解出 N 条的文本（裸名单会被它整块丢弃）。
 """
@@ -28,7 +28,7 @@ from astrbot_plugin_faith_ladder.wish_service import WEEKDAY_LABELS, WishService
 
 GROUP = "g1"
 OTHER_GROUP = "g2"
-# 夹具把时钟定在 2026-09-25（周五）：名额日期 = 开团日 + 3 天 = 09-28（周一），
+# 夹具把时钟定在 2026-09-25（周五）：名额日期 = 发起日 + 3 天 = 09-28（周一），
 # 于是默认队名正好是 09月28日祈愿试炼。夹具里有一条断言把这个耦合钉住，
 # 改日期会让夹具直接报错，而不是让下面一堆测试去操作一支并不存在的队伍。
 TEAM_NAME = "09月28日祈愿试炼"
@@ -101,7 +101,7 @@ class TestDateAndQuota:
         assert svc.create_date_of(clock.value) == clock.value.strftime("%Y-%m-%d")
 
     def test_weekly_table_derivation(self, ctx):
-        """反推「开团日是周几 → 能开几支」，把口径钉死。
+        """反推「发起日是周几 → 能开几支」，把口径钉死。
 
         取连续 7 天即可覆盖全部星期几，不必先对齐到周一。
         """
@@ -109,11 +109,11 @@ class TestDateAndQuota:
         by_weekday = {}
         for offset in range(7):
             day = clock.value + timedelta(days=offset)
-            by_weekday[WEEKDAY_LABELS[day.weekday()]] = svc.slot_limit(svc.slot_date_of(day))
+            by_weekday[WEEKDAY_LABELS[day.weekday()]] = svc.weekly_slot_limit(svc.slot_date_of(day))
 
         assert by_weekday == {
             "周一": 1, "周二": 1, "周三": 0, "周四": 2, "周五": 1, "周六": 1, "周日": 0,
-        }, "星期名额表的口径变了（默认按队名日期算，不是按开团当天）"
+        }, "星期名额表的口径变了（默认按队名日期算，不是按发起当天）"
         assert sum(by_weekday.values()) == 6, "每周最多 6 次发车"
 
     def test_slot_date_carries_weekday_label(self, ctx):
@@ -122,13 +122,13 @@ class TestDateAndQuota:
 
     async def test_closed_day_blocks_create(self, ctx):
         _, svc, _, clock = ctx
-        clock.jump_to_weekday("周三")  # 周三开团 → 队名日期落在周六（关闭）
+        clock.jump_to_weekday("周三")  # 周三发起 → 队名日期落在周六（关闭）
 
         outcome = await svc.create(GROUP, _pid("甲"), "甲")
         assert (outcome.ok, outcome.code) == (False, "closed_day")
         assert "队名日期会落在周六" in outcome.reply
         assert "不安排周三、周六" in outcome.reply
-        assert "下一次可开团的日子" in outcome.reply
+        assert "下一次可发起的日子" in outcome.reply
 
     async def test_closed_day_copy_follows_weekly_table(self, ctx):
         """关闭日的文案必须跟着名额表走：改了表而文案不变，玩家就会照错的规则理解。"""
@@ -147,22 +147,22 @@ class TestDateAndQuota:
         nxt = svc.next_open_day()
 
         assert nxt == (clock.value + timedelta(days=1)).strftime("%Y-%m-%d")
-        assert svc.slot_limit(svc.slot_date_of(datetime.strptime(nxt, "%Y-%m-%d"))) > 0
+        assert svc.weekly_slot_limit(svc.slot_date_of(datetime.strptime(nxt, "%Y-%m-%d"))) > 0
 
     async def test_hall_says_closed_on_closed_day(self, ctx):
         _, svc, _, clock = ctx
         clock.jump_to_weekday("周三")
 
         outcome = await svc.list_open(GROUP)
-        assert "今天不能开团" in outcome.reply
+        assert "今天无法发起祈愿" in outcome.reply
         assert "不安排周三、周六" in outcome.reply
         assert "下一次" in outcome.reply
 
     async def test_hall_says_open_today(self, ctx):
         _, svc, _, clock = ctx
-        clock.jump_to_weekday("周一")  # 周一开团 → 队名日期周四，允许 1 支
+        clock.jump_to_weekday("周一")  # 周一发起 → 队名日期周四，允许 1 支
         opened = await svc.list_open(GROUP)
-        assert "今天可以开团" in opened.reply
+        assert "今天可以发起祈愿" in opened.reply
         assert "名额：1 支，已用 0 支" in opened.reply
 
     async def test_hall_says_closed_when_quota_used_up(self, ctx):
@@ -172,21 +172,21 @@ class TestDateAndQuota:
         await svc.join(GROUP, _pid("乙"), "乙")  # 发车，用掉唯一名额
 
         outcome = await svc.list_open(GROUP)
-        assert "今天不能开团" in outcome.reply
+        assert "今天无法发起祈愿" in outcome.reply
         assert "名额已用尽" in outcome.reply
         assert "下一次" in outcome.reply
 
     async def test_hall_still_open_when_quota_partially_used(self, ctx):
-        """名额还没用完（默认表里周四那支日期有 2 个名额）时仍要报「可以开团」。"""
+        """名额还没用完（默认表里周四那支日期有 2 个名额）时仍要报「可以发起」。"""
         _, svc, _, clock = ctx
         clock.jump_to_weekday("周四")
-        assert svc.slot_limit(svc.slot_date_of()) == 2
+        assert svc.weekly_slot_limit(svc.slot_date_of()) == 2
 
         await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
         await svc.join(GROUP, _pid("乙"), "乙")
 
         outcome = await svc.list_open(GROUP)
-        assert "今天可以开团" in outcome.reply
+        assert "今天可以发起祈愿" in outcome.reply
         assert "已用 1 支" in outcome.reply
 
     async def test_quota_exhausted_blocks_create(self, ctx):
@@ -509,7 +509,7 @@ class TestAdminOps:
         assert [s["status_name"] for s in await _statuses(db, "乙")] == [TEAM_NAME]
 
     async def test_stats_summarises_window(self, ctx):
-        """统计要能回答「开团多不多、发车成不成、卡在哪一步」。"""
+        """统计要能回答「发起多不多、发车成不成、卡在哪一步」。"""
         _, svc, _, clock = ctx
         # 第一支：发车；第二支：名额被抢 → 未能成行；第三支（换一天）：诸神解散 → 没凑够
         await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
@@ -522,7 +522,7 @@ class TestAdminOps:
 
         outcome = await svc.admin_stats(GROUP, 7)
         assert outcome.ok
-        assert "开团 3 次" in outcome.reply
+        assert "发起 3 次" in outcome.reply
         assert "发车 1" in outcome.reply
         assert "未能成行 1" in outcome.reply
         assert "没凑够 1" in outcome.reply
@@ -536,13 +536,13 @@ class TestAdminOps:
         assert "没有开过团" in outcome.reply
 
     async def test_stats_respects_window(self, ctx):
-        """只统计窗口内开团的队伍。"""
+        """只统计窗口内发起的队伍。"""
         _, svc, _, clock = ctx
         await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
         clock.value += timedelta(days=10)
 
         assert "没有开过团" in (await svc.admin_stats(GROUP, 7)).reply
-        assert "开团 1 次" in (await svc.admin_stats(GROUP, 30)).reply
+        assert "发起 1 次" in (await svc.admin_stats(GROUP, 30)).reply
 
     async def test_clear_releases_quota(self, ctx):
         db, svc, _, _ = ctx
@@ -578,7 +578,7 @@ class TestTick:
     async def test_no_reminder_right_after_create(self, ctx):
         _, svc, _, _ = ctx
         await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
-        assert await svc.tick() == [], "开团播报之后立刻又来一条提醒"
+        assert await svc.tick() == [], "发起播报之后立刻又来一条提醒"
 
     async def test_reminder_fires_once_per_window(self, ctx):
         db, svc, _, _ = ctx
@@ -634,3 +634,152 @@ class TestTick:
 
         assert await svc.tick() == []
         assert (await db.get_wish_team(team["team_id"]))["status"] == WISH_RECRUITING
+
+
+class TestQuotaSemantics:
+    """上限只由成功发车产生（v3.9.2）：发起不限次、失败不留痕、解散即释放。"""
+
+    async def test_only_departure_consumes_quota(self, ctx):
+        """发起、主动解散、超时解散都不占名额——只有发车才占。"""
+        db, svc, _, _ = ctx
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        assert await db.slot_usage(GROUP, svc.slot_date_of()) == 0, "发起就占了名额"
+
+        await svc.leave(GROUP, _pid("甲"))
+        assert await db.slot_usage(GROUP, svc.slot_date_of()) == 0, "解散没有释放名额"
+
+        await svc.create(GROUP, _pid("乙"), "乙", capacity=3)
+        team = (await db.get_open_wish_teams(GROUP))[0]
+        await _backdate(db, team["team_id"], "created_at")
+        await svc.tick()
+        assert (await db.get_wish_team(team["team_id"]))["status"] == WISH_DISBANDED
+        assert await db.slot_usage(GROUP, svc.slot_date_of()) == 0, "超时解散没有释放名额"
+
+    async def test_tick_voids_team_when_slot_quota_closes(self, ctx):
+        """诸神中途把某个日期的名额改成 0 之后，已存在的招募队伍由 tick 宣判，不等超时。"""
+        db, svc, config, _ = ctx
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        # 夹具时钟是周五 → 今天对应的队名日期是周一 → 把周一改成 0
+        config["wish_weekly_limits"] = [0, 1, 0, 1, 1, 0, 2]
+
+        out = await svc.tick()
+        assert out, "宣判了却没有播报"
+        assert await db.get_open_wish_teams(GROUP) == []
+        assert await db.list_wish_teams(GROUP, (WISH_VOIDED,)), "队伍没有被判为未能成行"
+
+    async def test_void_sweep_ignores_reminder_switch(self, ctx):
+        """兜底不受提醒开关影响。
+
+        若把兜底写进 `if remind > 0` 分支，诸神把 `wish_reminder_minutes` 设成 0 就
+        会连带关掉它，而且不报错——这条专门钉住那个写法。
+        """
+        db, svc, config, _ = ctx
+        config["wish_reminder_minutes"] = 0
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        config["wish_weekly_limits"] = [0, 1, 0, 1, 1, 0, 2]
+
+        out = await svc.tick()
+        assert out, "关掉提醒之后名额兜底也失效了"
+        assert await db.list_wish_teams(GROUP, (WISH_VOIDED,))
+
+    async def test_join_refused_when_slot_closed(self, ctx):
+        """名额为 0 的日期连加入都拒（否则队伍会照样加满并发车）。"""
+        _, svc, config, _ = ctx
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        config["wish_weekly_limits"] = [0, 1, 0, 1, 1, 0, 2]
+
+        outcome = await svc.join(GROUP, _pid("乙"), "乙")
+        assert outcome.code == "closed_day"
+        assert "不安排" in outcome.reply
+
+
+class TestSlotBonus:
+    """「仅今天加开」：只影响今天对应的那个队名日期，次日自动失效。"""
+
+    async def test_bonus_raises_quota_and_join_honours_it(self, ctx):
+        """加开必须同时被 create 与 join 认到。
+
+        只改 create 那一路会造出「发起放行、加入被拦、还不被 tick 宣判」的卡死队伍
+        （兜底走 slot_quota，会认为它未超限）。
+        """
+        _, svc, _, _ = ctx
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=2)
+        await svc.join(GROUP, _pid("乙"), "乙")  # 发车，唯一名额用掉
+        assert (await svc.slot_quota(GROUP, svc.slot_date_of()))[0] == 1
+        assert (await svc.create(GROUP, _pid("丙"), "丙", capacity=2)).code == "no_slot"
+
+        outcome = await svc.admin_bonus(GROUP, 1)
+        assert outcome.ok and "加开 1 场" in outcome.reply
+        assert await svc.slot_quota(GROUP, svc.slot_date_of()) == (2, 1)
+
+        assert (await svc.create(GROUP, _pid("丙"), "丙", capacity=2)).ok
+        filled = await svc.join(GROUP, _pid("丁"), "丁")
+        assert filled.code == "departed", "加开之后 join 仍按旧上限拦人"
+        assert await svc.slot_quota(GROUP, svc.slot_date_of()) == (2, 2)
+
+    async def test_bonus_only_applies_to_today(self, ctx):
+        """只写今天那个日期，所以次日自动失效（不需要过期逻辑）。"""
+        _, svc, _, clock = ctx
+        await svc.admin_bonus(GROUP, 2)
+        today_slot = svc.slot_date_of()
+        assert (await svc.slot_quota(GROUP, today_slot))[0] == (
+            svc.weekly_slot_limit(today_slot) + 2
+        )
+
+        clock.value += timedelta(days=1)
+        tomorrow_slot = svc.slot_date_of()
+        assert tomorrow_slot != today_slot
+        assert (await svc.slot_quota(GROUP, tomorrow_slot))[0] == svc.weekly_slot_limit(
+            tomorrow_slot
+        ), "昨天的加开泄漏到了今天"
+
+    async def test_bonus_clear_and_cap(self, ctx):
+        _, svc, _, _ = ctx
+        await svc.admin_bonus(GROUP, 3)
+        cleared = await svc.admin_bonus(GROUP, 0)
+        assert cleared.ok and "已清除" in cleared.reply
+        assert await svc.slot_bonus(GROUP, svc.slot_date_of()) == 0
+
+        capped = await svc.admin_bonus(GROUP, 99)
+        assert capped.code == "capped" and "最多" in capped.reply
+        assert await svc.slot_bonus(GROUP, svc.slot_date_of()) == 0, "被拒的加开改动了已有值"
+
+    async def test_hall_shows_bonus(self, ctx):
+        """名额从此有两个来源，大厅必须显示出加开那一份。"""
+        _, svc, _, _ = ctx
+        await svc.admin_bonus(GROUP, 1)
+
+        outcome = await svc.list_open(GROUP)
+        assert "含今日加开 1" in outcome.reply
+
+
+class TestBroadcastThrottle:
+    async def test_same_person_repeat_is_not_announced(self, ctx):
+        """同一人在窗口内重复发起：发起照常成功，只是不再播报。"""
+        _, svc, config, clock = ctx
+        first = await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        assert len(first.broadcasts) == 1
+
+        await svc.leave(GROUP, _pid("甲"))
+        second = await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        assert second.ok, "节流不该影响发起本身"
+        assert second.broadcasts == [] and "不再播报" in second.reply
+
+        # 换个人不受影响
+        third = await svc.create(GROUP, _pid("乙"), "乙", capacity=3)
+        assert len(third.broadcasts) == 1
+
+        # 过了窗口就恢复
+        clock.value += timedelta(seconds=svc.broadcast_throttle_seconds() + 1)
+        await svc.leave(GROUP, _pid("甲"))
+        fourth = await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        assert len(fourth.broadcasts) == 1, "过了窗口仍不播报"
+
+    async def test_throttle_can_be_disabled(self, ctx):
+        _, svc, config, _ = ctx
+        config["wish_broadcast_throttle_seconds"] = 0
+
+        await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        await svc.leave(GROUP, _pid("甲"))
+        again = await svc.create(GROUP, _pid("甲"), "甲", capacity=3)
+        assert len(again.broadcasts) == 1

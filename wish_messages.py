@@ -18,7 +18,7 @@
 import random
 
 WISH_MESSAGES = {
-    # 开团播报：这条是群里唯一的新鲜事入口，必须一眼看出「谁开的、缺几人、什么日子」
+    # 发起播报：这条是群里唯一的新鲜事入口，必须一眼看出「谁开的、缺几人、什么日子」
     "open": [
         "{leader} 起了个愿：【{team}】，招 {capacity} 人，现 {count} 人，缺 {missing}。",
         "有人敲了敲神明的门：「{team}」——{leader} 领头，还缺 {missing} 人。",

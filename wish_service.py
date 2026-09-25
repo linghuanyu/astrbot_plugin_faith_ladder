@@ -6,7 +6,7 @@
 - 队伍满员即自动「发车」，每位成员获得一条**以队名命名的状态**，到期时间 = 队伍的
   `expire_at`（发车日 + `wish_status_days`）。
 - 发车后到 `expire_at` 之前这段窗口里，**名单是活的**：补位、移出、换人都要同步状态。
-- 名额按 `slot_date`（= 开团日 + 状态天数）的星期算，目的是控制节奏（本群每天一场）。
+- 名额按 `slot_date`（= 发起日 + 状态天数）的星期算，目的是控制节奏（本群每天一场）。
   **从不解析队名**——队名由系统生成、诸神可改，规则必须与名字无关。
 
 本模块只出文案与结果码，不 import AstrBot，也不负责发送（mixin 负责送到哪里）。
@@ -38,6 +38,12 @@ WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "�
 
 # 队伍至少两人：一人成不了「一起被记住」
 MIN_CAPACITY = 2
+
+# 「加开」值的上限（累计）：防手滑，单日最多 = 星期表 + 9
+MAX_SLOT_BONUS = 9
+
+# 发起播报的同人节流默认窗口（秒）；schema 缺该键时的回落值
+DEFAULT_BROADCAST_THROTTLE_SECONDS = 60
 
 # 队伍状态 → 展示名
 STATUS_LABELS = {
@@ -110,13 +116,17 @@ class WishService:
         """本群同时允许的招募中队伍数（同时也是大厅展示上限）。"""
         return self._int_cfg("wish_list_limit", 2, 1)
 
-    def per_player_create_limit(self) -> int:
-        """每人每天开团次数；0 = 不限。"""
-        return self._int_cfg("wish_daily_create_limit", 1, 0)
+    def broadcast_throttle_seconds(self) -> int:
+        """同一人在同一群重复**发起**时的播报节流窗口（秒）；0 = 不节流。
 
-    def per_group_create_limit(self) -> int:
-        """本群每天开团次数；0 = 不限。"""
-        return self._int_cfg("wish_daily_group_create_limit", 4, 0)
+        节流只压播报、不压动作：发起照常成功，只是短时间内不再往群里发第二条。
+        容忍「schema 里没有这个键」——部署时可能出现「新代码 + 旧 schema」的顺序，
+        那时 `_cfg` 会回落到调用方默认值，不能因此炸。
+        """
+        try:
+            return max(0, int(self._cfg("wish_broadcast_throttle_seconds")))
+        except (TypeError, ValueError):
+            return DEFAULT_BROADCAST_THROTTLE_SECONDS
 
     def reminder_minutes(self) -> int:
         """缺人提醒间隔；0 = 不提醒。"""
@@ -133,7 +143,7 @@ class WishService:
     def weekly_limits(self) -> List[int]:
         """名额表：索引 0..6 = 周一..周日，值 = 该日期允许成功发车的队伍数（0 = 不安排）。
 
-        索引按 `slot_date` 的星期取，而 `slot_date` = 开团日 + 状态天数，所以实际
+        索引按 `slot_date` 的星期取，而 `slot_date` = 发起日 + 状态天数，所以实际
         关闭的日子比「名字里那个日期」早若干天（默认 3 天）。这是刻意的：规则管的是
         「状态什么时候到期」，而不是「今天能不能玩」。
         """
@@ -155,16 +165,59 @@ class WishService:
         return datetime.now(BEIJING_TZ)
 
     def slot_date_of(self, now: Optional[datetime] = None) -> str:
-        """名额归属日期 = 开团日 + 状态天数。"""
+        """名额归属日期 = 发起日 + 状态天数。"""
         return ((now or self.now()) + timedelta(days=self.status_days())).strftime("%Y-%m-%d")
 
     def create_date_of(self, now: Optional[datetime] = None) -> str:
-        """开团日（只管两项每日开团次数上限）。"""
+        """发起日（北京日期）。"""
         return (now or self.now()).strftime("%Y-%m-%d")
 
-    def slot_limit(self, slot_date: str) -> int:
+    def weekly_slot_limit(self, slot_date: str) -> int:
+        """**只按星期表**算的名额（不含加开）。
+
+        取名刻意带上 weekly：凡是「要不要放行」的判断都必须走 `slot_quota`（它含加开），
+        用这个纯函数去拦人就会漏掉加开——曾经因此在 join 路径上造出过「发起放行、
+        加入被拦、还不被清理」的卡死队伍。
+        `next_open_day` 用它是对的：加开只对「今天发起对应的那个日期」生效，
+        不影响「下一次可发起的日子」的推算。
+        """
         weekday = datetime.strptime(slot_date, "%Y-%m-%d").weekday()
         return self.weekly_limits()[weekday]
+
+    async def slot_bonus(self, group_id: str, slot_date: str) -> int:
+        """该日期的「加开」值（没有则 0）。只用于展示，判断走 `slot_quota`。"""
+        return await self.db.get_slot_bonus(group_id, slot_date)
+
+    # ── 发起播报的同人节流 ──
+
+    def _announce_map(self) -> dict:
+        """(群, 人) → 上次发起播报时间。惰性初始化，便于测试替身直接用它。"""
+        if not hasattr(self, "_broadcast_last"):
+            self._broadcast_last = {}
+        return self._broadcast_last
+
+    def _claim_create_announcement(self, group_id: str, player_id: str) -> bool:
+        """这次发起是否还要往群里播报（窗口内重复发起就不播）。
+
+        节流**只压播报、不压动作**：发起照常成功。用 `self.now()` 而不是 time.time()，
+        这样测试里那个可控时钟能直接验证窗口；条目在每次调用时顺手清过期，
+        字典大小天然被「窗口内发起过的人」限住。进程重启即忘——噪音控制不需要持久化。
+        """
+        window = self.broadcast_throttle_seconds()
+        if window <= 0:
+            return True
+
+        now = self.now()
+        cache = self._announce_map()
+        key = f"{group_id}:{player_id}"
+        last = cache.get(key)
+        announce = last is None or (now - last).total_seconds() >= window
+
+        for stale in [k for k, ts in cache.items() if (now - ts).total_seconds() >= window]:
+            del cache[stale]
+        # 无论这次播不播都刷新时间戳：节流的承诺是「每个人每窗口最多一条播报」
+        cache[key] = now
+        return announce
 
     def default_team_name(self, slot_date: str) -> str:
         """默认队名：`%m月%d日` + 祈愿试炼（沿用仓库里唯一的用户可见日期格式）。"""
@@ -193,27 +246,33 @@ class WishService:
         return "、".join(self.closed_slot_weekdays())
 
     def next_open_day(self, now: Optional[datetime] = None, horizon: int = 14) -> Optional[str]:
-        """从明天起往后找第一个「可以开团」的日子（YYYY-MM-DD）；找不到返回 None。
+        """从明天起往后找第一个「可以发起」的日子（YYYY-MM-DD）；找不到返回 None。
 
-        每个日历日对应唯一的名额日期（= 该日 + 状态天数），所以「这一天能不能开团」
+        每个日历日对应唯一的名额日期（= 该日 + 状态天数），所以「这一天能不能发起」
         只取决于那一个 slot_date 的星期，不会因为名额已被别人用掉而失效——
-        作为「下一次」的答案它是准的。
+        作为「下一次」的答案它是准的。（加开只针对今天那个日期，这里不用管。）
         """
         base = now or self.now()
         for offset in range(1, horizon + 1):
             day = base + timedelta(days=offset)
-            if self.slot_limit(self.slot_date_of(day)) > 0:
+            if self.weekly_slot_limit(self.slot_date_of(day)) > 0:
                 return day.strftime("%Y-%m-%d")
         return None
 
     def next_open_hint(self, now: Optional[datetime] = None) -> str:
-        """「下一次可开团的日子」的文案片段；连找 14 天都没有（名额表全 0）时留空。"""
+        """「下一次可发起的日子」的文案片段；连找 14 天都没有（名额表全 0）时留空。"""
         nxt = self.next_open_day(now)
-        return f"\n下一次可开团的日子：{self.format_slot(nxt)}" if nxt else ""
+        return f"\n下一次可发起的日子：{self.format_slot(nxt)}" if nxt else ""
 
     async def slot_quota(self, group_id: str, slot_date: str) -> Tuple[int, int]:
-        """该名额日期的（上限, 已用）。"""
-        return self.slot_limit(slot_date), await self.db.slot_usage(group_id, slot_date)
+        """该名额日期的（**生效上限**, 已用）。生效上限 = 星期表 + 当日加开。
+
+        这是 limit 的唯一出口：`create` / `_join_team` / 大厅 / tick 兜底都走它，
+        所以「加开」只要加在这里就全链路生效。**别用 `weekly_slot_limit` 去拦人**
+        （那会漏掉加开）。
+        """
+        limit = self.weekly_slot_limit(slot_date) + await self.slot_bonus(group_id, slot_date)
+        return limit, await self.db.slot_usage(group_id, slot_date)
 
     @staticmethod
     def team_is_joinable(team: dict) -> bool:
@@ -252,14 +311,18 @@ class WishService:
         )
 
     @staticmethod
-    def _quota_text(slot_date: str, limit: int, used: int) -> str:
+    def _quota_text(slot_date: str, limit: int, used: int, bonus: int = 0) -> str:
+        """名额现状。`bonus` 是当日加开值，>0 时写明，因为名额从此有两个来源。"""
         label = WishService.format_slot(slot_date)
         if limit <= 0:
-            return f"{label}不安排试炼：本群不能开团（名额 0）"
-        return f"{label}名额：{limit} 支，已用 {used} 支"
+            return f"{label}不安排试炼：本群不能发起（名额 0）"
+        tail = f"（含今日加开 {bonus}）" if bonus > 0 else ""
+        return f"{label}名额：{limit} 支{tail}，已用 {used} 支"
 
-    def _open_status_line(self, slot_date: str, limit: int, used: int) -> str:
-        """大厅里那句直白的「今天能不能开团」。
+    def _open_status_line(
+        self, slot_date: str, limit: int, used: int, bonus: int = 0
+    ) -> str:
+        """大厅里那句直白的「今天能不能发起」。
 
         玩家问的是今天，而名额挂在 3 天后的日期上——不直说就得他自己算，所以这里
         直接把结论给出来，再附上名额细节。
@@ -267,14 +330,15 @@ class WishService:
         if limit <= 0:
             closed = self.closed_weekdays_text()
             reason = f"本群不安排{closed}的试炼" if closed else "本群没有安排试炼的名额"
-            return f"今天不能开团（{reason}）{self.next_open_hint()}".replace("\n", "；")
+            return f"今天无法发起祈愿（{reason}）{self.next_open_hint()}".replace("\n", "；")
         if used >= limit:
+            # 把「还想今天再办一场」这条路接上：加开只影响今天那个日期
             return (
-                f"今天不能开团（{self.format_slot(slot_date)}名额已用尽）"
-                f"{self.next_open_hint()}".replace("\n", "；")
+                f"今天无法发起祈愿（{self.format_slot(slot_date)}名额已用尽；"
+                f"诸神可「祈愿管理 加开」）{self.next_open_hint()}".replace("\n", "；")
             )
         # 不用括号包住名额细节：「（09月27日（周日）名额…）」这种嵌套括号读起来很别扭
-        return f"今天可以开团 · {self._quota_text(slot_date, limit, used)}"
+        return f"今天可以发起祈愿 · {self._quota_text(slot_date, limit, used, bonus)}"
 
     def _depart_broadcast(self, team: dict) -> str:
         return self._line(
@@ -297,7 +361,7 @@ class WishService:
 
     @staticmethod
     def join_preference(team: dict) -> tuple:
-        """不加队名时的挑队顺序：先招募中的队伍，再差得最少的，最后最早开团的。
+        """不加队名时的挑队顺序：先招募中的队伍，再差得最少的，最后最早发起的。
 
         为什么是「差得最少」而不是「人最少」：名额按**队伍**算、且只有发车才消耗，
         所以这个玩法的目标是「至少有一支队伍开成」。按人最少挑会让人在两支队之间
@@ -316,7 +380,7 @@ class WishService:
         self, group_id: str, player_id: str, player_name: str,
         capacity: Optional[int] = None,
     ) -> WishOutcome:
-        """开团：名字由系统生成，开团者自动入座。"""
+        """发起祈愿：名字由系统生成，发起者自动入座。"""
         now = self.now()
         slot_date = self.slot_date_of(now)
         create_date = self.create_date_of(now)
@@ -326,17 +390,18 @@ class WishService:
             closed = self.closed_weekdays_text()
             return WishOutcome(
                 False, "closed_day",
-                f"今天不能开团：队名日期会落在"
+                f"今天无法发起祈愿：队名日期会落在"
                 f"{WEEKDAY_LABELS[datetime.strptime(slot_date, '%Y-%m-%d').weekday()]}，"
                 f"而本群不安排{closed}的祈愿试炼。"
                 f"{self.next_open_hint(now)}\n"
-                f"（名额看的是队名里的日期，队名日期 = 开团日 + {self.status_days()} 天）",
+                f"（名额看的是队名里的日期，队名日期 = 发起日 + {self.status_days()} 天）",
             )
         if used >= limit:
             return WishOutcome(
                 False, "no_slot",
                 f"{self._quota_text(slot_date, limit, used)}\n"
-                f"名额已用尽，今天开团也发不了车。{self.next_open_hint(now)}",
+                f"名额已用尽，今天发起也发不了车。{self.next_open_hint(now)}\n"
+                f"（诸神想让今天再办一场，可以「祈愿管理 加开」）",
             )
 
         if capacity is None:
@@ -352,32 +417,37 @@ class WishService:
             group_id, self.default_team_name(slot_date), capacity, player_id, player_name,
             slot_date, create_date,
             recruiting_limit=self.list_limit(),
-            per_player_limit=self.per_player_create_limit(),
-            per_group_limit=self.per_group_create_limit(),
         )
         if team_id is None:
             return WishOutcome(False, code, self._create_failure(code))
 
         team = await self.db.get_wish_team(team_id)
         limit, used = await self.slot_quota(group_id, slot_date)
+        bonus = await self.slot_bonus(group_id, slot_date)
         reply = (
-            f"已开团：{self._team_line(team)}\n"
+            f"已发起祈愿：{self._team_line(team)}\n"
             f"缺 {team['capacity'] - len(team['members'])} 人满员即发车，"
             f"满员后全员获得「{team['name']}」状态（{self.status_days()} 天）。\n"
-            f"{self._quota_text(slot_date, limit, used)}"
+            f"{self._quota_text(slot_date, limit, used, bonus)}"
         )
-        broadcast = self._open_broadcast(team)
-        return WishOutcome(True, "ok", reply, [broadcast] if broadcast else [])
+
+        broadcasts: List[str] = []
+        if self._claim_create_announcement(group_id, player_id):
+            broadcast = self._open_broadcast(team)
+            if broadcast:
+                broadcasts.append(broadcast)
+        else:
+            # 节流只压播报、不压动作：发起照常成立，只是不再占群版面
+            reply += f"\n（{self.broadcast_throttle_seconds()} 秒内重复发起不再播报）"
+        return WishOutcome(True, "ok", reply, broadcasts)
 
     @staticmethod
     def _create_failure(code: str) -> str:
         return {
-            "already_in_team": "你已经有队伍在招募了。先「祈愿退出」再来开团。",
-            "too_many_teams": "本群已有队伍在招募，等它发车或解散后再开。（不会占用你今天的开团次数）",
-            "daily_limit": "你今天已经开过一次团了，明天再来。",
-            "group_daily_limit": "本群今天的开团次数已经用完。",
+            "already_in_team": "你已经有队伍在招募了。先「祈愿退出」再来发起。",
+            "too_many_teams": "本群同时最多 2 支队伍在招募，等其中一支发车或解散后再发起。",
             "name_taken": "队名已被占用（同名队伍太多），请诸神改名后再试。",
-        }.get(code, f"开团失败（{code}）。")
+        }.get(code, f"发起失败（{code}）。")
 
     async def join(
         self, group_id: str, player_id: str, player_name: str,
@@ -398,7 +468,7 @@ class WishService:
             if not candidates:
                 return WishOutcome(
                     False, "no_candidates",
-                    "本群现在没有可加入的队伍。可以自己开一支：祈愿组队",
+                    "本群现在没有可加入的队伍。可以自己发起一场：祈愿组队",
                 )
             team = min(candidates, key=self.join_preference)
 
@@ -408,9 +478,13 @@ class WishService:
         self, group_id: str, team: dict, player_id: str, player_name: str
     ) -> WishOutcome:
         """加入的核心：调 DB 层并按结果码出文案。诸神「补位」也走这里。"""
+        # 生效上限必须走 slot_quota（含当日加开）：用 weekly_slot_limit 去拦人会让
+        # 「靠加开发起出来的队伍」加不进人，而 tick 兜底又认为它未超限、不清它——
+        # 卡到 45 分钟超时。
+        slot_limit, _used = await self.slot_quota(group_id, team["slot_date"])
         code, updated = await self.db.join_wish_team(
             team["team_id"], group_id, player_id, player_name,
-            slot_limit=self.slot_limit(team["slot_date"]),
+            slot_limit=slot_limit,
             status_days=self.status_days(),
             keep_statuses=self.status_keep(),
         )
@@ -466,6 +540,12 @@ class WishService:
                 f"【{team['name']}】对应的 {self.format_slot(team['slot_date'])} "
                 f"名额已经用尽，加入了也发不了车。",
             )
+        if code == "closed_day":
+            return WishOutcome(
+                False, code,
+                f"本群不安排 {self.format_slot(team['slot_date'])} 的试炼"
+                f"（名额为 0），【{team['name']}】无法成行。",
+            )
         if code == "window_closed":
             return WishOutcome(
                 False, code, f"【{team['name']}】的名单已经定下了（3 天窗口已过）。"
@@ -499,6 +579,7 @@ class WishService:
         teams = sorted(teams, key=self.join_preference)
         slot_date = self.slot_date_of()
         limit, used = await self.slot_quota(group_id, slot_date)
+        bonus = await self.slot_bonus(group_id, slot_date)
 
         lines = ["祈愿试炼 · 本群招募中", ""]
         if not teams:
@@ -512,7 +593,7 @@ class WishService:
             lines.append(f"     成员：{self._members_text(team)}")
         lines += [
             "",
-            self._open_status_line(slot_date, limit, used),
+            self._open_status_line(slot_date, limit, used, bonus),
             "参与：祈愿组队 [人数] ／ 祈愿加入 [队名] ／ 祈愿我的",
             "（不加队名时补进最接近满员的那支，也就是排在最前面的那支）",
         ]
@@ -846,9 +927,9 @@ class WishService:
         )
 
     async def admin_stats(self, group_id: str, days: int = 7) -> WishOutcome:
-        """近期运行统计：开团、发车、参与，以及卡在哪一步。
+        """近期运行统计：发起、发车、参与，以及卡在哪一步。
 
-        存在的理由：调参要看的是「开团多不多、发车成不成」，而这些数只有裸 SQL 能取。
+        存在的理由：调参要看的是「发起多不多、发车成不成」，而这些数只有裸 SQL 能取。
         没有这个出口，「按数据调参」就只是一句愿望。
         """
         days = max(1, min(int(days or 7), 365))
@@ -880,17 +961,52 @@ class WishService:
         lines = [
             f"祈愿试炼 · 近 {days} 天",
             "",
-            f"开团 {len(teams)} 次：发车 {len(departed)}、未能成行 {len(voided)}、"
+            f"发起 {len(teams)} 次：发车 {len(departed)}、未能成行 {len(voided)}、"
             f"没凑够 {len(unfilled)}"
             + (f"、仍在招募 {len(recruiting)}" if recruiting else ""),
             f"发车率 {rate}（已结束的 {finished} 支里）",
             f"参与 {joined} 人次，去重 {data['players']} 人",
             f"发车队伍平均满员率 {fill}",
             "",
-            "怎么看：开团少 = 没人想玩（考虑给它一点产出）；"
-            "开团多而发车少 = 凑不齐人（调小 wish_default_capacity，或拉长 wish_disband_minutes）。",
+            "怎么看：发起少 = 没人想玩（考虑给它一点产出）；"
+            "发起多而发车少 = 凑不齐人（调小 wish_default_capacity，或拉长 wish_disband_minutes）。",
         ]
         return WishOutcome(True, "ok", "\n".join(lines))
+
+    async def admin_bonus(self, group_id: str, delta: int = 1) -> WishOutcome:
+        """「仅今天加开」：给今天发起对应的那个队名日期临时加名额。
+
+        只写今天那个日期，所以**次日自动失效是天然的**——明天的队名日期是另一个日期，
+        这条记录不会再被读到，不需要任何过期逻辑。`delta = 0` 表示清除（名额回到只看
+        星期表）。加开值累计有上限（`MAX_SLOT_BONUS`），防手滑。
+        """
+        slot_date = self.slot_date_of()
+        weekly = self.weekly_slot_limit(slot_date)
+        code, extra = await self.db.add_slot_bonus(
+            group_id, slot_date, delta, MAX_SLOT_BONUS
+        )
+        if code == "capped":
+            return WishOutcome(
+                False, code,
+                f"加开值最多 {MAX_SLOT_BONUS} 场（当前已是 {extra} 场），这次没有改动。",
+            )
+
+        if delta == 0 or extra == 0:
+            return WishOutcome(
+                True, "ok",
+                f"已清除 {self.format_slot(slot_date)} 的加开，"
+                f"名额回到星期表的 {weekly} 支。",
+            )
+
+        limit, used = await self.slot_quota(group_id, slot_date)
+        verb = "加开" if delta > 0 else "减少"
+        return WishOutcome(
+            True, "ok",
+            f"已为 {self.format_slot(slot_date)} {verb} {abs(delta)} 场"
+            f"（星期表 {weekly} + 加开 {extra} = {limit} 场）。\n"
+            f"仅对今天发起的队伍生效，明天自动失效。\n"
+            f"{self._quota_text(slot_date, limit, used, extra)}",
+        )
 
     async def admin_clear(self, group_id: str) -> WishOutcome:
         """清空队伍记录，并释放当天名额（逃生口）。"""
@@ -907,9 +1023,19 @@ class WishService:
     # ── 调度入口 ──
 
     async def tick(self) -> List[Tuple[str, str]]:
-        """每 30 秒调用一次：解散超时队伍 + 给到点的队伍发提醒。
+        """每 30 秒调用一次：解散超时队伍 → 名额兜底 → 给到点的队伍发提醒。
 
         返回 [(群号, 播报文案)]，由 mixin 负责送到群里（并施加群访问控制的静默规则）。
+
+        三件事的顺序是刻意的：
+        - 先超时解散（那些队伍已经不在招募中了，不该再参与后面的判断）
+        - 再名额兜底，且**兜底排在提醒之前**：否则同一 tick 里会先给一支马上要被宣判
+          的队伍发「缺人提醒」，两条消息自相矛盾
+        - 最后才是提醒
+
+        `get_open_wish_teams` 被提到公共位置：兜底与提醒都要用这份列表，而兜底**不能**
+        挂在 `remind > 0` 里面——那样「把 `wish_reminder_minutes` 设成 0」会连带关掉
+        兜底，而且不报错（有测试专门钉住这条）。
         """
         out: List[Tuple[str, str]] = []
 
@@ -928,22 +1054,55 @@ class WishService:
                     out.append((str(team["group_id"]), text))
 
         remind = self.reminder_minutes()
-        if remind > 0:
-            cutoff = _utc_cutoff(remind)
-            for group_id in self.groups():
-                for team in await self.db.get_open_wish_teams(group_id):
-                    if len(team["members"]) >= team["capacity"]:
-                        continue
-                    if not await self.db.claim_wish_reminder(team["team_id"], cutoff):
-                        continue  # 这个窗口已经被别的 tick 认领过了
-                    limit, used = await self.slot_quota(group_id, team["slot_date"])
-                    text = self._line(
-                        "remind", team=team["name"], count=len(team["members"]),
-                        capacity=team["capacity"],
-                        missing=team["capacity"] - len(team["members"]),
-                        minutes=remind,
-                    )
-                    if text:
-                        out.append((group_id, f"{text}\n{self._quota_text(team['slot_date'], limit, used)}"))
+        cutoff = _utc_cutoff(remind) if remind > 0 else None
+
+        for group_id in self.groups():
+            teams = await self.db.get_open_wish_teams(group_id)
+            if not teams:
+                continue
+
+            out.extend(await self._sweep_exhausted_slots(group_id, teams))
+
+            if cutoff is None:
+                continue
+            for team in teams:
+                if len(team["members"]) >= team["capacity"]:
+                    continue
+                if not await self.db.claim_wish_reminder(team["team_id"], cutoff):
+                    continue  # 这个窗口已经被别的 tick 认领过了
+                limit, used = await self.slot_quota(group_id, team["slot_date"])
+                text = self._line(
+                    "remind", team=team["name"], count=len(team["members"]),
+                    capacity=team["capacity"],
+                    missing=team["capacity"] - len(team["members"]),
+                    minutes=remind,
+                )
+                if text:
+                    out.append((group_id, f"{text}\n{self._quota_text(team['slot_date'], limit, used)}"))
+        return out
+
+    async def _sweep_exhausted_slots(self, group_id: str, teams: List[dict]) -> List[Tuple[str, str]]:
+        """名额已用尽（或为 0）的日期下，其余招募中的队伍一律判「未能成行」。
+
+        为什么需要它：`void_sibling_teams` 只在「某队发车」那一刻触发，所以诸神中途
+        把名额表调小、或对某个日期用了 `加开 0` 之后，已经存在的队伍会卡在「加不进人、
+        也发不了车」的状态里干等到超时。这里每个 tick 重算一次，让配置变化立刻生效。
+
+        返回 [(群号, 播报)]。
+        """
+        out: List[Tuple[str, str]] = []
+        seen: set = set()
+        for team in teams:
+            slot_date = team["slot_date"]
+            if slot_date in seen:
+                continue
+            seen.add(slot_date)
+            limit, used = await self.slot_quota(group_id, slot_date)
+            if limit > 0 and used < limit:
+                continue
+            for loser in await self.db.void_sibling_teams(group_id, slot_date):
+                text = self._voided_broadcast(loser)
+                if text:
+                    out.append((group_id, text))
         return out
 
