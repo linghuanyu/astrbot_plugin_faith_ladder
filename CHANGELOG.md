@@ -1,5 +1,23 @@
 # 更新日志
 
+## [3.9.1] - 2026-09-25
+
+### 新增
+- **储物空间彩蛋「持续窗口」** — 彩蛋命中后不再一次性结束：默认 60 秒内该玩家每次「查询储物空间」都显示**同一条**文案，随后自动恢复。窗口**不随查询续期**、**窗口内不再掷骰**——前者会让玩家越查越拿不回道具，后者会让"持续"变成每次仍有 95% 概率看到真道具。窗口落库（`inventory_easter_eggs` 表，每人最多一行），插件重启后仍在
+- 新增配置项 `inventory_easter_egg_hold_seconds`（int，默认 60；填 0 则退回原来的"只在命中那一次显示"）
+
+### 变更
+- **加列式迁移收敛成 `_ensure_column()`** — 原先 5 个 `_migrate_*` 方法各自复制一遍「PRAGMA table_info → ALTER TABLE ADD COLUMN → commit → log」，现在只在 `initialize()` 里列一张声明式表（表 / 列 / 列定义都来自代码常量）。行为不变，顺序仍有讲究：`whitelist.faith` 必须排在 `_migrate_whitelist` 之后（那条迁移可能重建 whitelist 表，而重建结果没有 faith 列）
+- 加列失败的错误信息改为可诊断：指明是哪张表哪一列，并提示检查数据目录的 `ladder.db` 是否被占用/损坏、插件是否版本混杂。此前是一句裸的 sqlite 报错，运维看不出该查什么（仍然中断启动：这几列都是读查询依赖的列，缺了会变成"能启动但每条命令都抛错"）
+
+### 升级注意
+- 本版**不改既有表结构**，只新增一张表（`inventory_easter_eggs`），`CREATE TABLE IF NOT EXISTS` 幂等，老库首次启动自动建表
+- 彩蛋默认仍是关闭的（`inventory_easter_egg_enabled=false`）
+
+### 测试
+- 新增 `tests/test_inventory_easter_egg.py`：数据层（窗口读写、过期判定、覆盖写入、群/玩家隔离）+ 命令层（首次命中、**窗口内把掷骰设成必不中仍拿到同一条**、过期后恢复真实道具、`enabled=false` / 文案池空 / `hold=0` 三种边界、诸神查询不受影响）
+- `tests/test_status_blocks.py` 的老库补列用例改为调用 `_ensure_column`
+
 ## [3.9.0] - 2026-09-25
 
 ### 新增

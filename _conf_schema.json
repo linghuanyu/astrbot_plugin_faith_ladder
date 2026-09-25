@@ -680,15 +680,21 @@
   },
   "inventory_easter_egg_enabled": {
     "description": "是否启用储物空间查询彩蛋",
-    "hint": "只在非诸神查询自己的储物空间时可能触发。",
+    "hint": "只在非诸神查询自己的储物空间时可能触发；命中后由 hold_seconds 决定持续多久。",
     "type": "bool",
     "default": false
   },
   "inventory_easter_egg_probability": {
     "description": "储物空间查询彩蛋触发概率（0~1，默认0.05=5%）",
-    "hint": "0~1 之间的小数，例如 0.05 表示 5%。",
+    "hint": "0~1 之间的小数，例如 0.05 表示 5%。命中后进入持续窗口，窗口内不再重新掷骰。",
     "type": "float",
     "default": 0.05
+  },
+  "inventory_easter_egg_hold_seconds": {
+    "description": "储物空间彩蛋持续时间（秒）",
+    "hint": "命中后这段时间内重复查询都显示同一条彩蛋文案，不再掷骰；窗口不随查询续期。0 = 关闭持续窗口（只看命中的那一次，已有窗口也立刻失效）。",
+    "type": "int",
+    "default": 60
   },
   "inventory_easter_egg_messages": {
     "description": "储物空间查询彩蛋文案列表",

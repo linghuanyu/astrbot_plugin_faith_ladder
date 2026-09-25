@@ -10,7 +10,8 @@ _resolve_target_or_self / _resolve_self_player / _send_forward_text。
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import random
+from typing import TYPE_CHECKING, Optional
 
 from astrbot_plugin_faith_ladder.messages import PLAYER_NOT_FOUND, QUERY_COOLDOWN_MSG
 
@@ -158,15 +159,11 @@ class QueryCommandsMixin:
                 return
             names = [self_player.player_name]
 
-            # 储物空间彩蛋：非诸神查自己时有概率触发
+            # 储物空间彩蛋：非诸神查自己时可能触发，命中后由 DB 里的窗口续着
             if self._cfg("inventory_easter_egg_enabled"):
-                import random
-                prob = self._cfg("inventory_easter_egg_probability")
-                # 默认文案在 _conf_schema.json 的 default 里，此处不再重复一份
-                ee_messages = self._cfg("inventory_easter_egg_messages")
-                # 配置成空列表时 random.choice 会抛 IndexError，此时跳过彩蛋
-                if ee_messages and random.random() < prob:
-                    yield event.plain_result(random.choice(ee_messages))
+                egg = await self._inventory_easter_egg_reply(group_id, self_player.player_id)
+                if egg is not None:
+                    yield event.plain_result(egg)
                     return
 
         results = []
@@ -191,3 +188,40 @@ class QueryCommandsMixin:
             return
         yield event.plain_result(text)
         event.stop_event()
+
+    async def _inventory_easter_egg_reply(
+        self, group_id: str, player_id: str
+    ) -> Optional[str]:
+        """储物空间彩蛋：返回要回复的文案；不该触发时返回 None。
+
+        两段判定的顺序就是这个功能的行为契约：
+        1. 先看该玩家有没有**未过期的窗口**——有就重放当初那条文案。窗口内不再掷骰，
+           否则"命中后持续 N 秒"只是把 5% 变成 5%×5%；也不续期，到期时间固定在
+           触发那一刻，否则玩家越查越拿不回自己的道具。
+        2. 没有窗口才掷骰。文案池为空时直接跳过（`random.choice` 会抛 IndexError，
+           空列表属于"静默失效"的既有约定）；命中后落窗口。
+
+        `hold_seconds <= 0` 表示整个持续窗口机制不启用：既不读旧窗口（改配置立刻
+        生效，不用等已存在的窗口自然到期），也不落新窗口，退化成"只有命中那一次
+        显示"的老行为。
+
+        文案与概率、时长都在 `_conf_schema.json` 的 default 里，这里不重复一份。
+        """
+        hold_seconds = self._cfg("inventory_easter_egg_hold_seconds")
+        if hold_seconds > 0:
+            held = await self.db_manager.get_active_inventory_easter_egg(group_id, player_id)
+            if held is not None:
+                return held
+
+        messages = self._cfg("inventory_easter_egg_messages")
+        if not messages:
+            return None
+        if random.random() >= self._cfg("inventory_easter_egg_probability"):
+            return None
+
+        message = random.choice(messages)
+        if hold_seconds > 0:
+            await self.db_manager.set_inventory_easter_egg(
+                group_id, player_id, message, hold_seconds
+            )
+        return message

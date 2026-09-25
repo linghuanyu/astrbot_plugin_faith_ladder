@@ -177,8 +177,8 @@ class TestBlockActionsMigration:
         await db._db.commit()
 
         # 与 initialize() 里的迁移顺序一致
-        await db._migrate_status_block_actions()
-        await db._migrate_status_source()
+        await db._ensure_column("player_statuses", "block_actions", "TEXT DEFAULT NULL")
+        await db._ensure_column("player_statuses", "source", "TEXT DEFAULT NULL")
 
         async with db._db.execute("PRAGMA table_info(player_statuses)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
@@ -193,8 +193,10 @@ class TestBlockActionsMigration:
         await db.close()
 
     async def test_migration_is_idempotent(self, db_manager):
-        await db_manager._migrate_status_block_actions()
-        await db_manager._migrate_status_block_actions()
+        assert await db_manager._ensure_column(
+            "player_statuses", "block_actions", "TEXT DEFAULT NULL"
+        ) is False
+        await db_manager._ensure_column("player_statuses", "block_actions", "TEXT DEFAULT NULL")
         async with db_manager._db.execute("PRAGMA table_info(player_statuses)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
         assert columns.count("block_actions") == 1

@@ -56,6 +56,16 @@ def _utc_stamp_after(days: float) -> str:
     """days 天之后的 UTC 时间戳字符串。"""
     return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
+
+def _utc_stamp_after_seconds(seconds: float) -> str:
+    """seconds 秒之后的 UTC 时间戳字符串。
+
+    秒级窗口（如储物空间彩蛋）用它算 expire_at。判定仍是字符串比较，
+    格式与 `_utc_now_stamp()` 一致，所以字典序就是时间序；注意读侧的判定是
+    **严格大于**，因此 seconds <= 0 写出来的记录一落库就已过期。
+    """
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
 from astrbot_plugin_faith_ladder.models import Player, FAITH_TO_PATH
 
 try:
@@ -222,6 +232,20 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_gift_accepts_lookup
                 ON gift_daily_accepts(group_id, receiver_id, accept_date);
 
+            -- 储物空间彩蛋的「窗口」：命中一次后的一段时间内，该玩家的每次查询
+            -- 都重放同一条文案（读侧逻辑见 commands/query.py）。
+            -- (group_id, player_id) 主键 = 每人最多一条窗口，重复触发即覆盖，
+            -- 所以行数上界就是玩家数：不建 expire_at 索引、也不接每日清理，
+            -- 过期只靠读时的 `expire_at > now` 判定（与 player_statuses 同口径）。
+            CREATE TABLE IF NOT EXISTS inventory_easter_eggs (
+                group_id TEXT NOT NULL,
+                player_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                expire_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, player_id)
+            );
+
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 name TEXT PRIMARY KEY,
                 applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -293,9 +317,6 @@ class DatabaseManager:
         # Migrate old whitelist table (had group_id column) to global whitelist
         await self._migrate_whitelist()
 
-        # Migrate: add oathbreaker column if missing
-        await self._migrate_oathbreaker()
-
         # Migrate: clean up old item names with *N suffix
         # （会全表扫 player_items 且逐行查一次，故走一次性记账）
         if not await self._migration_done(MIGRATION_ITEM_NAMES):
@@ -315,20 +336,24 @@ class DatabaseManager:
         # Migrate: add qq_id column to players (QQ binding for anti-impersonation)
         await self._migrate_qq_id()
 
-        # Migrate: add specific_faith column to players
-        await self._migrate_specific_faith()
-
         # Migrate: remove deprecated group entries from whitelist
         await self._migrate_whitelist_remove_groups()
 
-        # Migrate: add faith column to whitelist
-        await self._migrate_whitelist_faith()
-
-        # Migrate: add block_actions column to player_statuses（状态阻断）
-        await self._migrate_status_block_actions()
-
-        # Migrate: add source column to player_statuses（状态来源，祈愿组队用）
-        await self._migrate_status_source()
+        # 加列式迁移：全部幂等（列已在即跳过），列定义都来自代码常量。
+        # 顺序有讲究：whitelist 那条必须排在 _migrate_whitelist 之后——
+        # 那条迁移可能重建 whitelist 表，而重建出的新表没有 faith 列。
+        for _table, _column, _ddl in (
+            ("players", "oathbreaker", "INTEGER DEFAULT 0"),
+            ("players", "specific_faith", "TEXT DEFAULT NULL"),
+            ("whitelist", "faith", "TEXT DEFAULT NULL"),
+            ("player_statuses", "block_actions", "TEXT DEFAULT NULL"),
+            # source 记状态来源（'wish' = 祈愿组队写入，NULL = 诸神添加）。队伍状态与
+            # 诸神手工状态在表里同名同形，靠名字或前缀识别都不可靠（诸神能改队名、
+            # 也能手写同名状态），而「最多保留 N 条队伍状态」「名单变动时撤销对应
+            # 状态」都要准确认出哪一行是队伍写的。
+            ("player_statuses", "source", "TEXT DEFAULT NULL"),
+        ):
+            await self._ensure_column(_table, _column, _ddl)
 
     # === 一次性数据迁移记账 ===
 
@@ -354,46 +379,37 @@ class DatabaseManager:
         await self._db.commit()
         logger.info(f"[Migration] {name} 已完成并记账，之后的启动不再重复扫描")
 
-    async def _migrate_status_block_actions(self):
-        """给 player_statuses 加 block_actions 列（状态可阻断的动作，逗号分隔）。"""
-        async with self._db.execute("PRAGMA table_info(player_statuses)") as cursor:
-            columns = [row[1] for row in await cursor.fetchall()]
+    # === 加列（幂等，不记账） ===
 
-        if "block_actions" not in columns:
-            await self._db.execute(
-                "ALTER TABLE player_statuses ADD COLUMN block_actions TEXT DEFAULT NULL"
-            )
-            await self._db.commit()
-            logger.info("[Migration] Added block_actions column to player_statuses")
+    async def _ensure_column(self, table: str, column: str, ddl: str) -> bool:
+        """确保 table 有 column 列（ddl 形如 "TEXT DEFAULT NULL"），返回本次是否新增。
 
-    async def _migrate_status_source(self):
-        """给 player_statuses 加 source 列（状态来源：'wish' = 祈愿组队写入，NULL = 诸神添加）。
+        「加列」此前在 5 个 `_migrate_*` 方法里各写了一遍 PRAGMA → ALTER → commit
+        → log，增删一列就要跟着抄一遍；这里收敛成唯一实现，调用点是 initialize()
+        里那张声明式列表。table / column / ddl 全部来自代码常量，不含用户输入。
 
-        为什么要记来源：祈愿试炼的成员状态与诸神手工加的状态在表里长得一模一样
-        （状态名就是队名），而「每名玩家最多保留 N 条队伍状态」「队伍名单变化时
-        撤销对应状态」都需要准确认出哪些行是队伍写进去的。靠名字或前缀识别都不
-        可靠——诸神可以给队伍改名，也可以手写一个同名状态。
+        失败时**不静默**：这几列都是读查询依赖的列（`_PLAYER_COLUMNS`、状态卡片、
+        白名单信仰判定），缺了会变成"插件能启动、但每条命令都抛 sqlite 错"，
+        比启动失败更难定位（qq_id 唯一索引那次事故的同类教训）。所以这里把原始
+        错误包成可诊断文案后原样抛出，让 operator 一眼看到是哪张表哪一列。
         """
-        async with self._db.execute("PRAGMA table_info(player_statuses)") as cursor:
+        async with self._db.execute(f"PRAGMA table_info({table})") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
+        if column in columns:
+            return False
 
-        if "source" not in columns:
-            await self._db.execute(
-                "ALTER TABLE player_statuses ADD COLUMN source TEXT DEFAULT NULL"
-            )
+        try:
+            await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
             await self._db.commit()
-            logger.info("[Migration] Added source column to player_statuses")
-
-    async def _migrate_oathbreaker(self):
-        """Add oathbreaker column to players table if it doesn't exist."""
-        async with self._db.execute("PRAGMA table_info(players)") as cursor:
-            columns = [row[1] for row in await cursor.fetchall()]
-
-        if "oathbreaker" not in columns:
-            await self._db.execute(
-                "ALTER TABLE players ADD COLUMN oathbreaker INTEGER DEFAULT 0"
-            )
-            await self._db.commit()
+        except Exception as e:
+            await self.rollback()
+            raise RuntimeError(
+                f"无法给表 {table} 加列 {column}：{e}。"
+                "请检查数据目录里的 ladder.db 是否被其它进程占用或已损坏，"
+                "以及插件文件是否版本混杂（升级需整目录覆盖，见 README「升级与部署」）。"
+            ) from e
+        logger.info(f"[Migration] Added {column} column to {table}")
+        return True
 
     async def _migrate_item_names(self):
         """清理旧数据里带 `*N` 后缀的道具名（如 '糖果*3' → '糖果'，数量乘 N）。
@@ -677,18 +693,6 @@ class DatabaseManager:
                 "请用「换绑QQ」把重复的 QQ 改到不同玩家后再重启插件。"
             )
 
-    async def _migrate_specific_faith(self):
-        """Add specific_faith column to players table if it doesn't exist."""
-        async with self._db.execute("PRAGMA table_info(players)") as cursor:
-            columns = [row[1] for row in await cursor.fetchall()]
-
-        if "specific_faith" not in columns:
-            await self._db.execute(
-                "ALTER TABLE players ADD COLUMN specific_faith TEXT DEFAULT NULL"
-            )
-            await self._db.commit()
-            logger.info("[Migration] Added specific_faith column to players")
-
     async def _migrate_whitelist(self):
         """Migrate whitelist table from per-group to global if needed."""
         async with self._db.execute("PRAGMA table_info(whitelist)") as cursor:
@@ -721,15 +725,6 @@ class DatabaseManager:
         if cursor.rowcount > 0:
             logger.info(f"[Migration] 移除 {cursor.rowcount} 条已废弃的 group 白名单")
         await self._db.commit()
-
-    async def _migrate_whitelist_faith(self):
-        """白名单新增 faith 字段（诸神对应信仰）。"""
-        async with self._db.execute("PRAGMA table_info(whitelist)") as cursor:
-            columns = [row[1] for row in await cursor.fetchall()]
-        if "faith" not in columns:
-            await self._db.execute("ALTER TABLE whitelist ADD COLUMN faith TEXT DEFAULT NULL")
-            await self._db.commit()
-            logger.info("[Migration] Added 'faith' column to whitelist")
 
     async def get_whitelist_faith(self, entry_id: str) -> Optional[str]:
         """获取白名单条目对应的信仰名。"""
@@ -1642,6 +1637,39 @@ class DatabaseManager:
             (group_id, player_id)
         )
         return cursor.rowcount
+
+    # ── 储物空间彩蛋窗口 ──
+
+    async def get_active_inventory_easter_egg(self, group_id: str, player_id: str) -> Optional[str]:
+        """取该玩家当前未过期的彩蛋文案；没有窗口（或已过期）返回 None。
+
+        只读，不删过期行：留着无害——行数上界就是玩家数，且下次触发会覆盖。
+        判定是严格大于（`expire_at > now`），两侧同为 UTC 秒级字符串，字典序即时间序。
+        """
+        async with self._db.execute(
+            "SELECT message FROM inventory_easter_eggs "
+            "WHERE group_id = ? AND player_id = ? AND expire_at > ?",
+            (group_id, player_id, _utc_now_stamp()),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def set_inventory_easter_egg(
+        self, group_id: str, player_id: str, message: str, seconds: float
+    ) -> None:
+        """写下彩蛋窗口：seconds 秒内该玩家的每次查询都重放这条文案。
+
+        自行 commit——调用方在命令路径上，没有外层事务（同 create_wager 的约定）。
+        seconds <= 0 写出的记录一落库就已过期（读侧判定严格大于），调用方应避免。
+        """
+        await self._db.execute(
+            "INSERT INTO inventory_easter_eggs (group_id, player_id, message, expire_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(group_id, player_id) DO UPDATE SET "
+            "message = excluded.message, expire_at = excluded.expire_at",
+            (group_id, player_id, message, _utc_stamp_after_seconds(seconds)),
+        )
+        await self._db.commit()
 
     # === 状态 ===
 

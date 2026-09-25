@@ -172,6 +172,7 @@ class TestPluginStartup:
             assert plugin.db_manager._initialized is True
             assert await plugin.db_manager._table_exists("players")
             assert await plugin.db_manager._table_exists("player_items")
+            assert await plugin.db_manager._table_exists("inventory_easter_eggs")
 
             # 白名单成员变动监听已注册（它在崩溃点之后，此前同样没注册上）
             assert context.event_handlers, "群成员变动监听未注册"

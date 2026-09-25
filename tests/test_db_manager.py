@@ -241,6 +241,32 @@ class TestWhitelistOperations:
 
 
 @pytest.mark.asyncio
+class TestEnsureColumn:
+    """加列迁移的唯一实现（`initialize()` 里那张声明式表走的都是它）。"""
+
+    async def test_adds_missing_column_then_skips(self, db_manager):
+        """返回本次是否新增：第一次 True，之后 False（每次启动都会重跑一遍）。"""
+        await db_manager._db.execute("CREATE TABLE scratch (a TEXT)")
+        await db_manager._db.commit()
+
+        assert await db_manager._ensure_column("scratch", "b", "TEXT DEFAULT NULL") is True
+        assert await db_manager._ensure_column("scratch", "b", "TEXT DEFAULT NULL") is False
+
+    async def test_failure_message_names_table_and_column(self, db_manager):
+        """加列失败要报出表名与列名，而不是一句裸的 sqlite 错误。
+
+        这几列都是读查询依赖的列，缺了会变成"插件能启动、但每条命令都抛错"，
+        所以这里中断启动是刻意的，但报错必须能直接指向该查什么。
+        """
+        with pytest.raises(RuntimeError) as excinfo:
+            await db_manager._ensure_column("no_such_table", "x", "TEXT")
+
+        message = str(excinfo.value)
+        assert "no_such_table" in message
+        assert "x" in message
+
+
+@pytest.mark.asyncio
 @pytest.mark.asyncio
 class TestBackup:
     """Tests for database backup."""
