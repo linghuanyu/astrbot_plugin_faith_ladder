@@ -252,6 +252,57 @@ class TestPluginStartup:
         finally:
             await plugin.terminate()
 
+class TestIncompleteInstallDiagnostics:
+    """包内导入失败时，日志要直接说明「文件不完整」，而不是只甩一句 ImportError。
+
+    现场教训：服务器上只有新增文件是新的、`db_manager.py` 还是旧的，日志里只有底层
+    traceback，一眼看不出是部署漏文件还是代码坏了。
+    """
+
+    async def test_missing_symbol_gives_actionable_log(self, stubbed_astrbot, caplog, monkeypatch):
+        import importlib
+        import logging
+        import sys
+
+        import astrbot_plugin_faith_ladder.db_manager as dbm
+
+        # 复刻现场那样的形状：让 wish_service 重新执行时，db_manager 里缺一个符号。
+        # 两个模块都要从 sys.modules 摘掉——否则重导入 main 会直接用缓存，
+        # wish_service 的导入语句根本不会被执行。
+        monkeypatch.delattr(dbm, "STATUS_SOURCE_WISH")
+        saved_main = sys.modules.pop("astrbot_plugin_faith_ladder.main")
+        saved_wish = sys.modules.pop("astrbot_plugin_faith_ladder.wish_service")
+        try:
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(ImportError):
+                    importlib.import_module("astrbot_plugin_faith_ladder.main")
+        finally:
+            sys.modules["astrbot_plugin_faith_ladder.main"] = saved_main
+            sys.modules["astrbot_plugin_faith_ladder.wish_service"] = saved_wish
+
+        logged = "\n".join(record.getMessage() for record in caplog.records)
+        assert "插件文件不完整" in logged, "导入失败时没有给出可诊断的日志"
+        assert "STATUS_SOURCE_WISH" in logged, "日志要指出缺的是哪个符号"
+        assert "整目录覆盖" in logged or "git" in logged, "日志要给出补救办法"
+
+    async def test_import_error_is_reraised_not_swallowed(self, stubbed_astrbot, monkeypatch):
+        """绝不能吞掉导入异常：带着一半的代码继续加载比加载失败更糟。"""
+        import importlib
+        import sys
+
+        import astrbot_plugin_faith_ladder.db_manager as dbm
+
+        monkeypatch.delattr(dbm, "STATUS_SOURCE_WISH")
+        saved_main = sys.modules.pop("astrbot_plugin_faith_ladder.main")
+        saved_wish = sys.modules.pop("astrbot_plugin_faith_ladder.wish_service")
+        try:
+            with pytest.raises(ImportError):
+                importlib.import_module("astrbot_plugin_faith_ladder.main")
+        finally:
+            sys.modules["astrbot_plugin_faith_ladder.main"] = saved_main
+            sys.modules["astrbot_plugin_faith_ladder.wish_service"] = saved_wish
+
+
 class TestQQAdminCallbacks:
     """QQAdminHandler 注入的回调必须是可 await 的（或至少被兼容处理）。
 

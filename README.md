@@ -467,6 +467,29 @@ v3.7.10 做过一轮「文案对齐小说《诸神愚戏》原文」的改造。
 | `auto_backup_enabled` | bool | true | 启用每日自动备份 |
 | `backup_retention_days` | int | 7 | 备份保留天数（最小按 1 天处理） |
 
+## 升级与部署
+
+**优先用 git**：插件目录就是仓库检出，升级即 `git pull --ff-only`（或 `git fetch && git reset --hard origin/master`）。
+
+**如果用面板/手工上传：必须整目录覆盖，不要只上传新增文件。** 本插件是多模块互相 import 的整体，只更新一部分会让插件**直接加载失败**：
+
+```
+ImportError: cannot import name 'STATUS_SOURCE_WISH' from '...db_manager'
+```
+
+看到这类报错就说明目录里混着两个版本的文件（新文件 + 旧文件）。**重启、清 `__pycache__` 都没用**——必须重新取一份完整目录。插件会在日志里顺带写明缺的是哪个符号，方便确认确实是文件不完整而不是代码坏了。
+
+漏文件的两种后果，**都不报错但行为不对**：
+
+| 漏掉的文件 | 后果 |
+|---|---|
+| `_conf_schema.json` | WebUI 里看不到新增的配置项（例如 `wish_groups`，于是组队根本配不起来）；有代码默认值兜底的地方照旧跑，但**名额表会退化成「每天都 1 支」**——默认的关闭日消失 |
+| `metadata.yaml` | 只影响面板上显示的版本号 |
+
+**不要动数据目录**：`data/plugin_data/astrbot_plugin_faith_ladder/`（`ladder.db` 在那里）。数据库结构变更在插件启动时自动迁移，幂等，可以反复启动。
+
+升级到 3.9.0 后有两件事要做：在 WebUI 的 `wish_groups` 里填上要启用祈愿试炼的群号（**留空 = 哪个群都不启用**，指令会回「未在本群开启」）；小群建议把 `wish_default_capacity` 从 6 调小，否则队伍容易凑不满然后超时。
+
 ## 版本
 
 最近几个版本（更早的见 [CHANGELOG.md](CHANGELOG.md)）：

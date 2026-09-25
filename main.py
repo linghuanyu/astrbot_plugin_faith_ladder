@@ -20,32 +20,48 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
-from astrbot_plugin_faith_ladder.ladder_service import LadderService
-from astrbot_plugin_faith_ladder.permission_service import PermissionService
-from astrbot_plugin_faith_ladder.cooldown import CooldownManager
-from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, Player
-from astrbot_plugin_faith_ladder.item_utils import parse_item_args
-from astrbot_plugin_faith_ladder import card_utils
-from astrbot_plugin_faith_ladder.text_utils import strip_mentions
-from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
-from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
-from astrbot_plugin_faith_ladder.wish_service import WishService
-from astrbot_plugin_faith_ladder.commands import (
-    QueryCommandsMixin,
-    ScoreboardCommandsMixin,
-    ScoreCommandsMixin,
-    PlayerCommandsMixin,
-    InventoryCommandsMixin,
-    GiftCommandsMixin,
-    AdminCommandsMixin,
-    PrayerCommandsMixin,
-    WishCommandsMixin,
-    SharedSendMixin,
-    ConfigMixin,
-    GateMixin,
-    WagerMixin,
-)
+try:
+    from astrbot_plugin_faith_ladder.db_manager import DatabaseManager
+    from astrbot_plugin_faith_ladder.ladder_service import LadderService
+    from astrbot_plugin_faith_ladder.permission_service import PermissionService
+    from astrbot_plugin_faith_ladder.cooldown import CooldownManager
+    from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, Player
+    from astrbot_plugin_faith_ladder.item_utils import parse_item_args
+    from astrbot_plugin_faith_ladder import card_utils
+    from astrbot_plugin_faith_ladder.text_utils import strip_mentions
+    from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
+    from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
+    from astrbot_plugin_faith_ladder.wish_service import WishService
+    from astrbot_plugin_faith_ladder.commands import (
+        QueryCommandsMixin,
+        ScoreboardCommandsMixin,
+        ScoreCommandsMixin,
+        PlayerCommandsMixin,
+        InventoryCommandsMixin,
+        GiftCommandsMixin,
+        AdminCommandsMixin,
+        PrayerCommandsMixin,
+        WishCommandsMixin,
+        SharedSendMixin,
+        ConfigMixin,
+        GateMixin,
+        WagerMixin,
+    )
+except ImportError as e:
+    # 逐文件上传（只传新增文件、漏了被改的老文件）会让包内导入失败，而日志里只有一句
+    # 底层 traceback，看不出这是「文件不完整」还是「代码坏了」——现场排查时就得靠猜。
+    # 这里补一条能直接定位的说明，然后**原样抛出**：绝不吞异常。
+    # 带着一半的代码继续加载比加载失败更糟（本仓库有过异常被框架吞掉、调度器静默
+    # 停摆数个版本的先例）。
+    logger.error(
+        "[FaithLadder] 插件文件不完整或版本混杂：包内导入失败 —— "
+        f"{e.msg or e}\n"
+        "最常见的原因是逐文件上传时只传了新增文件、漏了被修改的老文件；"
+        "本版必须成套更新（尤其 db_manager.py、commands/ 与 _conf_schema.json）。\n"
+        "请用 git 拉取完整版本，或用整目录覆盖安装（不要只覆盖新增文件）。"
+    )
+    raise
+
 
 
 
