@@ -28,7 +28,7 @@ try:
     from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, Player
     from astrbot_plugin_faith_ladder.item_utils import parse_item_args
     from astrbot_plugin_faith_ladder import card_utils
-    from astrbot_plugin_faith_ladder.text_utils import strip_mentions
+    from astrbot_plugin_faith_ladder.text_utils import collect_mention_texts, extract_args
     from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
     from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
     from astrbot_plugin_faith_ladder.wish_service import WishService
@@ -69,7 +69,7 @@ except ImportError as e:
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、祈愿试炼组队、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.9.2"
+    "3.9.3"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -148,6 +148,8 @@ class FaithLadderPlugin(
         # 先给排序结果一个空默认值：_load_specific_classes 失败时只 log 不抛，
         # 若这里不初始化，后续 _parse_card_info 访问它会是 AttributeError
         self._sorted_specific_classes = []
+        # 职业简称（唯一前缀）索引，与 _sorted_specific_classes 同步构建
+        self._specific_class_prefixes = {}
         self._load_specific_classes()
 
     def _get_data_dir(self) -> Path:
@@ -190,6 +192,10 @@ class FaithLadderPlugin(
             # 预排序（按职业名长度降序，确保长名优先匹配）
             self._sorted_specific_classes = sorted(
                 self._specific_classes.items(), key=lambda x: len(x[0]), reverse=True
+            )
+            # 简称索引：名片/参数里写「子嗣牧」也能认出「子嗣牧师」
+            self._specific_class_prefixes = card_utils.build_specific_class_prefix_index(
+                self._sorted_specific_classes
             )
             logger.info(f"[SpecificClasses] 加载 {len(self._specific_classes)} 个具体职业映射")
         except Exception as e:
@@ -310,18 +316,32 @@ class FaithLadderPlugin(
                 return f"{prefix}:{group_id}"
         return None
 
+    def _mention_texts(self, event: AstrMessageEvent) -> list:
+        """消息里所有 @ 段在 message_str 中的原文：(昵称, QQ)。
+
+        与 _get_at_user_id 的分工：那个挑出**一个要操作的目标**（排除机器人自己与
+        全体成员），这里要的是**全部** @ 文本，用来把参数里的 @ 片段整段剥干净。
+        适配器拼进去的是整张群名片（可以带空格），只靠正则剥不干净。
+        """
+        try:
+            return collect_mention_texts(event.get_messages())
+        except Exception as e:
+            # 取不到消息段时退化为正则剥离：昵称不含空格的 @ 仍能剥掉，
+            # 带空格的会残留（但那属于宿主接口异常，值得留痕）
+            logger.warning(f"[Mention] 解析 @ 文本失败，参数里的 @ 片段可能残留: {e}")
+            return []
+
     def _get_args(self, event: AstrMessageEvent, cmd_name: str) -> str:
         """取命令名之后的参数文本（精确前缀匹配）。
 
-        会先剥掉 CQ 码与 @ 提及文本：aiocqhttp 适配器会把 "@昵称(QQ)" 拼进
-        message_str，不剥掉的话「录入积分 @张三 100 50」会把目标解析成
-        "@张三(12345)"，各种「玩家不存在」。需要 @ 目标的指令另有
-        _get_at_user_id() 从消息段里取真实 QQ，不受这里影响。
+        会剥掉 CQ 码、@ 占位符与 @ 提及文本：aiocqhttp 适配器会把**整张群名片**
+        拼成 "@昵称(QQ)" 写进 message_str（名片如 "【混乱】子琅 渔夫 1000 100"），
+        只按空白截断的话剩下的 "渔夫 1000 100(QQ)" 会被当成参数——"渔夫"顶掉
+        名片姓名、"100(QQ)" 直接变成玩家名。所以这里把消息段里的 At 原文交给
+        剥离函数做精确整段替换。
+        需要 @ 目标的指令另有 _get_at_user_id() 从消息段里取真实 QQ，不受这里影响。
         """
-        text = event.message_str.strip()
-        if not text.startswith(cmd_name):
-            return ""
-        return strip_mentions(text[len(cmd_name):])
+        return extract_args(event.message_str, cmd_name, self._mention_texts(event))
 
     def _is_super_admin(self, event: AstrMessageEvent) -> bool:
         """插件超管：只认 config.admin_ids。
@@ -566,8 +586,12 @@ class FaithLadderPlugin(
                 if not isinstance(seg, At):
                     continue
                 qq = str(seg.qq)
-                # "all" 是 @全体成员 的标识，不是真实 QQ；此前会被当成用户 ID 写进绑定
-                if qq == "all" or qq == str(event.get_self_id()):
+                # 非纯数字一律不算用户 ID："all" 是 @全体成员 的标识；缺字段时
+                # str(None) == "None" 也是真值，会被当成 QQ 写进绑定，下游
+                # At(qq=int(...)) 还会直接抛 ValueError 把整条回复弄丢。
+                if not qq.isdigit():
+                    continue
+                if qq == str(event.get_self_id()):
                     continue
                 return qq
         except Exception as e:
@@ -578,7 +602,9 @@ class FaithLadderPlugin(
 
     def _parse_card_info(self, card: str) -> dict:
         """解析群名片，提取具体信仰/命途/职业/玩家名。实现见 card_utils。"""
-        return card_utils.parse_card_info(card, self._sorted_specific_classes)
+        return card_utils.parse_card_info(
+            card, self._sorted_specific_classes, self._specific_class_prefixes
+        )
 
     @filter.command("查询", alias={"query", "查看"})
     async def cmd_query(self, event: AstrMessageEvent):

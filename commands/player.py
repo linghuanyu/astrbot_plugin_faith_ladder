@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
-from astrbot_plugin_faith_ladder.text_utils import CQ_CODE_RE, AT_MENTION_RE
+from astrbot_plugin_faith_ladder.text_utils import (
+    CQ_CODE_RE, looks_like_mention_tail, strip_mentions,
+)
 
 from astrbot_plugin_faith_ladder.messages import (
     OATH_COOLDOWN_MSG, PERMISSION_DENIED, PLAYER_NOT_FOUND,
@@ -79,18 +81,17 @@ class PlayerCommandsMixin:
                 )
 
         # 从参数文本中提取显式值
-        # 先剥掉参数里的 @ 提及（aiocqhttp 会把 "@昵称(QQ)" 拼进 message_str），
-        # 否则昵称会被当成玩家名。剥掉之后就可以正常解析显式参数了 ——
-        # 此前在「@ 且名片解析出姓名」时整段跳过解析，导致显式参数永远无效：
-        # 名片里只有姓名时，「录入玩家 @张三 生命 战士」会一直报缺少参数。
+        # args 来自 _get_args()，@ 提及已在那边整段剥掉：适配器把**整张名片**拼成
+        # "@昵称(QQ)"，只按空白截断会漏下 "渔夫 1000 100(QQ)" 这种尾巴，"渔夫"
+        # 会顶掉名片姓名、"100(QQ)" 会直接变成玩家名。这里再兜一次底（宿主换了
+        # @ 文本形态时），下面还会把"@残尾"形状的名字候选丢掉。
         explicit_name = None
         explicit_faith = None
         explicit_class = None
         explicit_specific_faith = None
         scores = []
 
-        clean_args = AT_MENTION_RE.sub('', args).strip()
-        clean_args = CQ_CODE_RE.sub('', clean_args).strip()
+        clean_args = strip_mentions(args)
 
         parts = clean_args.split() if clean_args else []
 
@@ -128,11 +129,30 @@ class PlayerCommandsMixin:
             elif p in VALID_CLASSES:
                 explicit_class = p
             else:
-                name_candidates.append(p)
+                # 具体职业简称兜底（「子嗣牧」→「子嗣牧师」）：必须排在信仰/命途/
+                # 基础职业之后——「生命」既是命途、也是「生命贤者」的前缀，
+                # 得先按命途算（名片上写【生命】的本意就是命途）。
+                # 认了简称就不再落进名字候选（那正是「渔夫」占掉名字槽的事故形态）。
+                abbreviation = self._specific_class_prefixes.get(p)
+                if abbreviation:
+                    explicit_class = abbreviation[2]
+                    if explicit_specific_faith is None:
+                        explicit_specific_faith = abbreviation[0]
+                    if explicit_faith is None:
+                        explicit_faith = abbreviation[1]
+                else:
+                    name_candidates.append(p)
 
-        # 非数字/信仰/职业的词，第一个作为玩家名
-        if name_candidates:
-            explicit_name = name_candidates[0]
+        # 非数字/信仰/职业的词，取第一个**不是 @ 残尾**的作为玩家名。
+        # "X(本消息某个@的QQ)" 一定是 @ 文本没剥干净留下的（见 text_utils.strip_mentions），
+        # 把它当名字就会录出一个假玩家（线上真出现过「100(2921544554)」这种名字）。
+        at_qqs = [qq for _name, qq in self._mention_texts(event)]
+        for candidate in name_candidates:
+            if looks_like_mention_tail(candidate, at_qqs):
+                logger.warning(f"[Register] 丢弃疑似 @ 残尾的名字候选: {candidate}")
+                continue
+            explicit_name = candidate
+            break
 
         # 合并：显式 > 自动提取
         player_name = explicit_name or auto_name
@@ -150,13 +170,28 @@ class PlayerCommandsMixin:
             errors.append(f"职业（可选: {'/'.join(VALID_CLASSES)}）")
 
         if errors:
+            # 「补一次即可」示例：已知的照原样填上，缺的留 <占位>，让诸神能直接照抄
+            # （此前只列缺失项与可选值，补写时还得自己拼命令）。
+            sample_tokens = []
+            if at_user_id:
+                # @ 录入时名字默认取名片，缺了才要补
+                sample_tokens.append("@用户")
+                if not player_name:
+                    sample_tokens.append("<姓名>")
+            else:
+                sample_tokens.append(player_name or "<姓名>")
+            if not faith_name:
+                sample_tokens.append("<命途>")
+            if not class_name:
+                sample_tokens.append("<职业>")
+            sample = "录入玩家 " + " ".join(sample_tokens)
+
             auto_info = ""
             if at_user_id:
                 if card_read_error is not None:
                     auto_info = (
                         f"\n未能读取被 @ 用户的群名片（{card_read_error}）："
                         "可能是机器人没有查看群成员的权限，或对方已不在群内。"
-                        "请在参数里直接写姓名与命途。"
                     )
                 else:
                     auto_info = (
@@ -166,9 +201,9 @@ class PlayerCommandsMixin:
                     )
             yield event.plain_result(
                 f"缺少必要参数: {', '.join(errors)}\n"
-                f"用法：录入玩家 @用户 [姓名] [命途] [职业] [登神之路分] [觐见分]\n"
-                f"  或: 录入玩家 <姓名> <命途> <职业> [登神之路分] [觐见分]\n"
-                f"命途与职业也可写成具体信仰名（如 繁荣）或具体职业名（如 渔夫）{auto_info}"
+                f"补一次即可（把 <…> 换成实际值）：{sample}\n"
+                f"完整用法：录入玩家 @用户 [姓名] [命途] [职业] [登神之路分] [觐见分]\n"
+                f"命途与职业也可写成具体信仰名（如 命运）或具体职业名（如 子嗣牧师）{auto_info}"
             )
             return
 
@@ -213,13 +248,20 @@ class PlayerCommandsMixin:
         )
 
         # 回复统一：注册结果（玩家名/职业/信仰/分数/信仰文案）两条路径都要给出，
-        # @ 路径只是额外 @ 被录入者，不再像以前那样把结果整条丢弃。
+        # 成功时尽量 @ 到被录入的人 —— @ 录入用 @ 的 QQ（同时绑定），无 @ 录入时
+        # 按玩家名在群成员里找唯一匹配（找不到/有歧义就不 @，退回纯文本）。
         # 曾在此拼过「（对应群名片：X，QQ: Y）」与「已自动绑定你的 QQ」，按需求去掉；
         # 后者依赖的"祷词确认后取消录入"机制早已移除，那句后果本就不成立。
-        if success and at_user_id:
+        notify_qq = at_user_id
+        if success and not notify_qq:
+            member = await self._find_member_by_name(event, player_name)
+            if member:
+                notify_qq = str(member.get("user_id") or "")
+
+        if success and notify_qq and notify_qq.isdigit():
             from astrbot.core.message.components import At, Plain
             yield event.chain_result([
-                At(qq=int(at_user_id)),
+                At(qq=int(notify_qq)),
                 Plain(text=f" {message}")
             ])
         else:

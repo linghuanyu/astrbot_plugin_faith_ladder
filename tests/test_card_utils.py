@@ -206,3 +206,49 @@ class TestExtractCardWords:
 
     def test_no_tag(self):
         assert card_utils.extract_card_words("张三 战士") == ["张三", "战士"]
+
+
+class TestSpecificClassAbbreviation:
+    """职业简称（唯一前缀）：名片写「子嗣牧」也要认出「子嗣牧师」。"""
+
+    def test_abbreviated_class_from_log(self, sorted_classes):
+        """现场名片：解析出职业、且简称不再被粘进姓名。"""
+        r = parse("【诞育】棉絮 子嗣牧 1000 100", sorted_classes)
+        assert r["class_"] == "牧师"
+        assert r["specific_faith"] == "诞育"
+        assert r["faith"] == "生命"
+        assert r["player_name"] == "棉絮"
+
+    def test_exact_name_still_takes_priority(self, sorted_classes):
+        r = parse("【诞育】棉絮 子嗣牧师 1000 100", sorted_classes)
+        assert r["class_"] == "牧师"
+        assert r["player_name"] == "棉絮"
+
+    def test_two_char_prefix_is_accepted(self, sorted_classes):
+        """2 字前缀也认（已确认的取舍：与职业名重名的玩家会被吃掉）。"""
+        r = parse("【诞育】创生 1000 100", sorted_classes)
+        assert r["class_"] == "猎人"
+        assert r["specific_faith"] == "诞育"
+        assert r["player_name"] is None, "「创生」被当成「创生猎人」的简称，不再算名字"
+
+    def test_faith_and_path_words_win_over_abbreviation(self, sorted_classes):
+        """「生命」既是命途也是「生命贤者」的前缀：必须先按命途算。"""
+        r = parse("生命 张三", sorted_classes)
+        assert r["faith"] == "生命"
+        assert r["class_"] is None
+        assert r["player_name"] == "张三"
+
+    def test_ambiguous_prefix_is_not_matched(self):
+        """一个前缀对应多个职业名时一律不认（歧义宁可报缺参数）。"""
+        table = [
+            ("子嗣牧师", ("诞育", "生命", "牧师")),
+            ("子嗣法师", ("诞育", "生命", "法师")),
+        ]
+        r = card_utils.parse_card_info("子嗣 张三", table)
+        assert r["class_"] is None
+        assert r["player_name"] == "子嗣张三"
+
+    def test_prefix_index_built_from_real_table(self, sorted_classes):
+        index = card_utils.build_specific_class_prefix_index(sorted_classes)
+        assert index["子嗣牧"] == ("诞育", "生命", "牧师")
+        assert "子嗣牧师" not in index, "全名走精确匹配，不进简称索引"

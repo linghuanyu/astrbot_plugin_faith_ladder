@@ -23,6 +23,42 @@ from astrbot_plugin_faith_ladder.text_utils import BRACKET_TAG_RE, CARD_BRACKET_
 # 具体职业映射表的元素类型：(信仰, 命途, 基础职业)
 SpecificClassEntry = Tuple[str, Optional[str], str]
 
+# 职业简称的最短长度：「子嗣牧」→「子嗣牧师」这类缩写要认；单字前缀太容易与
+# 玩家名撞车，而且几乎必然对应多个职业名（"守" → 守墓人/守夜人），不入索引。
+MIN_SPECIFIC_PREFIX_LEN = 2
+
+
+def build_specific_class_prefix_index(
+    sorted_specific_classes: List[Tuple[str, SpecificClassEntry]]
+) -> Dict[str, SpecificClassEntry]:
+    """为具体职业名建「唯一前缀」索引，让名片上的简称也能认出来。
+
+    现场：名片写「【诞育】棉絮 子嗣牧」——「子嗣牧」是具体职业「子嗣牧师」的简称，
+    只做精确匹配时职业解析不出来，这个词还会被拼进姓名（"棉絮子嗣牧"），@ 录入
+    直接卡在"缺少必要参数: 职业"。
+
+    只收长度 ≥ MIN_SPECIFIC_PREFIX_LEN 且**唯一**对应一个职业名的前缀；一个前缀
+    同时命中多个职业名时整个前缀都不入索引（歧义不认，宁可报缺参数让人补全）。
+
+    代价（已与用户确认）：与职业名重名的玩家会被吃掉——玩家叫「创生」会命中
+    「创生猎人」。表现为"缺少必要参数: 玩家名"，诸神在参数里补姓名即可，
+    不会静默录成别人。
+    """
+    index: Dict[str, SpecificClassEntry] = {}
+    ambiguous = set()
+    for name, entry in sorted_specific_classes:
+        for length in range(MIN_SPECIFIC_PREFIX_LEN, len(name)):
+            prefix = name[:length]
+            if prefix in ambiguous:
+                continue
+            if prefix in index:
+                # 第二个职业名也以它开头 → 歧义，撤掉
+                del index[prefix]
+                ambiguous.add(prefix)
+                continue
+            index[prefix] = entry
+    return index
+
 
 def extract_card_words(card: str) -> List[str]:
     """取出名片中的关键词：剥掉开头的【标签】，去掉纯数字词。
@@ -48,7 +84,11 @@ def extract_specific_faith(card: str) -> Optional[str]:
     return None
 
 
-def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, SpecificClassEntry]]) -> Dict[str, Optional[str]]:
+def parse_card_info(
+    card: str,
+    sorted_specific_classes: List[Tuple[str, SpecificClassEntry]],
+    prefix_index: Optional[Dict[str, SpecificClassEntry]] = None,
+) -> Dict[str, Optional[str]]:
     """解析群名片，返回 {"specific_faith", "faith", "class_", "player_name"}（均可为 None）。
 
     specific_faith 是具体信仰（16 个之一，如"繁荣"），faith 是由它推出的命途
@@ -64,10 +104,14 @@ def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, Specific
 
     sorted_specific_classes 需按职业名长度降序排列（调用方负责），
     以保证"魔术师"先于更短的职业名匹配到。
+    prefix_index 是 build_specific_class_prefix_index 的结果（调用方可缓存），
+    不传则就地构建——它是「简称识别」用的唯一前缀表。
 
     多个职业词同时出现时的取舍沿用了原实现：具体职业一旦命中就定下职业，
     普通职业词则后者覆盖前者；玩家名由剩余的非关键词拼接而成。
     """
+    if prefix_index is None:
+        prefix_index = build_specific_class_prefix_index(sorted_specific_classes)
     result: Dict[str, Optional[str]] = {
         "specific_faith": None, "faith": None, "class_": None, "player_name": None,
     }
@@ -158,6 +202,19 @@ def parse_card_info(card: str, sorted_specific_classes: List[Tuple[str, Specific
         if word in VALID_PATHS:
             if result["faith"] is None:
                 result["faith"] = word
+            continue
+
+        # 具体职业简称（子嗣牧 → 子嗣牧师）：唯一前缀才认，整词消费、不计入姓名。
+        # 必须排在基础职业/信仰/命途之后——"生命"既是命途、也是"生命贤者"的前缀，
+        # 得先按命途算（名片写【生命】的本意就是命途，不是要转成法师）。
+        abbreviation = prefix_index.get(word)
+        if abbreviation:
+            specific_faith, specific_path, specific_class = abbreviation
+            result["class_"] = specific_class
+            if result["specific_faith"] is None:
+                result["specific_faith"] = specific_faith
+            if result["faith"] is None:
+                result["faith"] = specific_path
             continue
 
         # 其余非关键词计入玩家名
