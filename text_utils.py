@@ -1,11 +1,13 @@
 """
-消息文本处理：CQ 码、@ 提及、名片标签等共用正则与剥离函数。
+消息文本处理：CQ 码、@ 提及、名片标签等共用正则与剥离函数，以及文案池的
+占位符渲染（render_template）。
 
 放在插件根目录（与 item_utils.py 同级）是因为 main.py 与 commands/ 下的多个模块
 都要用到；集中一处可避免各模块各写一份正则后逐渐漂移。
 """
 
 import re
+import unicodedata
 from typing import Iterable, List, Optional, Tuple
 
 # CQ 码，如 [CQ:at,qq=123456]
@@ -40,6 +42,11 @@ BRACKET_TAG_RE = re.compile(r'【([^】]+)】')
 
 # 祷词归一化：去掉所有非单词字符（保留中英文与数字）
 PRAYER_NORMALIZE_RE = re.compile(r'[^\w]')
+
+# 文案池占位符：{name} 形态，只认 ASCII 标识符。**故意不解析花括号结构**——
+# 文案由诸神在 WebUI 里改，落单的 '{'、markdown 表格、JSON 示例都可能出现，
+# 交给 str.format 会直接报错（见 render_template 的说明）。
+PLACEHOLDER_RE = re.compile(r'\{([A-Za-z_][A-Za-z0-9_]*)\}')
 
 # 「旧名 → 新名」的显式分隔符（改名类指令用）。
 # 状态名与队名都允许含空格，所以需要一个用户能写出来的分隔符。
@@ -141,4 +148,64 @@ def split_rename_pair(rest: str) -> Optional[Tuple[str, str]]:
     if len(tokens) != 2:
         return None
     return tokens[0], tokens[1]
+
+
+def render_template(template: str, values: Optional[dict] = None) -> str:
+    """替换文案里的 {name} 占位符，其余花括号一律原样保留。
+
+    **不要用 str.format**：文案池是给诸神在 WebUI 里改的（`prayer_trigger_messages_*`、
+    `wager_messages_*`、`wish_messages_*`、`oath_text_*` 等），里面写 markdown 表格、
+    JSON 示例或落单的 '{' 都很正常，而 format 会分别抛：
+
+    - `KeyError`——写了不认识的占位符（`{player}` 当成 `{god}` 用了）
+    - `ValueError: Single '{' encountered in format string`——有个没闭合的 '{'
+
+    两条都会从 handler 里抛出去。祷词那条路径上顺序是「先落库、后渲染」
+    （commands/prayer.py 第 14 步写分、第 15 步出文案），所以异常一抛就是
+    「分数变了但群里一个字都没回」。
+
+    values 的键就是这份文案支持的占位符名单：名单内的替换（值为 None 时当空串），
+    名单外的原样保留——用户自己写的字一个字都不动，写错了也能一眼看出来。
+
+    已知差异：str.format 会把 `{{` 收成 `{`，这里不做这种转义（`{{` 原样输出）。
+    现有文案池与测试都不依赖该转义。
+    """
+    values = values or {}
+
+    def _substitute(match: "re.Match[str]") -> str:
+        key = match.group(1)
+        if key not in values:
+            return match.group(0)
+        value = values[key]
+        return "" if value is None else str(value)
+
+    return PLACEHOLDER_RE.sub(_substitute, template or "")
+
+
+def to_halfwidth(text: str) -> str:
+    """NFKC 折叠：全角字符收成半角（`，`→`,`、`：`→`:`、`＋`→`+`、`　`→` `）。
+
+    **只用于「整数 token」与「枚举清单」**，不要用在玩家名 / 状态名 / 队名上——
+    那些是精确等值查询（玩家名一律原样入库），折叠会让历史数据里含全角字符的
+    记录查不到人。名字段的容错要继续靠各处的 `[:：]` 这类双写字符类。
+
+    什么时候真的需要它（实测过，别凭直觉扩大范围）：
+
+    - **全角正负号**：`int('＋16')` 与 `int('－5')` 抛 `ValueError`，
+      这是"用户以为输了分数、插件其实没收到"的静默失败源头之一。折叠能救。
+    - **全角分隔符与全角空格**：`，` 不会等于 `,`，`　`(U+3000) 也不会等于空格，
+      清单类的 `split(",")`、`.strip()` 都得先折叠。
+
+    什么时候**不需要**它（重要，避免到处加无意义的调用）：
+
+    - **全角数字**：`int('１２３')` 本来就是 `123`，`'１２３'.isdigit()` 也是 `True`。
+      Python 的 `int()` 与现代字符串判断都直接接受 Unicode 数字，
+      全角数字从来不是 bug。
+    - 正则里的 `\\d` 同样直接匹配全角数字。
+
+    几个**不**被折叠的东西（NFKC 只处理"兼容等价"，不做别的）：
+    `【】`（CJK 书名号）、`→`、顿号 `、`、句号 `。` 都不变——所以名片解析与
+    「旧名 → 新名」的分隔符不受影响，全角顿号也不会因此变成逗号分隔符。
+    """
+    return unicodedata.normalize("NFKC", text or "")
 

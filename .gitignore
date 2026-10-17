@@ -8,3 +8,6 @@ backups/
 dist/
 build/
 .zcode/
+# 部署包：README 的「升级与部署」说明按目录整包上传，在插件目录里打出的 zip
+# 不该被 git 跟踪，更不该被卷进下一次打包
+*.zip

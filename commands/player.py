@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
 from astrbot_plugin_faith_ladder.text_utils import (
-    CQ_CODE_RE, looks_like_mention_tail, strip_mentions,
+    CQ_CODE_RE, looks_like_mention_tail, strip_mentions, to_halfwidth,
 )
 
 from astrbot_plugin_faith_ladder.messages import (
@@ -106,8 +106,9 @@ class PlayerCommandsMixin:
 
         for p in parts:
             try:
-                # 用 int() 而非 isdigit()，以支持 +500 / -5 这类带符号分数
-                scores.append(int(p))
+                # 用 int() 而非 isdigit()，以支持 +500 / -5 这类带符号分数；
+                # 折半角是为了全角加减号（＋500 / －5）——int() 认不出全角符号
+                scores.append(int(to_halfwidth(p)))
                 continue
             except ValueError:
                 pass
@@ -266,6 +267,139 @@ class PlayerCommandsMixin:
             ])
         else:
             yield event.plain_result(message)
+
+    async def _register_faith_impl(self, event: "AstrMessageEvent"):
+        """凭自己的群名片自助录入。（注册在 main.py）
+
+        与「录入玩家 @用户」共用同一套名片解析与落库路径，区别只在：
+        - 不需要诸神权限：名片由发送者自己维护，录入出的记录也绑定发送者自己的 QQ
+        - 不接受参数、分数只取初始值：否则任何人都能给自己填任意分数
+        - 已有记录一律不接管：弱身份（群名片）不能产生换绑/抢占这类持久副作用，
+          这条边界与「检测玩家」同理（见该实现体的说明）
+        """
+        blocked, gate_msg = await self._gate(event, None)
+        if blocked:
+            if gate_msg:
+                yield event.plain_result(gate_msg)
+            return
+
+        group_id = self._get_group_id(event)
+        user_id = str(event.get_sender_id())
+        if not user_id.isdigit():
+            yield event.plain_result("无法确认你的 QQ 号，信仰注册需在 QQ 群内使用。")
+            return
+
+        # 参数一律不认：分数若可自填就失去意义，姓名/命途/职业也只认群名片
+        if any(self._get_args(event, name) for name in ("信仰注册", "faithregister", "自助注册")):
+            yield event.plain_result(
+                "信仰注册只认群名片，不接受参数。\n"
+                "请把 姓名 / 命途（或具体信仰）/ 职业（或具体职业）写进群名片后再发送，"
+                "例如：【繁荣】张三 战士"
+            )
+            return
+
+        # 一个 QQ 在同一群只能绑定一个玩家：已经登记过的人不必（也不能）再注册
+        existing_qq = await self.db_manager.get_player_by_qq(group_id, user_id)
+        if existing_qq:
+            yield event.plain_result(
+                f"你的 QQ 已绑定玩家「{existing_qq.player_name}」，无需重复注册。\n"
+                "如需改名或换绑，请联系诸神。"
+            )
+            return
+
+        try:
+            member_info = await event.bot.get_group_member_info(
+                group_id=int(group_id), user_id=int(user_id)
+            )
+            card = member_info.get("card") or member_info.get("nickname") or ""
+        except Exception as e:
+            # 与录入玩家一致：取不到名片要说清原因，否则玩家只会看到"格式不符"
+            logger.warning(
+                f"[SelfRegister] 读取群成员信息失败 group={group_id} qq={user_id}: {e}"
+            )
+            yield event.plain_result(
+                f"未能读取你的群名片（{e}）。\n"
+                "可能是机器人没有查看群成员的权限，或你的账号信息暂时不可用；"
+                "请稍后再试，或请诸神用「录入玩家 @你」代为录入。"
+            )
+            return
+
+        if not card.strip():
+            yield event.plain_result(
+                "你的群名片是空的，无法识别。请先设置群名片"
+                "（姓名 / 命途 / 职业）后再发送「信仰注册」。"
+            )
+            return
+
+        parsed = self._parse_card_info(card)
+        player_name = parsed["player_name"]
+        faith_name = parsed["faith"]
+        class_name = parsed["class_"]
+        specific_faith = parsed["specific_faith"]
+
+        missing = []
+        if not player_name:
+            missing.append("姓名")
+        if not faith_name:
+            missing.append("命途（或具体信仰）")
+        if not class_name:
+            missing.append("职业（或具体职业）")
+        if missing:
+            yield event.plain_result(
+                f"群名片「{card}」不符合录入格式，缺少: {', '.join(missing)}\n"
+                "格式示例：【繁荣】张三 战士（具体信仰 + 姓名 + 职业）\n"
+                "           张三 生命 战士（姓名 + 命途 + 基础职业）\n"
+                f"当前识别: 姓名={player_name or '?'}, "
+                f"信仰={specific_faith or faith_name or '?'}, "
+                f"职业={class_name or '?'}\n"
+                "改好群名片后再发送「信仰注册」；也可请诸神用「录入玩家 @你」代为录入。"
+            )
+            return
+
+        max_name_len = self._cfg("player_name_max_length")
+        if len(player_name) > max_name_len:
+            yield event.plain_result(
+                f"名片里的玩家名过长（{len(player_name)} 字），最长 {max_name_len} 个字符。"
+            )
+            return
+
+        existing = await self.db_manager.get_player_by_name(group_id, player_name)
+        if existing:
+            if existing.qq_id == user_id:
+                would_be = "你的 QQ 已绑定该玩家，无需重复注册。"
+            elif existing.qq_id:
+                would_be = (
+                    "该玩家已被其他 QQ 绑定，信仰注册不会接管已有记录。\n"
+                    "请把群名片改成与你本人对应的姓名，或联系诸神处理。"
+                )
+            else:
+                would_be = (
+                    "该玩家尚未绑定 QQ。为防冒充，信仰注册不会接管已有记录；"
+                    "请联系诸神用「绑定QQ」处理。"
+                )
+            yield event.plain_result(f"玩家「{player_name}」已在本宇宙中。{would_be}")
+            return
+
+        success, message = await self.ladder_service.register_player(
+            group_id, player_name, faith_name, class_name,
+            self._cfg("init_ladder_score"), self._cfg("init_pilgrimage_score"),
+            user_id,
+            qq_id=user_id,
+            specific_faith=specific_faith,
+        )
+        if not success:
+            yield event.plain_result(message)
+            return
+
+        logger.info(
+            f"[SelfRegister] 自助录入成功 group={group_id} qq={user_id} "
+            f"name={player_name} faith={faith_name} class={class_name}"
+        )
+        from astrbot.core.message.components import At, Plain
+        yield event.chain_result([
+            At(qq=int(user_id)),
+            Plain(text=f" {message}"),
+        ])
 
     async def _check_player_impl(self, event: "AstrMessageEvent"):
         """检测玩家绑定状态（QQ、信仰等），未绑定时自动绑定。仅诸神/管理员可用。（注册在 main.py）

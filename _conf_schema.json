@@ -35,6 +35,12 @@
     "type": "string",
     "default": "录入玩家"
   },
+  "cmd_register_faith": {
+    "description": "信仰注册指令名（玩家凭群名片自助录入；仅影响帮助文案与祷词前缀过滤，指令本身在代码中注册，改名需改代码）",
+    "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",
+    "type": "string",
+    "default": "信仰注册"
+  },
   "cmd_admin": {
     "description": "管理指令名（仅影响帮助文案与祷词前缀过滤；指令本身在代码中注册，改名需改代码）",
     "hint": "这里只影响帮助文案与「哪些消息算指令」的判断；指令真正注册用的名字在代码里，改名需同时改 main.py 的 @filter.command。",

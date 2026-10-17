@@ -1,6 +1,17 @@
 name: astrbot_plugin_faith_ladder
 display_name: "信仰游戏排行榜"
+short_desc: "双积分排名插件：登神之路 + 觐见之梯双榜、职业信仰体系、道具储物与赠送、祈愿试炼组队，仅支持群聊。"
 desc: "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、祈愿试炼组队、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。"
-version: v3.9.3
+version: v3.9.6
 author: custom
 repo: "https://github.com/linghuanyu/astrbot_plugin_faith_ladder"
+# 实测下限：线上宿主 v4.28.1。上游源码核对过，`filter.command(alias=...)` 这个参数
+# 在 v4.10.1 就已经存在，所以卡住下限的不是它，而是其它 v4 内部路径
+# （astrbot.core.utils.astrbot_path、MessageChain、aiocqhttp 适配器等）。
+# 想放宽到更低的版本，先在那个版本上把插件加载起来跑一遍再改这一行——
+# 写宽了的表现是「装上直接 import 失败」，比挡住更难受。
+astrbot_version: ">=4.28.1,<5"
+# 能力面完全是 QQ 群专属（群名片解析、群管 API、send_group_forward_msg），
+# 只声明 aiocqhttp，不虚报别的平台。取值用 ADAPTER_NAME_2_TYPE 的 key。
+support_platforms:
+  - aiocqhttp

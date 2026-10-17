@@ -28,7 +28,11 @@ try:
     from astrbot_plugin_faith_ladder.models import FAITH_TO_PATH, Player
     from astrbot_plugin_faith_ladder.item_utils import parse_item_args
     from astrbot_plugin_faith_ladder import card_utils
-    from astrbot_plugin_faith_ladder.text_utils import collect_mention_texts, extract_args
+    from astrbot_plugin_faith_ladder.text_utils import (
+        collect_mention_texts,
+        extract_args,
+        render_template,
+    )
     from astrbot_plugin_faith_ladder.qq_admin_handle import QQAdminHandler
     from astrbot_plugin_faith_ladder.faith_messages import FAITH_MESSAGES, GENERIC_GOD_MESSAGES
     from astrbot_plugin_faith_ladder.wish_service import WishService
@@ -69,7 +73,7 @@ except ImportError as e:
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、祈愿试炼组队、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.9.3"
+    "3.9.6"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -378,16 +382,20 @@ class FaithLadderPlugin(
         return await self.permission_service.get_god_faith(qq_id)
 
     def _get_faith_message(self, faith: str, action: str, **kwargs) -> str:
-        """获取信仰专属的随机消息。优先级：信仰专属 → 通用神明 → 默认。"""
+        """获取信仰专属的随机消息。优先级：信仰专属 → 通用神明 → 默认。
+
+        走 render_template 而不是 str.format：文案池里的 {items} 等占位符一旦写错
+        或落单花括号，format 会抛 KeyError/ValueError，指令就整条不回（详见该函数）。
+        """
         import random
         messages = FAITH_MESSAGES.get(faith, {}).get(action, [])
         if messages:
             msg = random.choice(messages)
-            return msg.format(**kwargs)
+            return render_template(msg, kwargs)
         # 回退到通用消息
         generic = GENERIC_GOD_MESSAGES.get(action, [])
         if generic:
-            return random.choice(generic).format(**kwargs)
+            return render_template(random.choice(generic), kwargs)
         # 最终回退
         return kwargs.get("default", "")
 
@@ -643,6 +651,18 @@ class FaithLadderPlugin(
         async for result in self._register_player_impl(event):
             yield result
 
+    # === 信仰注册（玩家自助，凭自己的群名片）===
+
+    @filter.command("信仰注册", alias={"faithregister", "自助注册"})
+    async def cmd_register_faith(self, event: AstrMessageEvent):
+        """玩家凭自己的群名片自助录入，等同于诸神「录入玩家 @本人」。
+
+        全程不需要诸神权限：名片由发送者自己维护，记录也只绑定发送者自己的 QQ，
+        分数固定取初始值（不接受参数）。名片必须能解析出姓名 + 命途 + 职业。
+        """
+        async for result in self._register_faith_impl(event):
+            yield result
+
     # === 检测玩家 ===
 
     @filter.command("检测玩家", alias={"check", "检测"})
@@ -727,6 +747,12 @@ class FaithLadderPlugin(
     async def cmd_w_ban(self, event: AstrMessageEvent):
         """禁言指令入口，逻辑委托给 QQAdminHandler.handle_ban。"""
         async for result in self._qq_admin.handle_ban(event):
+            yield result
+
+    @filter.command("禁言列表", alias={"禁言名单"})
+    async def cmd_w_mute_list(self, event: AstrMessageEvent):
+        """禁言列表入口，逻辑委托给 QQAdminHandler.handle_mute_list。"""
+        async for result in self._qq_admin.handle_mute_list(event):
             yield result
 
     @filter.command("解禁")

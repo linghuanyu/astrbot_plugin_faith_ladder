@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from astrbot_plugin_faith_ladder.messages import STATUS_BLOCKED_MSG, feature_disabled_message
+from astrbot_plugin_faith_ladder.text_utils import to_halfwidth
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
@@ -61,7 +62,10 @@ def parse_block_actions(raw: Optional[str]) -> Tuple[Optional[str], List[str]]:
     """
     if raw is None:
         return None, []
-    items = [p.strip() for p in raw.replace("，", ",").split(",") if p.strip()]
+    # 整串就是一份枚举清单（除分隔符与动作名外没有别的内容），所以可以整串折半角，
+    # 不必再逐个 replace 全角标点。注意 NFKC 只收「兼容等价」的字符：全角逗号
+    # 「，」会变成「,」，但顿号「、」与句号「。」不在其列，本来也不当分隔符。
+    items = [p.strip() for p in to_halfwidth(raw).split(",") if p.strip()]
     if not items:
         return "", []
     if len(items) == 1 and items[0].lower() in BLOCK_NONE_LABELS:

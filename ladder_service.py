@@ -24,6 +24,7 @@ from astrbot_plugin_faith_ladder.item_utils import (
     format_item_display,
     extract_item_quantity,
 )
+from astrbot_plugin_faith_ladder.text_utils import render_template, to_halfwidth
 
 try:
     from astrbot.api import logger
@@ -405,7 +406,7 @@ class LadderService:
             oath_text = cfg_get(config, f"oath_text_{current_faith}")
         if not oath_text:
             oath_text = patron_abandoned_oath(player_name, specific_faith or current_faith)
-        oath_text = oath_text.replace("{name}", player_name)
+        oath_text = render_template(oath_text, {"name": player_name})
 
         # Validate new faith if provided
         if new_faith and not Player.validate_faith(new_faith):
@@ -598,17 +599,22 @@ class LadderService:
             # 提取天梯积分（兼容 "登神之路" / "封神之路" / "登神指路"）
             # 正负号与冒号都是可选的：文档一直这么承诺，但正则强制要求 [+-]，
             # 于是「【登神之路 16】」被静默当成 0（若这是该玩家唯一的数据，整块还会被丢弃）
-            ladder_match = re.search(r'(?:登神之路|封神之路|登神指路)[:：]?\s*([+-]?)\s*(\d+)', part)
+            # 加减号还额外认全角（＋U+FF0B / －U+FF0D）——中文输入法下很常见，
+            # 而正则里的 `\d` 本来就匹配全角数字，所以只有符号是缺口。
+            # 字符类里连字符**必须放首位**：写成 [+-＋－] 会被当成 "+ 到 ＋" 的区间，
+            # 而 U+002B..U+FF0B 覆盖了全部 ASCII 数字，` 16` 的 1 会被吃成符号
+            # （tests/test_review_fixes.py 的 test_sign_is_optional 逮到过）。
+            ladder_match = re.search(r'(?:登神之路|封神之路|登神指路)[:：]?\s*([-+＋－]?)\s*(\d+)', part)
             if ladder_match:
-                sign = -1 if ladder_match.group(1) == '-' else 1
+                sign = -1 if to_halfwidth(ladder_match.group(1)) == '-' else 1
                 ladder_delta = sign * int(ladder_match.group(2))
             else:
                 ladder_delta = 0
 
-            # 提取觐见之梯分数（号与冒号同样可选）
-            pilgrimage_match = re.search(r'觐见之梯[:：]?\s*([+-]?)\s*(\d+)', part)
+            # 提取觐见之梯分数（号与冒号同样可选，字符类的连字符同样放首位）
+            pilgrimage_match = re.search(r'觐见之梯[:：]?\s*([-+＋－]?)\s*(\d+)', part)
             if pilgrimage_match:
-                sign = -1 if pilgrimage_match.group(1) == '-' else 1
+                sign = -1 if to_halfwidth(pilgrimage_match.group(1)) == '-' else 1
                 pilgrimage_delta = sign * int(pilgrimage_match.group(2))
             else:
                 pilgrimage_delta = 0

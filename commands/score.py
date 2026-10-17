@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 from astrbot_plugin_faith_ladder.messages import (
     BATCH_ALL_SUCCESS, BATCH_COOLDOWN_MSG, BATCH_PARTIAL_SKIP, PERMISSION_DENIED,
 )
+from astrbot_plugin_faith_ladder.text_utils import to_halfwidth
 
 
 class ScoreCommandsMixin:
@@ -55,8 +56,10 @@ class ScoreCommandsMixin:
             return
 
         try:
-            ladder_delta = int(ladder_str)
-            pilgrimage_delta = int(pilgrimage_str)
+            # 折半角是为了全角正负号（＋16 / －5）：int() 自己就吃全角数字（int('１２３')==123），
+            # 但认不出全角的加减号，会直接 ValueError。
+            ladder_delta = int(to_halfwidth(ladder_str))
+            pilgrimage_delta = int(to_halfwidth(pilgrimage_str))
         except ValueError:
             yield event.plain_result("分数必须是整数。示例：100 50 或 -20 10")
             return

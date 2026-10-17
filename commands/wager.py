@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 from astrbot_plugin_faith_ladder.messages import PERMISSION_DENIED
 from astrbot_plugin_faith_ladder.models import VALID_FAITHS
 from astrbot_plugin_faith_ladder.wager_messages import pick_wager_line
+from astrbot_plugin_faith_ladder.text_utils import render_template
 
 try:
     from astrbot.api import logger
@@ -254,9 +255,14 @@ class WagerMixin:
         seconds = self._wager_duration()
         ends_at = now + seconds
 
-        text = pick_wager_line(god, "announce", dict(self.config)).format(
-            god=god, seconds=seconds, action=WAGER_ACTION_LABELS[action], reward="",
-            winner="",
+        text = render_template(
+            pick_wager_line(god, "announce", dict(self.config)),
+            {
+                "god": god, "seconds": seconds, "action": WAGER_ACTION_LABELS[action],
+                # 开盘时还不知道赢家与赏赐，但文案池是诸神自己写的、可能引用它们；
+                # 显式传空串而不是留给 format 抛 KeyError（见 text_utils.render_template）
+                "reward": "", "winner": "",
+            },
         )
 
         self._wager_state()[group_id] = {
@@ -355,8 +361,9 @@ class WagerMixin:
         entries = state["entries"]
 
         if not entries:
-            text = pick_wager_line(god, "none", config).format(
-                god=god, winner="", seconds="", action="", reward=""
+            text = render_template(
+                pick_wager_line(god, "none", config),
+                {"god": god, "winner": "", "seconds": "", "action": "", "reward": ""},
             )
             await self._wager_store_close(state.get("wager_id"), None, None, 0)
             await self._wager_notify(group_id, text)
@@ -379,8 +386,9 @@ class WagerMixin:
             if not ok:
                 logger.warning(f"[Wager] 发放奖励失败：{winner_name}")
 
-        text = pick_wager_line(god, outcome, config).format(
-            god=god, winner=winner_name, seconds="", action="", reward=reward_text
+        text = render_template(
+            pick_wager_line(god, outcome, config),
+            {"god": god, "winner": winner_name, "seconds": "", "action": "", "reward": reward_text},
         )
         if winner_name not in text:
             # 嘲弄/反悔类的文案里常常不提赢家，但"神明点到了谁"是玩家最关心的信息，补一行

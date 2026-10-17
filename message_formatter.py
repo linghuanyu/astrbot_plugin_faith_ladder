@@ -2,6 +2,7 @@
 Message formatting utilities for the faith ladder plugin.
 """
 
+import time
 from typing import List, Optional
 from astrbot_plugin_faith_ladder.models import Player, VALID_CLASSES, VALID_PATHS
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
@@ -11,6 +12,7 @@ from astrbot_plugin_faith_ladder.terms import (
     patron_forgave_blasphemy,
     patron_saw_prayer,
 )
+from astrbot_plugin_faith_ladder.text_utils import render_template
 
 
 def tier_mark_for(player, tier_marks: dict = None) -> str:
@@ -176,6 +178,7 @@ def format_help(config: dict) -> str:
     cmd_add = cfg_get(config, "cmd_add_score")
     cmd_batch = cfg_get(config, "cmd_batch_add_score")
     cmd_register = cfg_get(config, "cmd_register_player")
+    cmd_register_faith = cfg_get(config, "cmd_register_faith")
     cmd_class = cfg_get(config, "cmd_set_class")
     cmd_take_oath = cfg_get(config, "cmd_take_oath")
     cmd_abandon_oath = cfg_get(config, "cmd_abandon_oath")
@@ -210,6 +213,7 @@ def format_help(config: dict) -> str:
         f"{cmd_register} @用户 [姓名] [命途] [职业] [分] [分] - 录入新信徒（@可自动提取名片信息）\n"
         f"{cmd_register} <姓名> <命途> <职业> [分] [分] - 或手动指定全部参数\n"
         f"  名片支持具体职业（如 酋长/织命师），系统自动识别对应命途和普通职业\n"
+        f"{cmd_register_faith} - 凭自己的群名片自助录入（等同于诸神「{cmd_register} @你」，分数取初始值）\n"
         f"{cmd_class} <玩家名> <职业> - 更改玩家职业\n"
         f"{cmd_take_oath} <玩家名> <命途> - 为玩家选择信仰\n"
         f"  职业: {classes_str} | 命途: {faiths_str}\n"
@@ -257,6 +261,7 @@ def format_help(config: dict) -> str:
         f"\n"
         f"[群管] (诸神权限)\n"
         f"禁言 <秒数> @用户 - 禁言（默认60秒）\n"
+        f"禁言列表 - 本群当前被禁言的人与剩余时间\n"
         f"解禁 @用户 - 解除禁言\n"
         f"踢人 @用户 - 踢出群聊\n"
         f"撤回 - 撤回引用消息\n"
@@ -314,6 +319,51 @@ def format_pending_whitelist(entries: List[dict]) -> str:
         lines.append(f"  {i}. {entry['entry_id']}")
     lines.append("")
     lines.append("「白名单 通过 <QQ>」逐条确认，「白名单 全部通过」一次通过，「白名单 拒绝 <QQ>」丢弃。")
+    return "\n".join(lines)
+
+
+def format_remaining(seconds: int) -> str:
+    """把剩余秒数写成人话：`2 天 3 小时` / `45 分钟` / `30 秒`。
+
+    只留两级单位——这是给人看的剩余时间，不需要「1 天 2 小时 3 分 4 秒」。
+    """
+    seconds = max(0, int(seconds))
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    if days:
+        return f"{days} 天 {hours} 小时" if hours else f"{days} 天"
+    if hours:
+        return f"{hours} 小时 {minutes} 分钟" if minutes else f"{hours} 小时"
+    if minutes:
+        return f"{minutes} 分钟"
+    return f"{secs} 秒"
+
+
+# 一屏列不下太多人；超出的只报人数（完整名单要另想办法时再说）
+MUTE_LIST_DISPLAY_LIMIT = 50
+
+
+def format_mute_list(entries: List[dict], now: Optional[int] = None) -> str:
+    """Format 禁言列表（被禁言的人 + 剩余时间，剩得久的在前）。
+
+    entries: [{"user_id": str, "nickname": str, "until": int（解除禁言的秒级时间戳）}]
+    昵称缺失时只显示 QQ 号——协议端的禁言列表扩展接口不一定带昵称。
+    """
+    if not entries:
+        return "═══ 禁言列表 ═══\n\n现在没有人被禁言。"
+
+    now = int(time.time()) if now is None else int(now)
+    ordered = sorted(entries, key=lambda e: e.get("until", 0), reverse=True)
+    lines = ["═══ 禁言列表 ═══", ""]
+    for i, entry in enumerate(ordered[:MUTE_LIST_DISPLAY_LIMIT], 1):
+        nickname = entry.get("nickname") or ""
+        who = f"{nickname}({entry['user_id']})" if nickname else entry["user_id"]
+        lines.append(f"  {i}. {who} — 剩余 {format_remaining(entry['until'] - now)}")
+    if len(ordered) > MUTE_LIST_DISPLAY_LIMIT:
+        lines.append(f"  …另有 {len(ordered) - MUTE_LIST_DISPLAY_LIMIT} 人未列出")
+    lines.append("")
+    lines.append(f"─── 共 {len(ordered)} 人 ───")
     return "\n".join(lines)
 
 
@@ -398,7 +448,7 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
             template_vars = {"god": god_name, "delta": delta}
 
         template = random.choice(messages)
-        result = template.format(**template_vars)
+        result = render_template(template, template_vars)
         msg = f"{patron_saw_prayer()}\n{result}"
     else:
         if delta == 0:
@@ -409,7 +459,7 @@ def format_prayer_trigger(player_name, player_faith, prayer_faith, delta, config
                 messages = PRAYER_MESSAGES.get(player_faith, {}).get("mismatch", DEFAULT_PRAYER_MISMATCH)
             template_vars = {"god": player_faith, "prayer": prayer_faith, "delta": str(delta)}
             template = random.choice(messages)
-            result = template.format(**template_vars)
+            result = render_template(template, template_vars)
             msg = f"{player_faith}看到了你对{prayer_faith}的祈祷，决定对你进行惩罚\n{result}"
 
     # 连续天数：第一次触发不吹嘘，≥2 天才提示

@@ -32,6 +32,7 @@ from astrbot_plugin_faith_ladder.db_manager import (
 from astrbot_plugin_faith_ladder.messages import PLAYER_NOT_FOUND
 from astrbot_plugin_faith_ladder.plugin_config import cfg_get
 from astrbot_plugin_faith_ladder.wish_messages import pick_wish_line
+from astrbot_plugin_faith_ladder.text_utils import render_template
 
 # 周一 … 周日（datetime.weekday() 的 0..6）
 WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -289,14 +290,18 @@ class WishService:
     # ── 文案 ──
 
     def _line(self, kind: str, **kwargs) -> str:
+        """取并渲染一句祈愿播报。
+
+        走 render_template 而不是 str.format：这里是诸神可覆盖的文案池
+        （wish_messages_{池名}），未闭合的 '{' 会让 format 抛 **ValueError**，
+        而原先的 try/except 只兜了 KeyError/IndexError——正好漏掉它，
+        整条播报丢失。调用点都在「队伍已经出发/已经解散」之后，播报一丢
+        用户就再也看不到这次结果。
+        """
         template = pick_wish_line(kind, self._get_config())
         if not template:
             return ""
-        try:
-            return template.format(**kwargs)
-        except (KeyError, IndexError):
-            # 自定义文案里写了不认识的占位符：退回内置池，别把播报整条丢掉
-            return template
+        return render_template(template, kwargs)
 
     @staticmethod
     def _members_text(team: dict) -> str:

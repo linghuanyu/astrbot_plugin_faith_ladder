@@ -203,14 +203,17 @@ class TestGateCoverageGuards:
 
 
 def test_qq_admin_handlers_go_through_preflight():
-    """8 个群管 handler 每个都要先过 _preflight（它们在 main.py 里直接调用，不经 mixin）。"""
+    """9 个群管 handler 每个都要先过 _preflight（它们在 main.py 里直接调用，不经 mixin）。
+
+    增删群管指令要同步这个数字：守卫故意写死，挡的是"新指令忘了过闸门"。
+    """
     path = ROOT / "qq_admin_handle.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     handlers = [
         n for n in ast.walk(tree)
         if isinstance(n, ast.AsyncFunctionDef) and n.name.startswith("handle_")
     ]
-    assert len(handlers) == 8, f"群管 handler 数量变了（{len(handlers)}），请同步更新守卫"
+    assert len(handlers) == 9, f"群管 handler 数量变了（{len(handlers)}），请同步更新守卫"
     missing = [f"{n.name}:{n.lineno}" for n in handlers if "_preflight(" not in ast.unparse(n)]
     assert missing == [], "这些群管 handler 没有过闸门：\n" + "\n".join(missing)
 

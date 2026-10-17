@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING, Iterable, List
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
+try:
+    from astrbot.api import logger
+except ImportError:  # 无 AstrBot 环境（如跑测试）时退回标准库日志
+    import logging
+    logger = logging.getLogger(__name__)
+
 
 def wrap_message_chain(components: Iterable):
     """把组件列表包成框架认识的 MessageChain。
@@ -48,24 +54,44 @@ class SharedSendMixin:
 
         返回 True 表示已发送成功（并已 stop_event），调用方应直接 return；
         返回 False 表示合并转发不可用，调用方应回退为普通文本回复。
+
+        这里是**裸 OneBot 调用**：AstrBot 没有「立即发送合并转发并告知成败」的
+        高层 API，适配器只在消息链里遇到 Node/Nodes 组件时才自己转换。而
+        `call_action` 的参数会被直接 `json.dumps`（WS 走 `json.dumps`，HTTP 走
+        httpx 的 `json=`），所以必须给纯 dict。此前传的是 AstrBot 的 Node 组件
+        （pydantic 模型），序列化时抛
+        `TypeError: Object of type Node is not JSON serializable`，被收尾的
+        `except Exception` 吞掉——天梯榜 / 觐见榜 / 储物空间因此一直静默回退成
+        纯文本，坏在哪只有日志能回答。
+
+        payload 形状与适配器 `Nodes.to_dict()` 的产物一致：节点作者字段是
+        `user_id` / `nickname`（不是 AstrBot Node 的 `name` / `uin`），
+        正文用 OneBot 的数组形态。正文只有纯文本，图片才需要先转 base64。
         """
         try:
             bot_id = int(event.get_self_id())
-        except Exception:
+        except (TypeError, ValueError):
             bot_id = 123456789
-        from astrbot.core.message.components import Node, Plain
-        nodes = [Node(
-            user_id=bot_id,
-            nickname=nickname,
-            content=[Plain(text=text)]
-        )]
+        payload = {
+            "messages": [
+                {
+                    "type": "node",
+                    "data": {
+                        "user_id": str(bot_id),
+                        "nickname": nickname,
+                        "content": [{"type": "text", "data": {"text": text}}],
+                    },
+                }
+            ]
+        }
         try:
             await event.bot.call_action(
                 "send_group_forward_msg",
                 group_id=int(group_id),
-                messages=nodes
+                **payload,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"合并转发发送失败，回退纯文本: {e}")
             return False
         event.stop_event()
         return True

@@ -4,6 +4,7 @@
 """
 
 from astrbot_plugin_faith_ladder.terms import PATRON
+from astrbot_plugin_faith_ladder.text_utils import render_template
 
 PRAYER_MESSAGES = {
     "诞育": {
@@ -346,4 +347,4 @@ def pick_prayer_streak_line(days: int) -> str:
     for threshold, template in PRAYER_STREAK_LINES:
         if days >= threshold:
             chosen = template
-    return chosen.format(days=days) if chosen else ""
+    return render_template(chosen, {"days": days}) if chosen else ""
