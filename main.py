@@ -47,6 +47,7 @@ try:
         PrayerCommandsMixin,
         WishCommandsMixin,
         SharedSendMixin,
+        QuoteReplyMixin,
         ConfigMixin,
         GateMixin,
         WagerMixin,
@@ -73,7 +74,7 @@ except ImportError as e:
     "astrbot_plugin_faith_ladder",
     "custom",
     "双积分排名插件，登神之路+觐见之梯双榜展示，支持弃誓/立誓系统、批量录入、道具储物空间与赠送、祈愿试炼组队、QQ群管指令，文案取《诸神愚戏》原文用词，适用于社群活动积分管理。仅支持群聊使用。",
-    "3.9.6"
+    "3.9.7"
 )
 class FaithLadderPlugin(
     ScoreboardCommandsMixin,
@@ -86,6 +87,7 @@ class FaithLadderPlugin(
     WishCommandsMixin,
     QueryCommandsMixin,
     SharedSendMixin,
+    QuoteReplyMixin,
     ConfigMixin,
     GateMixin,
     WagerMixin,
@@ -618,7 +620,7 @@ class FaithLadderPlugin(
     async def cmd_query(self, event: AstrMessageEvent):
         """查询玩家信息。格式: 查询（自动识别自己）或 查询 <玩家名>（诸神指定）或 查询 @用户（诸神专用）或 查询 <玩家名1> <玩家名2> ...（诸神批量查询）"""
         async for result in self._query_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 录入积分 ===
 
@@ -626,7 +628,7 @@ class FaithLadderPlugin(
     async def cmd_add_score(self, event: AstrMessageEvent):
         """录入积分变化。格式: 录入积分 <玩家名> <天梯分变化> <觐见梯变化>"""
         async for result in self._add_score_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 批量录入积分 ===
 
@@ -649,7 +651,7 @@ class FaithLadderPlugin(
           - 传统方式，手动指定所有参数
         """
         async for result in self._register_player_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 信仰注册（玩家自助，凭自己的群名片）===
 
@@ -661,15 +663,7 @@ class FaithLadderPlugin(
         分数固定取初始值（不接受参数）。名片必须能解析出姓名 + 命途 + 职业。
         """
         async for result in self._register_faith_impl(event):
-            yield result
-
-    # === 检测玩家 ===
-
-    @filter.command("检测玩家", alias={"check", "检测"})
-    async def cmd_check_player(self, event: AstrMessageEvent):
-        """检测当前玩家的绑定状态（QQ、信仰等），未绑定时自动绑定。"""
-        async for result in self._check_player_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 绑定 QQ ===
 
@@ -699,7 +693,7 @@ class FaithLadderPlugin(
     async def cmd_set_class(self, event: AstrMessageEvent):
         """修改玩家职业。格式: 设置职业 <玩家名> <职业>"""
         async for result in self._set_class_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 立誓（设置信仰） ===
 
@@ -707,7 +701,7 @@ class FaithLadderPlugin(
     async def cmd_take_oath(self, event: AstrMessageEvent):
         """设置信仰。格式: 立誓 <玩家名> <信仰>"""
         async for result in self._take_oath_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 弃誓 ===
 
@@ -715,7 +709,7 @@ class FaithLadderPlugin(
     async def cmd_abandon_oath(self, event: AstrMessageEvent):
         """标记弃誓者。格式: 弃誓 <玩家名> [新信仰]"""
         async for result in self._abandon_oath_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 天梯榜管理 ===
 
@@ -723,7 +717,7 @@ class FaithLadderPlugin(
     async def cmd_admin(self, event: AstrMessageEvent):
         """管理员/诸神操作。格式: 天梯榜管理 <操作> [参数]"""
         async for result in self._admin_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 白名单 ===
 
@@ -739,7 +733,7 @@ class FaithLadderPlugin(
     async def cmd_help(self, event: AstrMessageEvent):
         """显示帮助信息"""
         async for result in self._help_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === QQ 群管命令（委托到 QQAdminHandler） ===
 
@@ -819,13 +813,13 @@ class FaithLadderPlugin(
         """赐予道具。格式: 赐予道具 <玩家名> <道具1> <数量1> [道具2] [数量2] ...
         数量也可写作 道具*数量 或 道具×数量（位置不限，可写在等级括号前后）。"""
         async for result in self._give_item_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     @filter.command("收回道具")
     async def cmd_remove_item(self, event: AstrMessageEvent):
         """收回道具。格式: 收回道具 <玩家名> <道具*数量> 或 收回道具 <玩家名> <编号> ..."""
         async for result in self._remove_item_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     @filter.command("清除储物空间")
     async def cmd_clear_inventory(self, event: AstrMessageEvent):
@@ -935,7 +929,7 @@ class FaithLadderPlugin(
         """赠送道具。格式: 赠送道具 <接收方名> <道具名> [数量]
         发送方由发送者 QQ 绑定鉴权（防名片冒充），接收方仍按玩家名查找。"""
         async for result in self._gift_item_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 接受道具 ===
 
@@ -943,7 +937,7 @@ class FaithLadderPlugin(
     async def cmd_accept_gift(self, event: AstrMessageEvent):
         """接收方接受赠送，无需参数。诸神可带参数指定接收玩家（跳过名片检测）。"""
         async for result in self._accept_gift_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # === 拒绝道具 ===
 
@@ -951,7 +945,7 @@ class FaithLadderPlugin(
     async def cmd_reject_gift(self, event: AstrMessageEvent):
         """接收方拒绝赠送，无需参数。诸神可带参数指定接收玩家（跳过 QQ 绑定检测）。"""
         async for result in self._reject_gift_impl(event):
-            yield result
+            yield self._apply_quote(event, result)
 
     # ── 祷词触发 ──
 

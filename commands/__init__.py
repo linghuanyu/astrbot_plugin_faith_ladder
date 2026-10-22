@@ -17,12 +17,13 @@
     query.py       查询、查询储物空间
     scoreboard.py  天梯榜、觐见榜
     score.py       录入积分、批量录入
-    player.py      录入玩家、检测玩家、绑定QQ、换绑QQ、设置职业、立誓、弃誓
+    player.py      录入玩家、信仰注册、绑定QQ、换绑QQ、设置职业、立誓、弃誓
     inventory.py   赐予道具、收回道具、清除储物空间、添加/移除/清除状态
     gift.py        赠送道具、接受道具、拒绝道具
     admin.py       天梯榜管理、白名单、同步白名单、天梯榜帮助、白名单自动同步事件
     prayer.py      祷词触发
     shared.py      通用发送辅助（合并转发）
+    quote.py       引用回复（总开关，把指令回复挂到触发消息上）
     config.py      统一配置读取（默认值来自 _conf_schema.json）
     gate.py        指令入口闸门（群访问控制；功能开关/状态阻断也接在这里）
     wager.py       神明的赌局（定时开局、限时入局、开奖）
@@ -38,6 +39,7 @@ from .gift import GiftCommandsMixin
 from .admin import AdminCommandsMixin
 from .prayer import PrayerCommandsMixin
 from .shared import SharedSendMixin
+from .quote import QuoteReplyMixin
 from .config import ConfigMixin
 from .gate import GateMixin
 from .wager import WagerMixin
@@ -53,6 +55,7 @@ __all__ = [
     "AdminCommandsMixin",
     "PrayerCommandsMixin",
     "SharedSendMixin",
+    "QuoteReplyMixin",
     "ConfigMixin",
     "GateMixin",
     "WagerMixin",

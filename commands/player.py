@@ -274,8 +274,7 @@ class PlayerCommandsMixin:
         与「录入玩家 @用户」共用同一套名片解析与落库路径，区别只在：
         - 不需要诸神权限：名片由发送者自己维护，录入出的记录也绑定发送者自己的 QQ
         - 不接受参数、分数只取初始值：否则任何人都能给自己填任意分数
-        - 已有记录一律不接管：弱身份（群名片）不能产生换绑/抢占这类持久副作用，
-          这条边界与「检测玩家」同理（见该实现体的说明）
+        - 已有记录一律不接管：弱身份（群名片）不能产生换绑/抢占这类持久副作用
         """
         blocked, gate_msg = await self._gate(event, None)
         if blocked:
@@ -400,72 +399,6 @@ class PlayerCommandsMixin:
             At(qq=int(user_id)),
             Plain(text=f" {message}"),
         ])
-
-    async def _check_player_impl(self, event: "AstrMessageEvent"):
-        """检测玩家绑定状态（QQ、信仰等），未绑定时自动绑定。仅诸神/管理员可用。（注册在 main.py）
-
-        权限收在诸神手里是有意的：本指令的身份解析会回退到**群名片**（弱身份，
-        名片由玩家自行修改），并可能据此把发送者 QQ 绑到名片对应的玩家记录上。
-        把它开放给所有人时，任何人把名片改成他人名字发一次即可抢占对方绑定，
-        随后用「赠送道具」取走其库存。限制调用者之后，这条路径只由受信用户触发，
-        可疑绑定也由诸神人工审核。
-        """
-        blocked, gate_msg = await self._gate(event, None)
-        if blocked:
-            if gate_msg:
-                yield event.plain_result(gate_msg)
-            return
-        group_id = self._get_group_id(event)
-
-        if not await self._check_perm(event):
-            yield event.plain_result(PERMISSION_DENIED["god_only"])
-            return
-
-        # 优先 QQ 绑定查找，失败回退名片识别
-        player = await self._resolve_self_player_lenient(event)
-        if not player:
-            # 名片也识别不到，给提示
-            yield event.plain_result("无法识别你的身份，请先让诸神为你「绑定QQ」或确认群名片格式正确。")
-            return
-
-        # 检查 QQ 绑定状态
-        qq_bound = player.qq_id is not None
-        sender_qq = str(event.get_sender_id())
-
-        if not qq_bound:
-            # 检查该 QQ 是否已被其他玩家绑定
-            existing = await self.db_manager.get_player_by_qq(group_id, sender_qq)
-            if existing:
-                yield event.plain_result(
-                    f"检测玩家: {player.player_name}\n"
-                    f"命途: {player.faith or '未设定'} | 职业: {player.class_ or '未设定'}\n"
-                    f"QQ 状态: 你的 QQ 已被玩家「{existing.player_name}」绑定，无法自动绑定。\n"
-                    f"如需换绑请联系诸神使用「换绑QQ」。"
-                )
-                return
-
-            # 自动绑定（并发下可能被别的请求抢先绑定同一 QQ，返回 False）
-            bound = await self.db_manager.set_player_qq(group_id, player.player_id, sender_qq)
-            if bound:
-                status_line = f"QQ 状态: 已自动绑定 {sender_qq}"
-            else:
-                status_line = (
-                    f"QQ 状态: 自动绑定失败（该 QQ 可能刚被其他玩家绑定）\n"
-                    f"如需换绑请联系诸神使用「换绑QQ」。"
-                )
-        else:
-            status_line = f"QQ 状态: 已绑定 {player.qq_id}"
-
-        faith_line = f"命途: {player.faith or '未设定'}"
-        if player.specific_faith:
-            faith_line += f"（{player.specific_faith}）"
-
-        yield event.plain_result(
-            f"检测玩家: {player.player_name}\n"
-            f"{faith_line} | 职业: {player.class_ or '未设定'}\n"
-            f"{status_line}\n"
-            f"登神之路: {player.ladder_score} | 觐见之梯: {player.pilgrimage_score}"
-        )
 
     async def _bind_qq_impl(self, event: "AstrMessageEvent"):
         """为指定玩家绑定 QQ（诸神权限）。（注册在 main.py）"""
